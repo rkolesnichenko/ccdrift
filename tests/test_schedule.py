@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 from ccdrift.cli import main
-from ccdrift.schedule import (Launchd, ScheduleError, choose_backend, install, launchd_plist, make_job,
-                              parse_at)
+from ccdrift.schedule import (Launchd, ScheduleError, Systemd, choose_backend, install, launchd_plist,
+                              make_job, parse_at, systemd_units)
 
 
 class FakeRun:
@@ -194,4 +194,85 @@ def test_schedule_install_reports_the_job_and_its_log(tmp_path, monkeypatch, cap
         "Installed a launchd job: `ccdrift check` runs daily at 18:30.",
         f"Log: {tmp_path / 'data' / 'check.log'}",
         "A first run has started. Check `ccdrift schedule status` in a minute.",
+    ]
+
+
+def systemd(tmp_path, results=None):
+    run = FakeRun(results)
+    return run, Systemd(run=run, config_home=tmp_path / "config")
+
+
+def test_systemd_units_run_the_job_daily_with_quoted_arguments():
+    job = make_job("06:05", notify=True, python="/opt/my env/bin/python",
+                   environ={"CCDRIFT_HOME": "/home/u/.ccdrift"})
+    units = systemd_units(job)
+    assert units["ccdrift-check.service"] == (
+        "[Unit]\n"
+        "Description=ccdrift daily check\n"
+        "\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        'ExecStart="/opt/my env/bin/python" "-m" "ccdrift" "check" "--notify" "--state" '
+        '"/home/u/.ccdrift/check-state.json"\n'
+        "StandardOutput=append:/home/u/.ccdrift/check.log\n"
+        "StandardError=append:/home/u/.ccdrift/check.log\n"
+    )
+    assert units["ccdrift-check.timer"] == (
+        "[Unit]\n"
+        "Description=Run the ccdrift daily check\n"
+        "\n"
+        "[Timer]\n"
+        "OnCalendar=*-*-* 06:05:00\n"
+        "Persistent=true\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=timers.target\n"
+    )
+
+
+def test_systemd_install_writes_both_units_and_starts_a_first_run(tmp_path):
+    run, backend = systemd(tmp_path)
+    backend.install(job_for(tmp_path))
+    unit_dir = tmp_path / "config" / "systemd" / "user"
+    assert sorted(p.name for p in unit_dir.iterdir()) == ["ccdrift-check.service", "ccdrift-check.timer"]
+    assert run.calls == [
+        ["systemctl", "--user", "daemon-reload"],
+        ["systemctl", "--user", "enable", "--now", "ccdrift-check.timer"],
+        ["systemctl", "--user", "start", "--no-block", "ccdrift-check.service"],
+    ]
+
+
+def test_systemd_install_leaves_nothing_behind_when_enabling_fails(tmp_path):
+    run, backend = systemd(tmp_path, {("systemctl", "--user", "enable"): (1, "")})
+    with pytest.raises(ScheduleError):
+        backend.install(job_for(tmp_path))
+    assert list((tmp_path / "config" / "systemd" / "user").iterdir()) == []
+
+
+def test_systemd_remove_disables_the_timer_and_deletes_both_units(tmp_path):
+    run, backend = systemd(tmp_path)
+    backend.install(job_for(tmp_path))
+    run.calls.clear()
+    assert backend.remove() is True
+    assert run.calls == [
+        ["systemctl", "--user", "disable", "--now", "ccdrift-check.timer"],
+        ["systemctl", "--user", "daemon-reload"],
+    ]
+    assert list((tmp_path / "config" / "systemd" / "user").iterdir()) == []
+
+
+def test_systemd_status_shows_the_last_run_and_log_line(tmp_path):
+    shown = "ExecMainStartTimestamp=Wed 2026-09-16 09:00:01 EEST\nExecMainStatus=0\n"
+    run, backend = systemd(tmp_path, {("systemctl", "--user", "is-enabled"): (0, "enabled\n"),
+                                      ("systemctl", "--user", "show"): (0, shown)})
+    job = job_for(tmp_path)
+    backend.install(job)
+    job.log.parent.mkdir(parents=True)
+    job.log.write_text("[check 2026-09-16 09:00] no new flags\n")
+    assert backend.status() == [
+        "installed: systemd timer ccdrift-check.timer, daily at 09:00",
+        "enabled: enabled",
+        "last run: Wed 2026-09-16 09:00:01 EEST",
+        "last exit code: 0",
+        "last log line: [check 2026-09-16 09:00] no new flags",
     ]
