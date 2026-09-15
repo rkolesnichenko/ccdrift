@@ -55,7 +55,8 @@ against the 14 before it. To keep more history, set this in `~/.claude/settings.
 | **ccdrift can't compute the cache metric** | 3 busy days had no usable cache values. Claude Code's log format has most likely changed. | `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it. Please open an issue. |
 | **ccdrift check failed** | The check itself stopped with an error. | `~/.ccdrift/check.log` has the details. |
 
-Each alert is sent once. Claude Code's documentation says the transcript format "is
+The flag and cache-metric alerts are sent once each; a failing check alerts on every
+run until it works again. Claude Code's documentation says the transcript format "is
 internal to Claude Code and changes between versions, so scripts that parse these
 files directly can break on any release", which is why the second alert exists.
 
