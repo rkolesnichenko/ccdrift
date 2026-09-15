@@ -9,6 +9,7 @@ from typing import Optional
 from ccdrift import __version__
 from ccdrift.check import ccdrift_home, run_check
 from ccdrift.logs import default_source, peek
+from ccdrift.report import run_report
 
 
 def _add_source(parser: argparse.ArgumentParser) -> None:
@@ -44,6 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     peek_command = commands.add_parser("peek", help="show the first response and the fields ccdrift reads from it")
     _add_source(peek_command)
+
+    report = commands.add_parser("report", help="recent daily metrics and flags: the details behind an alert")
+    report.add_argument("--days", type=int, default=21, help="how many recent days to list (default: 21)")
+    _add_source(report)
+    _add_state(report)
     return parser
 
 
@@ -53,4 +59,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         return run_check(_source(args), _state(args), notify_user=args.notify)
     if args.command == "peek":
         return 0 if peek(_source(args)) else 2
+    if args.command == "report":
+        return run_report(_source(args), _state(args), days=args.days)
     raise AssertionError(f"unhandled command: {args.command}")
