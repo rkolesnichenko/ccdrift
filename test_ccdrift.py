@@ -253,6 +253,25 @@ def test_cache_metric_flags_at_its_own_lower_threshold():
     assert ccdrift.first_flag_bin(det, "haiku_fraction") is None
 
 
+QUIET = {"is_haiku": [0.0] * 400}
+HAIKU = {"is_haiku": [1.0] * 20 + [0.0] * 380}  # z of about 12 against QUIET days
+
+
+def test_detector_flags_a_shift_with_one_day_under_the_cutoff():
+    # The real caching regression scored z = -3.8, -5.4, -2.8, -3.2 on its first
+    # days against a cutoff of 3.0. Counting only days in a row, the one day
+    # short of the cutoff restarted the count and hid a three-week incident.
+    days = [QUIET] * 14 + [HAIKU, HAIKU, QUIET, HAIKU]
+    det = ccdrift.detect(ccdrift.bin_metrics(daily_turns(days)), ccdrift.DetectorConfig())
+    assert ccdrift.flag_onsets(det, "haiku_fraction") == [14]
+
+
+def test_detector_ignores_a_metric_that_crosses_the_cutoff_every_third_day():
+    days = [QUIET] * 14 + [HAIKU, QUIET, QUIET] * 3
+    det = ccdrift.detect(ccdrift.bin_metrics(daily_turns(days)), ccdrift.DetectorConfig())
+    assert ccdrift.flag_onsets(det, "haiku_fraction") == []
+
+
 # --- streaming detector -----------------------------------------------------
 
 def test_stream_detects_a_drop_in_a_metric_that_is_mostly_zero():
@@ -371,8 +390,8 @@ def test_sweep_plants_the_change_at_several_starting_days(synthetic_turns):
     n_days = synthetic_turns["day"].nunique()
     res = ccdrift.sweep(synthetic_turns, "cache", cfg, grid=[0.7], n_starts=4)
     assert res["start"].nunique() == 4
-    assert res["start_bin"].min() >= cfg.min_baseline + cfg.consecutive - 1
-    assert res["start_bin"].max() <= n_days - cfg.consecutive
+    assert res["start_bin"].min() >= cfg.min_baseline + cfg.deviant_bins - 1
+    assert res["start_bin"].max() <= n_days - cfg.deviant_bins
     assert res["detected"].all()
 
 

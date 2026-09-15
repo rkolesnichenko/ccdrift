@@ -21,13 +21,16 @@ This is a throwaway experiment script, not the product. Outputs: CSVs + PNGs.
 
 Findings so far (the user's own logs, Aug 6 - Sep 15, 2026):
   - Cache: a real signal. A Claude Code caching regression (versions
-    2.1.233-2.1.258, in use Aug 16 - Sep 4) was flagged from Aug 18 until
-    Claude Code's 30-day transcript cleanup deleted part of Aug 15-16. On the
-    logs that remain, Aug 18-22 score z = -3.8, -5.4, -2.8, -3.2, -2.6, so the
-    3-day run never forms. With the incident left out, a 5% drop is caught from
-    all 3 starting days in the 12 clean days that remain.
-  - Haiku: a real signal. The main thread never uses Haiku, so a 5% shift is
-    caught from every starting day.
+    2.1.233-2.1.258, in use Aug 16 - Sep 4) is flagged from Aug 18. Its first
+    days score z = -3.8, -5.4, -2.8, -3.2 against a cutoff of 3.0, so a flag
+    takes 3 deviant days among any 4: once Claude Code's 30-day transcript
+    cleanup deleted part of Aug 15-16, requiring 3 in a row missed it. With the
+    incident left out, a 5% drop is caught from all 3 starting days in the 12
+    clean days that remain.
+  - Haiku: a real signal on the main thread, which never uses Haiku, so a 5%
+    shift is caught from every starting day. Subagent Haiku bursts make the
+    all-turn share noisy: on 5 synthetic logs it was falsely flagged on 3 (on 1
+    when the deviant days had to be in a row), the main thread on none.
   - Effort: not detectable from one user's logs. Over the 12 clean days its
     daily level swung between 0.33 and 0.67, more than a 70% cut in thinking
     tokens moves it, so no size of drop was caught, on all turns or the main
@@ -399,7 +402,8 @@ def bin_metrics(df: pd.DataFrame, by: str = "day") -> pd.DataFrame:
 class DetectorConfig:
     baseline_window: int = 14   # trailing bins used as baseline
     z_threshold: float = 3.5    # robust-z magnitude to count a bin as deviant
-    consecutive: int = 3        # deviant bins in a row required to FLAG
+    deviant_bins: int = 3       # deviant bins required to FLAG...
+    flag_window: int = 4        # ...among this many bins in a row
     min_baseline: int = 5       # need at least this many baseline bins to judge
     # Per-metric overrides of z_threshold. A confirmed caching regression in real
     # logs (Claude Code 2.1.233-2.1.258, Aug 2026) scored z = -4.9, -6.4, -3.1,
@@ -454,15 +458,15 @@ def detect(metrics: pd.DataFrame, cfg: DetectorConfig) -> pd.DataFrame:
             harmful = (z <= -threshold) if direction == "down" else (z >= threshold)
             deviant.append(bool(harmful))
         m[f"{name}__z"] = zs
-        # sustained flag: True at bin i if this and the prior (consecutive-1)
-        # bins are all deviant.
+        # sustained flag: `deviant_bins` deviant bins among any `flag_window` bins
+        # in a row, so one bin just short of the cutoff doesn't restart the
+        # count. Mark from the first to the last of those deviant bins so the
+        # onset is visible.
         flags = [False] * len(deviant)
-        run = 0
-        for i, d in enumerate(deviant):
-            run = run + 1 if d else 0
-            if run >= cfg.consecutive:
-                # mark the whole run so the onset is visible
-                for j in range(i - cfg.consecutive + 1, i + 1):
+        for i in range(len(deviant)):
+            hits = [j for j in range(max(0, i - cfg.flag_window + 1), i + 1) if deviant[j]]
+            if len(hits) >= cfg.deviant_bins:
+                for j in range(hits[0], hits[-1] + 1):
                     flags[j] = True
         m[f"{name}__flag"] = flags
     return m
@@ -566,8 +570,8 @@ def sweep(df: pd.DataFrame, kind: str, cfg: DetectorConfig,
         # that the detector keeps its minimum baseline once the run's first
         # planted days enter the trailing window: from a start with only
         # min_baseline days, synthetic Haiku (0-19% a day) hid a 70% change.
-        first = cfg.min_baseline + cfg.consecutive - 1
-        last = len(labels) - cfg.consecutive
+        first = cfg.min_baseline + cfg.deviant_bins - 1
+        last = len(labels) - cfg.deviant_bins
         count = min(n_starts, last - first + 1)
         start_bins = sorted({int(round(x)) for x in np.linspace(first, last, count)}) if count > 0 else []
         first_turn = base.reset_index().groupby("day")["index"].min()
@@ -1057,7 +1061,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--z-threshold", type=float, default=3.5)
     ap.add_argument("--cache-z-threshold", type=float, default=3.0,
                     help="z threshold for the cache metric; the other metrics use --z-threshold")
-    ap.add_argument("--consecutive", type=int, default=3)
+    ap.add_argument("--deviant-bins", type=int, default=3,
+                    help="deviant bins that flag a metric when they fall within --flag-window bins in a row")
+    ap.add_argument("--flag-window", type=int, default=4,
+                    help="bins in a row that must hold --deviant-bins deviant bins "
+                         "(set it equal to --deviant-bins to require them in a row)")
     ap.add_argument("--schema-peek", action="store_true",
                     help="print the first assistant record + resolved fields, then exit")
     args = ap.parse_args(argv)
@@ -1066,7 +1074,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     cfg = DetectorConfig(baseline_window=args.baseline_window,
                          z_threshold=args.z_threshold,
-                         consecutive=args.consecutive,
+                         deviant_bins=args.deviant_bins,
+                         flag_window=args.flag_window,
                          metric_z_thresholds={"cache_ratio": args.cache_z_threshold})
 
     if args.synthetic:
@@ -1155,8 +1164,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                   f"{', '.join(f'{lo}..{hi}' for lo, hi in args.incident)})")
         floors = res.attrs["floors"]
         if res.empty:
-            print(f"No starting point has {cfg.min_baseline + cfg.consecutive - 1} bins before it "
-                  f"and {cfg.consecutive} after it; widen the date window.")
+            print(f"No starting point has {cfg.min_baseline + cfg.deviant_bins - 1} bins before it "
+                  f"and {cfg.deviant_bins} after it; widen the date window.")
         else:
             short = (lambda s: str(s)[5:]) if args.bin == "day" else str
             starts = list(floors)
