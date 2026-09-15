@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 import pandas as pd
 
@@ -141,6 +142,18 @@ def iter_jsonl_files(source: Path) -> Iterable[Path]:
         yield source
         return
     yield from sorted(source.rglob("*.jsonl"))
+
+
+def default_source(environ: Mapping[str, str] = os.environ) -> Path:
+    """Where Claude Code keeps session transcripts: $CLAUDE_CONFIG_DIR/projects when
+    that variable is set, otherwise ~/.claude/projects."""
+    config = environ.get("CLAUDE_CONFIG_DIR")
+    return (Path(config).expanduser() if config else Path.home() / ".claude") / "projects"
+
+
+def no_transcripts_message(source: Path) -> str:
+    return (f"No Claude Code transcripts found in {source}. Pass --source DIR, or set "
+            "CLAUDE_CONFIG_DIR if Claude Code keeps its files somewhere else.")
 
 
 def parse_source(source: Path, verbose: bool = False) -> pd.DataFrame:
@@ -286,7 +299,10 @@ def _num(v: Any) -> float:
 # Schema peek (Step 0 helper)
 # ---------------------------------------------------------------------------
 
-def schema_peek(source: Path) -> None:
+def peek(source: Path) -> bool:
+    """Print the first assistant line in `source` and the fields resolved from it,
+    for checking the parser against a new Claude Code version. False when there is
+    no assistant line to show."""
     for fp in iter_jsonl_files(source):
         try:
             with fp.open("r", encoding="utf-8", errors="replace") as fh:
@@ -304,7 +320,8 @@ def schema_peek(source: Path) -> None:
                         print("\n# resolved fields:")
                         for logical in CANDIDATES:
                             print(f"  {logical:16s} -> {field_get(obj, logical)!r}"[:120])
-                        return
+                        return True
         except OSError:
             continue
-    print("No assistant lines found.", file=sys.stderr)
+    print(no_transcripts_message(source), file=sys.stderr)
+    return False

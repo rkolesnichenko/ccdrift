@@ -57,7 +57,7 @@ import pandas as pd
 from ccdrift.detector import (METRICS, DetectorConfig, bin_metrics, detect, first_flag_bin,
                               flag_onsets)
 from ccdrift.logs import (CACHE_TTL_SECONDS, SUBAGENT_CACHE_TTL_SECONDS, TOKENS_PER_SIGNATURE_CHAR,
-                          add_ratios, parse_source, schema_peek)
+                          add_ratios, parse_source, peek)
 
 
 # ---------------------------------------------------------------------------
@@ -628,7 +628,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         source = Path(args.source).expanduser()
 
     if args.schema_peek:
-        schema_peek(source)
+        peek(source)
         return 0
 
     print(f"[parse] reading {source}")

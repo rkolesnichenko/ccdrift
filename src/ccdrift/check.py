@@ -4,15 +4,16 @@ can't compute the cache metric."""
 from __future__ import annotations
 
 import json
+import os
 import traceback
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import pandas as pd
 
 from ccdrift.detector import DetectorConfig, bin_metrics, detect, flag_onsets
-from ccdrift.logs import parse_source
+from ccdrift.logs import no_transcripts_message, parse_source
 from ccdrift.notify import notify
 
 
@@ -25,7 +26,13 @@ from ccdrift.notify import notify
 CHECK_METRICS = {"cache_ratio": "Cache read ratio on new prompts",
                  "haiku_fraction": "Haiku share on the main thread"}
 CHECK_RECENT_DAYS = 14
-CHECK_STATE = Path.home() / ".ccdrift" / "check-state.json"
+
+
+def ccdrift_home(environ: Mapping[str, str] = os.environ) -> Path:
+    """Where the daily check keeps its state file and log: $CCDRIFT_HOME when set,
+    otherwise ~/.ccdrift."""
+    home = environ.get("CCDRIFT_HOME")
+    return Path(home).expanduser() if home else Path.home() / ".ccdrift"
 
 
 def check(df: pd.DataFrame, today: date, state_path: Path,
@@ -127,7 +134,7 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
     try:
         df = parse_source(source)
         if df.empty:
-            raise RuntimeError(f"no Claude Code responses found in {source}")
+            raise RuntimeError(no_transcripts_message(source))
         today = today or datetime.now(timezone.utc).date()
         flags = check(df, today, state_path, cfg)
         blank = blank_cache_stretch(df, today, state_path)
