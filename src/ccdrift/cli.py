@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import shlex
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +12,7 @@ from ccdrift import __version__
 from ccdrift.check import ccdrift_home, run_check
 from ccdrift.logs import default_source, peek
 from ccdrift.report import run_report
+from ccdrift.schedule import ScheduleError, choose_backend, install as install_job, make_job
 
 
 def _add_source(parser: argparse.ArgumentParser) -> None:
@@ -50,7 +53,50 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--days", type=int, default=21, help="how many recent days to list (default: 21)")
     _add_source(report)
     _add_state(report)
+
+    schedule = commands.add_parser("schedule", help="run the check once a day")
+    actions = schedule.add_subparsers(dest="action", required=True, metavar="ACTION")
+    install_action = actions.add_parser("install", help="set up the daily job, replacing an existing one")
+    install_action.add_argument("--at", default="09:00", help="local time to run, 24-hour HH:MM (default: 09:00)")
+    install_action.add_argument("--no-notify", action="store_true",
+                                help="write alerts to the log without desktop notifications")
+    _add_source(install_action)
+    actions.add_parser("remove", help="remove the daily job")
+    actions.add_parser("status", help="show whether the job is installed and how its last run went")
     return parser
+
+
+def _schedule(args: argparse.Namespace) -> int:
+    try:
+        job = make_job(args.at if args.action == "install" else "09:00",
+                       notify=not getattr(args, "no_notify", False),
+                       source=getattr(args, "source", None))
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    backend = choose_backend()
+    if backend is None:
+        print("ccdrift can't set up a daily job on this system. Run this command once a day "
+              "with your system's scheduler:", file=sys.stderr)
+        print("  " + " ".join(shlex.quote(arg) for arg in job.argv()), file=sys.stderr)
+        return 2
+    if args.action == "install":
+        try:
+            install_job(job, backend)
+        except ScheduleError as exc:
+            print(f"Nothing installed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Installed a {backend.name} job: `ccdrift check` runs daily at {job.hour:02d}:{job.minute:02d}.")
+        print(f"Log: {job.log}")
+        print("A first run has started. Check `ccdrift schedule status` in a minute.")
+        for note in backend.install_notes(job):
+            print(note)
+        return 0
+    if args.action == "remove":
+        print("Removed the daily job." if backend.remove() else "No daily job was installed.")
+        return 0
+    print("\n".join(backend.status()))
+    return 0
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -61,4 +107,5 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0 if peek(_source(args)) else 2
     if args.command == "report":
         return run_report(_source(args), _state(args), days=args.days)
-    raise AssertionError(f"unhandled command: {args.command}")
+    if args.command == "schedule":
+        return _schedule(args)
