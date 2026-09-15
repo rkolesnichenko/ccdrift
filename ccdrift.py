@@ -21,9 +21,11 @@ This is a throwaway experiment script, not the product. Outputs: CSVs + PNGs.
 
 Findings so far (the user's own logs, Aug 6 - Sep 15, 2026):
   - Cache: a real signal. A Claude Code caching regression (versions
-    2.1.233-2.1.258, in use Aug 16 - Sep 4) is flagged from Aug 18. With that
-    incident left out, a 5% drop is caught from all 3 starting days in the 12
-    clean days that remain.
+    2.1.233-2.1.258, in use Aug 16 - Sep 4) was flagged from Aug 18 until
+    Claude Code's 30-day transcript cleanup deleted part of Aug 15-16. On the
+    logs that remain, Aug 18-22 score z = -3.8, -5.4, -2.8, -3.2, -2.6, so the
+    3-day run never forms. With the incident left out, a 5% drop is caught from
+    all 3 starting days in the 12 clean days that remain.
   - Haiku: a real signal. The main thread never uses Haiku, so a 5% shift is
     caught from every starting day.
   - Effort: not detectable from one user's logs. Over the 12 clean days its
