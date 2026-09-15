@@ -52,7 +52,7 @@ against the 14 before it. To keep more history, set this in `~/.claude/settings.
 | Alert | What it means | What to do |
 |---|---|---|
 | **ccdrift flag** | 3 of the last 4 days passed the cutoff for the cache ratio or main-thread Haiku share. | `ccdrift report` lists the days, their values and z-scores. |
-| **ccdrift can't compute the cache metric** | 3 busy days had no usable cache values. Claude Code's log format has most likely changed. | `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it. Please open an issue. |
+| **ccdrift can't compute the cache metric** | 3 busy days had no usable cache values. Claude Code's log format has most likely changed. | `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it. Please open an issue, removing any prompt or response text from what you paste. |
 | **ccdrift check failed** | The check itself stopped with an error. | `~/.ccdrift/check.log` has the details. |
 
 The flag and cache-metric alerts are sent once each; a failing check alerts on every
