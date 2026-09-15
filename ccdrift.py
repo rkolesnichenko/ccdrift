@@ -29,6 +29,9 @@ Usage:
   # Find the detection floor for a silent Haiku-delegation regime change:
   python3 ccdrift.py --synthetic --sweep haiku --out ./out
 
+  # Detection floors from several starting days, leaving out a known incident:
+  python3 ccdrift.py --sweep cache --incident 2026-08-16..2026-09-04 --out ./out
+
   # Streaming detection time vs false alarms, not counting a known incident:
   python3 ccdrift.py --stream cache --incident 2026-08-16..2026-09-04 --out ./out
 
@@ -52,6 +55,7 @@ import json
 import math
 import os
 import random
+import statistics
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -471,12 +475,14 @@ def flag_onsets(detected: pd.DataFrame, metric: str) -> list[int]:
 # Injection harness (Pass B) — plant a controlled regime change, measure floor
 # ---------------------------------------------------------------------------
 
-def inject(df: pd.DataFrame, kind: str, magnitude: float, seed: int = 0) -> pd.DataFrame:
-    """Return a copy of the turn-level df with a regime change applied to the
-    SECOND HALF (by global time order). magnitude in [0,1]."""
+def inject(df: pd.DataFrame, kind: str, magnitude: float, seed: int = 0,
+           start: Optional[int] = None) -> pd.DataFrame:
+    """Return a copy of the turn-level df with a regime change applied from turn
+    `start` (by global time order; default: the midpoint turn) to the end.
+    magnitude in [0,1]."""
     rng = random.Random(seed)
     d = df.sort_values("timestamp", kind="stable").reset_index(drop=True).copy()
-    cut = len(d) // 2
+    cut = len(d) // 2 if start is None else start
     post = d.index >= cut
 
     if kind == "effort":
@@ -506,50 +512,78 @@ def inject(df: pd.DataFrame, kind: str, magnitude: float, seed: int = 0) -> pd.D
 KIND_TO_METRIC = {"effort": "effort_proxy", "haiku": "haiku_fraction", "cache": "cache_ratio"}
 
 
+def in_date_ranges(days: Iterable[str], ranges: Optional[list[tuple[str, str]]]) -> np.ndarray:
+    """Mask of days (ISO date strings) inside any inclusive START..END range."""
+    return np.array([any(lo <= d <= hi for lo, hi in ranges or []) for d in days], dtype=bool)
+
+
 def sweep(df: pd.DataFrame, kind: str, cfg: DetectorConfig,
-          grid: Optional[list[float]] = None, by: str = "day") -> pd.DataFrame:
-    """Sweep injection magnitude; report detection + onset lag at each level.
-    The smallest detected magnitude is the detection floor. Only flags the
-    planted change adds, from the bin where it begins on, count: real logs can
-    already hold an incident of their own (on the user's logs one flagged 11
-    days before the change, making every size look caught), and borderline days
-    just before the change can open the run that the change completes."""
+          grid: Optional[list[float]] = None, by: str = "day", n_starts: int = 10,
+          incidents: Optional[list[tuple[str, str]]] = None) -> pd.DataFrame:
+    """Plant a regime change of each magnitude from each of up to n_starts
+    starting days and report whether, and how many bins later, it is flagged.
+    One start can mislead: on the user's logs the midpoint landed on Sep 1,
+    inside a real incident. Known incident days are left out first, and each
+    start keeps enough days before it for a clean baseline and room for a flag
+    run after.
+    The detection floor at a start is the smallest magnitude flagged there;
+    attrs["detection_floor"] is the median across starts.
+
+    Only flags the planted change adds, from its starting bin on, count: real
+    logs can hold an incident of their own, and borderline days just before the
+    change can open the run that the change completes."""
     if grid is None:
         grid = [0.05, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70]
     metric = KIND_TO_METRIC[kind]
-    key = "day" if by == "day" else "session_id"
-    # The planted change starts at the global midpoint turn (see inject).
+    df = df[~in_date_ranges(df["day"].astype(str), incidents)].reset_index(drop=True)
+    columns = ["start", "start_bin", "magnitude", "detected", "lag_bins"]
+    if df.empty:
+        res = pd.DataFrame(columns=columns)
+        res.attrs.update(metric=metric, floors={}, detection_floor=None, clean_flag_onsets=[])
+        return res
     base = df.sort_values("timestamp", kind="stable").reset_index(drop=True)
-    cut_label = base.loc[len(base) // 2, key]
 
     clean = detect(bin_metrics(df, by=by), cfg)
     clean_flags = clean[f"{metric}__flag"].to_numpy(dtype=bool)
+    labels = clean["bin"].tolist()
 
-    results = []
-    cut_bin = None
-    for mag in grid:
-        det = detect(bin_metrics(inject(df, kind, mag, seed=7), by=by), cfg)
-        matches = det.index[det["bin"] == cut_label]
-        cut_bin = int(matches[0]) if len(matches) else None
-        flags = det[f"{metric}__flag"].to_numpy(dtype=bool)
-        # first bin from the cut on flagged only because of the planted change
-        flag_bin = None if cut_bin is None else next(
-            (i for i in range(cut_bin, len(flags)) if flags[i] and not clean_flags[i]), None)
-        results.append({
-            "magnitude": mag,
-            "detected": flag_bin is not None,
-            "onset_bin": flag_bin,
-            "cut_bin": cut_bin,
-            "lag_bins": None if flag_bin is None else flag_bin - cut_bin,
-        })
-    res = pd.DataFrame(results)
-    detected = res[res["detected"]]
-    floor = detected["magnitude"].min() if not detected.empty else None
-    res.attrs["detection_floor"] = floor
-    res.attrs["metric"] = metric
-    res.attrs["cut_label"] = cut_label
-    res.attrs["cut_bin"] = cut_bin
-    res.attrs["clean_flag_onsets"] = [clean["bin"].iloc[i] for i in flag_onsets(clean, metric)]
+    if by == "day":
+        # A start needs room for a flag run after it, and enough days before it
+        # that the detector keeps its minimum baseline once the run's first
+        # planted days enter the trailing window: from a start with only
+        # min_baseline days, synthetic Haiku (0-19% a day) hid a 70% change.
+        first = cfg.min_baseline + cfg.consecutive - 1
+        last = len(labels) - cfg.consecutive
+        count = min(n_starts, last - first + 1)
+        start_bins = sorted({int(round(x)) for x in np.linspace(first, last, count)}) if count > 0 else []
+        first_turn = base.reset_index().groupby("day")["index"].min()
+        starts = [(b, int(first_turn[labels[b]])) for b in start_bins]
+    else:
+        # session bins aren't in time order: plant once, at the midpoint turn
+        mid = len(base) // 2
+        start_bins = [i for i, label in enumerate(labels) if label == base.loc[mid, "session_id"]]
+        starts = [(start_bins[0], mid)] if start_bins else []
+
+    rows = []
+    for start_bin, start_turn in starts:
+        for mag in grid:
+            det = detect(bin_metrics(inject(df, kind, mag, seed=7, start=start_turn), by=by), cfg)
+            flags = det[f"{metric}__flag"].to_numpy(dtype=bool)
+            # first bin from the start on flagged only because of the planted change
+            onset = next((i for i in range(start_bin, len(flags)) if flags[i] and not clean_flags[i]), None)
+            rows.append({"start": labels[start_bin], "start_bin": start_bin, "magnitude": mag,
+                         "detected": onset is not None,
+                         "lag_bins": None if onset is None else onset - start_bin})
+    res = pd.DataFrame(rows, columns=columns)
+    floors = {}
+    for label, g in res.groupby("start", sort=False):
+        caught = g.loc[g["detected"].astype(bool), "magnitude"]
+        floors[label] = float(caught.min()) if not caught.empty else None
+    median = (statistics.median_low(sorted(math.inf if f is None else f for f in floors.values()))
+              if floors else math.inf)
+    res.attrs.update(metric=metric, floors=floors,
+                     detection_floor=None if median == math.inf else median,
+                     clean_flag_onsets=[labels[i] for i in flag_onsets(clean, metric)])
     return res
 
 
@@ -668,7 +702,7 @@ def cusum_latency_curve(df: pd.DataFrame, kind: str, magnitude: float,
     base = df.sort_values("timestamp", kind="stable").reset_index(drop=True)
     cut_turn = len(base) // 2
     sample_days = base["day"].astype(str).to_numpy()[clean_idx]
-    in_incident = np.array([any(lo <= d <= hi for lo, hi in incidents or []) for d in sample_days], dtype=bool)
+    in_incident = in_date_ranges(sample_days, incidents)
 
     rows = []
     h_clean_alarm_after_cut = []
@@ -919,14 +953,15 @@ def plot_metrics(detected: pd.DataFrame, out_dir: Path, cfg: DetectorConfig) -> 
 
 def plot_sweep(res: pd.DataFrame, out_dir: Path) -> Path:
     fig, ax = plt.subplots(figsize=(8, 4))
-    colors = ["#d33" if not d else "#3b6" for d in res["detected"]]
-    ax.bar(res["magnitude"].astype(str), res["detected"].astype(int), color=colors)
+    rate = res["detected"].astype(float).groupby(res["magnitude"]).mean()
+    colors = ["#3b6" if r >= 0.5 else "#d33" for r in rate]
+    ax.bar(rate.index.astype(str), rate.to_numpy(), color=colors)
     floor = res.attrs.get("detection_floor")
     ax.set_title(f"Detection by injected magnitude — {res.attrs.get('metric')}  "
-                 f"(floor={floor})", fontsize=10)
+                 f"(median floor={floor}, {res['start'].nunique()} starts)", fontsize=10)
     ax.set_xlabel("injected regime-change magnitude")
-    ax.set_ylabel("detected (1) / missed (0)")
-    ax.set_ylim(0, 1.2)
+    ax.set_ylabel("share of starts caught")
+    ax.set_ylim(0, 1.05)
     fig.tight_layout()
     p = out_dir / f"sweep_{res.attrs.get('metric')}.png"
     fig.savefig(p, dpi=120)
@@ -986,12 +1021,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--until", type=date.fromisoformat, default=None,
                     help="only analyze days on or before this UTC date (YYYY-MM-DD)")
     ap.add_argument("--incident", type=date_range, action="append", default=[],
-                    help="a known real incident, START..END (UTC dates, inclusive); --stream "
-                         "doesn't count its alarms as false alarms (repeatable)")
+                    help="a known real incident, START..END (UTC dates, inclusive); --sweep leaves "
+                         "its days out and --stream doesn't count its alarms as false alarms (repeatable)")
     ap.add_argument("--out", type=str, default="./ccdrift_out")
     ap.add_argument("--bin", choices=["day", "session"], default="day")
     ap.add_argument("--sweep", choices=["effort", "haiku", "cache"], default=None,
                     help="run Pass-B injection sweep for this incident type")
+    ap.add_argument("--sweep-starts", type=int, default=10,
+                    help="number of starting days to plant the change at in --sweep")
     ap.add_argument("--stream", choices=["effort", "haiku", "cache"], default=None,
                     help="run the streaming-CUSUM latency-vs-false-alarm probe")
     ap.add_argument("--stream-magnitude", type=float, default=0.30,
@@ -1096,22 +1133,42 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     if args.sweep:
-        res = sweep(df, args.sweep, cfg, by=args.bin)
+        res = sweep(df, args.sweep, cfg, by=args.bin, n_starts=args.sweep_starts, incidents=args.incident)
         res.to_csv(out_dir / f"sweep_{args.sweep}.csv", index=False)
-        p = plot_sweep(res, out_dir)
         print(f"\n=== SWEEP: {args.sweep} ({KIND_TO_METRIC[args.sweep]}) ===")
-        print(res.to_string(index=False))
-        print(f"(planted change starts in bin {res.attrs['cut_label']}; only flags it adds from there on count)")
-        floor = res.attrs.get("detection_floor")
-        print(f"\nDetection floor: {floor if floor is not None else 'NOT DETECTED at any level'}")
+        if args.incident:
+            print("(known incident days left out: "
+                  f"{', '.join(f'{lo}..{hi}' for lo, hi in args.incident)})")
+        floors = res.attrs["floors"]
+        if res.empty:
+            print(f"No starting point has {cfg.min_baseline + cfg.consecutive - 1} bins before it "
+                  f"and {cfg.consecutive} after it; widen the date window.")
+        else:
+            short = (lambda s: str(s)[5:]) if args.bin == "day" else str
+            starts = list(floors)
+            print("bins from each start of the planted change to its first flag ('-' = not caught):")
+            print(f"{'magnitude':>9}  " + " ".join(f"{short(s):>6}" for s in starts) + "  caught")
+            for mag, g in res.groupby("magnitude", sort=True):
+                lags = dict(zip(g["start"], g["lag_bins"]))
+                cells = " ".join(f"{'-' if pd.isna(lags[s]) else int(lags[s]):>6}" for s in starts)
+                print(f"{mag:>9g}  {cells}  {int(g['detected'].sum())}/{len(g)}")
+            print("\nDetection floor by start: "
+                  + ", ".join(f"{short(s)} {'-' if f is None else f'{f:g}'}" for s, f in floors.items()))
+            floor = res.attrs["detection_floor"]
+            caught = [f for f in floors.values() if f is not None]
+            if floor is None:
+                print("Detection floor: NOT DETECTED at any level from most starts")
+            else:
+                missed = len(floors) - len(caught)
+                print(f"Detection floor: {floor:g} (median of {len(floors)} starts; range "
+                      f"{min(caught):g}-{max(caught):g}"
+                      + (f"; not caught at any size from {missed}" if missed else "") + ")")
         if res.attrs["clean_flag_onsets"]:
             print("Note: without a planted change your logs already flag this metric, starting "
                   f"{', '.join(map(str, res.attrs['clean_flag_onsets']))}. That lowers sensitivity "
-                  "around it; use --since/--until to sweep a window without it.")
-        if res.attrs["cut_bin"] is not None and res.attrs["cut_bin"] < cfg.min_baseline:
-            print(f"Note: only {res.attrs['cut_bin']} bins come before the planted change, fewer than the "
-                  f"{cfg.min_baseline} the detector needs as a baseline; widen the date window.")
-        print(f"[plot] {p}")
+                  "around it; pass its dates with --incident to leave it out.")
+        if not res.empty:
+            print(f"[plot] {plot_sweep(res, out_dir)}")
         print("\nPass/fail reminder: floor <= 0.20 for haiku & cache is the bar; "
               "effort proxy may be coarser.")
     else:

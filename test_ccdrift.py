@@ -360,6 +360,34 @@ def test_sweep_ignores_flags_that_start_before_the_planted_change(synthetic_turn
     assert not res["detected"].any()
 
 
+def test_sweep_plants_the_change_at_several_starting_days(synthetic_turns):
+    # One planted start can mislead: on the user's logs the midpoint landed on
+    # Sep 1, inside a real incident. Each start needs room for a flag run after
+    # it, and enough days before it that the detector still has its minimum
+    # baseline once the run's first planted days enter the trailing window: with
+    # only 5 days, synthetic Haiku swung 0-19% and two planted days moved the
+    # median enough to hide a 70% change.
+    cfg = ccdrift.DetectorConfig()
+    n_days = synthetic_turns["day"].nunique()
+    res = ccdrift.sweep(synthetic_turns, "cache", cfg, grid=[0.7], n_starts=4)
+    assert res["start"].nunique() == 4
+    assert res["start_bin"].min() >= cfg.min_baseline + cfg.consecutive - 1
+    assert res["start_bin"].max() <= n_days - cfg.consecutive
+    assert res["detected"].all()
+
+
+def test_sweep_leaves_out_known_incident_days(synthetic_turns):
+    df = synthetic_turns.copy()
+    days = sorted(df["day"].unique())
+    early = df["day"].isin(days[6:12]) & df["prompt_within_ttl"]
+    df.loc[early, "cache_creation"] += df.loc[early, "cache_read"]
+    df.loc[early, "cache_read"] = 0
+    df = ccdrift.add_ratios(df)
+    res = ccdrift.sweep(df, "cache", ccdrift.DetectorConfig(), grid=[0.3], incidents=[(days[6], days[11])])
+    assert res.attrs["clean_flag_onsets"] == []
+    assert not res["start"].isin(days[6:12]).any()
+
+
 def test_stream_latency_ignores_alarms_that_fire_without_the_planted_change(synthetic_turns):
     # Real logs can hold an incident after the planted change starts (on the
     # user's logs cache alarms fired Sep 1, the change started Sep 1 07:44); an
