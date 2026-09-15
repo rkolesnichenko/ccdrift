@@ -197,6 +197,41 @@ def test_schedule_install_reports_the_job_and_its_log(tmp_path, monkeypatch, cap
     ]
 
 
+def test_schedule_status_exits_1_when_the_scheduler_cant_be_read(monkeypatch, capsys):
+    backend = Cron(run=FakeRun({("crontab", "-l"): (1, "")}))
+    monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: backend)
+    assert main(["schedule", "status"]) == 1
+    err = capsys.readouterr().err
+    assert "Couldn't read the schedule" in err
+    assert "crontab -l" in err
+
+
+def test_schedule_remove_exits_1_when_the_scheduler_cant_be_read(monkeypatch, capsys):
+    backend = Cron(run=FakeRun({("crontab", "-l"): (1, "")}))
+    monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: backend)
+    assert main(["schedule", "remove"]) == 1
+    err = capsys.readouterr().err
+    assert "Nothing removed" in err
+    assert "crontab -l" in err
+
+
+def test_schedule_remove_through_cli_reports_whether_a_job_was_installed(tmp_path, monkeypatch, capsys):
+    run, backend = launchd(tmp_path)
+    monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: backend)
+    assert main(["schedule", "remove"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["No daily job was installed."]
+    backend.install(job_for(tmp_path))
+    assert main(["schedule", "remove"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["Removed the daily job."]
+
+
+def test_schedule_status_through_cli_says_when_nothing_is_installed(tmp_path, monkeypatch, capsys):
+    run, backend = launchd(tmp_path)
+    monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: backend)
+    assert main(["schedule", "status"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["not installed"]
+
+
 def systemd(tmp_path, results=None):
     run = FakeRun(results)
     return run, Systemd(run=run, config_home=tmp_path / "config")

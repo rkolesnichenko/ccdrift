@@ -93,9 +93,19 @@ def _schedule(args: argparse.Namespace) -> int:
             print(note)
         return 0
     if args.action == "remove":
-        print("Removed the daily job." if backend.remove() else "No daily job was installed.")
+        try:
+            removed = backend.remove()
+        except ScheduleError as exc:
+            print(f"Nothing removed: {exc}", file=sys.stderr)
+            return 1
+        print("Removed the daily job." if removed else "No daily job was installed.")
         return 0
-    print("\n".join(backend.status()))
+    try:
+        status = backend.status()
+    except ScheduleError as exc:
+        print(f"Couldn't read the schedule: {exc}", file=sys.stderr)
+        return 1
+    print("\n".join(status))
     return 0
 
 
