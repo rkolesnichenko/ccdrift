@@ -1,0 +1,7 @@
+.DS_Store
+.idea/
+.*.swp
+__pycache__/
+.pytest_cache/
+ccdrift_out/
+out/

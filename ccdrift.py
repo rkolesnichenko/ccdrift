@@ -6,13 +6,16 @@ detection in Claude Code session logs.
 Purpose (per the agreed MVP test): answer ONE question — is the drift signal real
 or is it noise? It does this three ways:
 
-  1. Parses ~/.claude/projects/*.jsonl into a turn-level feature table (defensively;
-     degrades gracefully when field names differ across Claude Code versions).
+  1. Parses ~/.claude/projects/**/*.jsonl into a table with one row per API
+     response (defensively; degrades gracefully when field names differ across
+     Claude Code versions).
   2. Derives the three target metrics that map to the documented Mar/Apr 2026
-     incidents: reasoning-effort proxy, cache-read ratio, Haiku-delegation fraction.
-  3. Runs a robust (median/MAD) sustained-deviation detector, and an INJECTION
-     harness that plants controlled regime changes and sweeps their magnitude to
-     find the detection floor — your product's headline number.
+     incidents: reasoning-effort proxy, cache-read ratio on turns that open with
+     a new prompt, and Haiku-delegation fraction.
+  3. Runs a robust (median/MAD, floored at sampling noise) sustained-deviation
+     detector, and an INJECTION harness that plants controlled regime changes and
+     sweeps their magnitude to find the detection floor — your product's headline
+     number.
 
 This is a throwaway experiment script, not the product. Outputs: CSVs + PNGs.
 
@@ -26,8 +29,20 @@ Usage:
   # Find the detection floor for a silent Haiku-delegation regime change:
   python3 ccdrift.py --synthetic --sweep haiku --out ./out
 
+  # Streaming detection time vs false alarms, not counting a known incident:
+  python3 ccdrift.py --stream cache --incident 2026-08-16..2026-09-04 --out ./out
+
+  # Limit any mode to a range of UTC dates, e.g. a stretch without incidents:
+  python3 ccdrift.py --since 2026-09-05 --stream cache --out ./out
+
   # Inspect the raw schema of your own logs first (recommended Step 0):
   python3 ccdrift.py --source ~/.claude/projects --schema-peek
+
+  # Tests:
+  python3 -m pytest -q test_ccdrift.py
+
+The cache metric flags at |z| >= 3.0 (--cache-z-threshold); the other metrics
+use --z-threshold (3.5).
 """
 
 from __future__ import annotations
@@ -40,7 +55,7 @@ import random
 import sys
 import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -73,6 +88,10 @@ CANDIDATES: dict[str, list[str]] = {
     "session_id":        ["sessionId", "session_id", "message.sessionId"],
     "content":           ["message.content", "content"],
     "is_sidechain":      ["isSidechain", "message.isSidechain", "is_sidechain"],
+    "message_id":        ["message.id"],
+    "request_id":        ["requestId", "request_id"],
+    "is_meta":           ["isMeta", "is_meta"],
+    "subtype":           ["subtype"],
 }
 
 
@@ -100,24 +119,36 @@ def is_assistant(obj: dict) -> bool:
     return role == "assistant"
 
 
-def thinking_chars(content: Any) -> int:
-    """Sum character length of thinking/reasoning blocks. Handles content as a
-    plain string (no thinking), a list of blocks, or absent."""
-    if content is None:
-        return 0
+# Thinking tokens per signature character. Claude Code stores thinking blocks
+# without their text (or with a short summary), but each keeps its encrypted
+# signature. Fitted on 20,896 real responses with a final output count: output
+# tokens minus visible chars/4 ≈ 0.30 × signature chars (r = 0.97; per-model
+# slopes 0.27–0.31). The stored thinking text tracks it poorly (r = 0.20).
+TOKENS_PER_SIGNATURE_CHAR = 0.30
+
+
+def content_chars(content: Any) -> tuple[int, int]:
+    """Return (signature_chars, visible_chars) for one line's content: signature
+    length of thinking blocks, and length of text plus tool-call input."""
     if isinstance(content, str):
-        return 0
-    total = 0
+        return 0, len(content)
+    signature = visible = 0
     if isinstance(content, list):
         for block in content:
             if not isinstance(block, dict):
                 continue
             btype = block.get("type", "")
             if btype in ("thinking", "redacted_thinking", "reasoning"):
-                txt = block.get("thinking") or block.get("text") or block.get("reasoning") or ""
+                sig = block.get("signature") or block.get("data") or ""
+                if isinstance(sig, str):
+                    signature += len(sig)
+            elif btype == "text":
+                txt = block.get("text") or ""
                 if isinstance(txt, str):
-                    total += len(txt)
-    return total
+                    visible += len(txt)
+            elif btype == "tool_use":
+                visible += len(json.dumps(block.get("input") or {}))
+    return signature, visible
 
 
 def mcp_tool_names(content: Any) -> list[str]:
@@ -129,6 +160,11 @@ def mcp_tool_names(content: Any) -> list[str]:
                 if isinstance(name, str) and name.startswith("mcp__"):
                     names.append(name)
     return names
+
+
+def has_tool_result(content: Any) -> bool:
+    return isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "tool_result" for block in content)
 
 
 def parse_ts(raw: Any) -> Optional[datetime]:
@@ -164,16 +200,24 @@ def iter_jsonl_files(source: Path) -> Iterable[Path]:
 
 
 def parse_source(source: Path, verbose: bool = False) -> pd.DataFrame:
-    rows: list[dict] = []
+    # One row per API response. Claude Code writes each content block of a
+    # response on its own line with the response's usage repeated, so lines that
+    # share a message.id are merged. A response copied into a second file (e.g.
+    # when a session is resumed) is counted from the first file only.
+    turns: dict[str, dict] = {}
     n_files = 0
     n_lines = 0
     n_bad = 0
     n_assistant = 0
     for fp in iter_jsonl_files(source):
         n_files += 1
+        rel = fp.name if source.is_file() else str(fp.relative_to(source))
+        # Set by lines between two responses: a prompt typed by the user opens
+        # a new turn, and a compaction rewrites the conversation.
+        prompt_pending = compact_pending = False
         try:
             with fp.open("r", encoding="utf-8", errors="replace") as fh:
-                for line in fh:
+                for line_no, line in enumerate(fh):
                     line = line.strip()
                     if not line:
                         continue
@@ -183,54 +227,105 @@ def parse_source(source: Path, verbose: bool = False) -> pd.DataFrame:
                     except json.JSONDecodeError:
                         n_bad += 1
                         continue
-                    if not isinstance(obj, dict) or not is_assistant(obj):
+                    if not isinstance(obj, dict):
+                        continue
+                    role = field_get(obj, "role")
+                    if role == "user":
+                        if not field_get(obj, "is_meta") and not has_tool_result(field_get(obj, "content")):
+                            prompt_pending = True
+                        continue
+                    if role == "system":
+                        if field_get(obj, "subtype") == "compact_boundary":
+                            compact_pending = True
+                        continue
+                    if role != "assistant":
                         continue
                     n_assistant += 1
+                    model = field_get(obj, "model") or "unknown"
+                    if model == "<synthetic>":  # Claude Code placeholder, no API call
+                        continue
+                    key = (field_get(obj, "message_id") or field_get(obj, "request_id")
+                           or f"{rel}:{line_no}")
+                    row = turns.get(key)
+                    if row is None:
+                        row = turns[key] = {
+                            "session_id":      field_get(obj, "session_id", default=fp.stem),
+                            "timestamp":       parse_ts(field_get(obj, "timestamp")),
+                            "model":           model,
+                            "input_tokens":    0.0,
+                            "output_tokens":   0.0,
+                            "cache_creation":  0.0,
+                            "cache_read":      0.0,
+                            "signature_chars": 0,
+                            "visible_chars":   0,
+                            "n_mcp_calls":     0,
+                            "is_sidechain":    bool(field_get(obj, "is_sidechain", default=False)),
+                            "new_prompt":      prompt_pending,
+                            "after_compaction": compact_pending,
+                            "source_file":     rel,
+                        }
+                    prompt_pending = compact_pending = False
+                    if row["source_file"] != rel:
+                        continue
+                    # output_tokens grows while streaming, so the largest is the
+                    # latest. About a third of real responses never log the final
+                    # count (stop_reason stays null); no metric relies on it.
+                    for col in ("input_tokens", "output_tokens", "cache_creation", "cache_read"):
+                        row[col] = max(row[col], _num(field_get(obj, col)))
                     content = field_get(obj, "content")
-                    rows.append({
-                        "session_id":     field_get(obj, "session_id", default=fp.stem),
-                        "timestamp":      parse_ts(field_get(obj, "timestamp")),
-                        "model":          (field_get(obj, "model") or "unknown"),
-                        "input_tokens":   _num(field_get(obj, "input_tokens")),
-                        "output_tokens":  _num(field_get(obj, "output_tokens")),
-                        "cache_creation": _num(field_get(obj, "cache_creation")),
-                        "cache_read":     _num(field_get(obj, "cache_read")),
-                        "thinking_chars": thinking_chars(content),
-                        "n_mcp_calls":    len(mcp_tool_names(content)),
-                        "is_sidechain":   bool(field_get(obj, "is_sidechain", default=False)),
-                        "source_file":    fp.name,
-                    })
+                    signature, visible = content_chars(content)
+                    row["signature_chars"] += signature
+                    row["visible_chars"] += visible
+                    row["n_mcp_calls"] += len(mcp_tool_names(content))
         except OSError as e:
             if verbose:
                 print(f"  ! could not read {fp}: {e}", file=sys.stderr)
 
     if verbose:
         print(f"  files={n_files} lines={n_lines} bad_json={n_bad} "
-              f"assistant_turns={n_assistant}", file=sys.stderr)
+              f"assistant_lines={n_assistant} responses={len(turns)}", file=sys.stderr)
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(list(turns.values()))
     if df.empty:
         return df
 
-    # Derived: thinking-token estimate (~4 chars/token), thinking fraction,
-    # cache-read ratio, is_haiku, inter-turn gap within session.
-    df["thinking_tokens"] = (df["thinking_chars"] / 4.0).round()
-    df["thinking_fraction"] = df["thinking_tokens"] / df["output_tokens"].clip(lower=1)
-    denom = (df["cache_read"] + df["cache_creation"]).clip(lower=1)
-    df["cache_read_ratio"] = df["cache_read"] / denom
-    df["is_haiku"] = df["model"].str.lower().str.contains("haiku").astype(float)
-    if "is_sidechain" not in df.columns:
-        df["is_sidechain"] = False
+    df["thinking_tokens"] = (df["signature_chars"] * TOKENS_PER_SIGNATURE_CHAR).round()
+    df["visible_tokens"] = (df["visible_chars"] / 4.0).round()
     df["is_sidechain"] = df["is_sidechain"].fillna(False).astype(bool)
     df["main_thread"] = ~df["is_sidechain"]
 
-    df = df.sort_values(["session_id", "timestamp"], kind="stable").reset_index(drop=True)
-    df["gap_seconds"] = (
-        df.groupby("session_id")["timestamp"].diff().dt.total_seconds()
-    )
-    df["post_idle"] = (df["gap_seconds"] > 3600).fillna(False)
+    # Gaps are measured within one transcript: subagents share the parent's
+    # sessionId but write their own file and keep their own cache prefix.
+    transcript = ["source_file", "is_sidechain"]
+    df = df.sort_values(transcript + ["timestamp"], kind="stable").reset_index(drop=True)
+    df["gap_seconds"] = df.groupby(transcript)["timestamp"].diff().dt.total_seconds()
     # day bucket (UTC) for binning
     df["day"] = df["timestamp"].dt.tz_convert("UTC").dt.date.astype("string")
+    return add_ratios(df)
+
+
+# Turns the cache metric uses. In real logs a caching regression showed up on
+# main-thread turns that open with a new user prompt: on Claude Code
+# 2.1.233-2.1.258 they missed 4.3% of the time (0.5% before and after), however
+# long the pause, while tool-loop continuations almost never missed. A turn
+# more than an hour after the previous one misses anyway (1 h TTL), as does the
+# turn right after a compaction, so both are left out. Subagents are left out
+# too: they keep a 5 min cache, and 88% of their turns after a longer pause miss.
+CACHE_TTL_SECONDS = 3600
+SUBAGENT_CACHE_TTL_SECONDS = 300
+
+
+def add_ratios(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute the per-turn metric columns from the raw ones. Runs after parsing
+    and again after every injection."""
+    df["thinking_fraction"] = df["thinking_tokens"] / (
+        df["thinking_tokens"] + df["visible_tokens"]).clip(lower=1)
+    denom = (df["cache_read"] + df["cache_creation"]).clip(lower=1)
+    df["cache_read_ratio"] = df["cache_read"] / denom
+    df["is_haiku"] = df["model"].str.lower().str.contains("haiku").astype(float)
+    df["prompt_within_ttl"] = (df["main_thread"] & df["new_prompt"] & ~df["after_compaction"]
+                               & (df["gap_seconds"] <= CACHE_TTL_SECONDS))
+    df["prompt_cache_read_ratio"] = df["cache_read_ratio"].where(df["prompt_within_ttl"])
     return df
 
 
@@ -251,9 +346,13 @@ METRICS = {
     # name -> (column, aggregation, harmful_direction)
     # harmful_direction = "down" means a DROP is the incident (effort, cache),
     #                      "up"   means a RISE is the incident (haiku share).
-    "effort_proxy":   ("thinking_fraction", "median", "down"),
-    "cache_ratio":    ("cache_read_ratio",  "median", "down"),
-    "haiku_fraction": ("is_haiku",          "mean",   "up"),
+    # Means, not medians: about half of real responses don't think, so a median
+    # thinking_fraction sits at 0; cache hits are all-or-nothing, so a median
+    # ignores misses until half the turns miss. NaN (turns the cache metric
+    # doesn't use) is skipped.
+    "effort_proxy":   ("thinking_fraction",       "mean", "down"),
+    "cache_ratio":    ("prompt_cache_read_ratio", "mean", "down"),
+    "haiku_fraction": ("is_haiku",                "mean", "up"),
 }
 
 
@@ -267,6 +366,9 @@ def bin_metrics(df: pd.DataFrame, by: str = "day") -> pd.DataFrame:
     for name, (col, agg, _) in METRICS.items():
         series = g[col].median() if agg == "median" else g[col].mean()
         out[name] = out["bin"].map(series).astype(float)
+        # turn count and within-bin variance set the detector's noise floor
+        out[f"{name}__n"] = out["bin"].map(g[col].count()).astype(int)
+        out[f"{name}__var"] = out["bin"].map(g[col].var()).fillna(0.0).astype(float)
     out["n_turns"] = out["bin"].map(g.size()).astype(int)
     return out
 
@@ -281,20 +383,34 @@ class DetectorConfig:
     z_threshold: float = 3.5    # robust-z magnitude to count a bin as deviant
     consecutive: int = 3        # deviant bins in a row required to FLAG
     min_baseline: int = 5       # need at least this many baseline bins to judge
+    # Per-metric overrides of z_threshold. A confirmed caching regression in real
+    # logs (Claude Code 2.1.233-2.1.258, Aug 2026) scored z = -4.9, -6.4, -3.1,
+    # -3.7 on its first days on the cache metric: 3.5 misses it, 3.0 catches it.
+    # 3.0 on every metric raised a false Haiku flag on clean synthetic logs.
+    metric_z_thresholds: dict[str, float] = field(default_factory=lambda: {"cache_ratio": 3.0})
 
 
-def _robust_z(value: float, baseline: np.ndarray) -> float:
+def _robust_z(value: float, baseline: np.ndarray, counts: np.ndarray,
+              variances: np.ndarray, n: float) -> float:
+    """Robust z of `value`, a mean of a [0, 1] metric over n turns, against the
+    baseline bins' means (with their turn counts and within-bin variances).
+
+    The spread is the larger of the baseline MAD and the sampling noise of a
+    mean over n turns. MAD alone collapses at a metric's limits: main-thread
+    Haiku share is 0 every day (MAD 0, so nothing could ever flag), and cache
+    ratios near 1.0 barely differ day to day (one miss scored z = -12.9).
+    Per-turn variance is pooled from the baseline bins plus one pseudo-turn of
+    Bernoulli variance at the smoothed mean, so a baseline that never varied
+    still gets a small nonzero floor."""
     if len(baseline) == 0:
         return 0.0
     med = np.median(baseline)
-    mad = np.median(np.abs(baseline - med))
-    if mad == 0:
-        # constant baseline: fall back to std; if that's 0 too, no signal.
-        sd = np.std(baseline)
-        if sd == 0:
-            return 0.0
-        return (value - med) / sd
-    return (value - med) / (1.4826 * mad)
+    mad_spread = 1.4826 * np.median(np.abs(baseline - med))
+    mean = (np.sum(baseline * counts) + 0.5) / (np.sum(counts) + 1)
+    weights = np.maximum(counts - 1, 0)
+    turn_var = (np.sum(weights * variances) + mean * (1 - mean)) / (np.sum(weights) + 1)
+    spread = max(mad_spread, math.sqrt(turn_var / max(n, 1)))
+    return (value - med) / spread
 
 
 def detect(metrics: pd.DataFrame, cfg: DetectorConfig) -> pd.DataFrame:
@@ -303,18 +419,21 @@ def detect(metrics: pd.DataFrame, cfg: DetectorConfig) -> pd.DataFrame:
     for name, (_, _, direction) in METRICS.items():
         zs: list[float] = []
         deviant: list[bool] = []
-        vals = m[name].to_numpy()
+        threshold = cfg.metric_z_thresholds.get(name, cfg.z_threshold)
+        vals = m[name].to_numpy(dtype=float)
+        counts = m[f"{name}__n"].to_numpy(dtype=float)
+        variances = m[f"{name}__var"].to_numpy(dtype=float)
         for i in range(len(vals)):
             lo = max(0, i - cfg.baseline_window)
-            baseline = vals[lo:i]
-            baseline = baseline[~np.isnan(baseline)]
+            keep = ~np.isnan(vals[lo:i])
+            baseline = vals[lo:i][keep]
             if len(baseline) < cfg.min_baseline or math.isnan(vals[i]):
                 zs.append(np.nan)
                 deviant.append(False)
                 continue
-            z = _robust_z(vals[i], baseline)
+            z = _robust_z(vals[i], baseline, counts[lo:i][keep], variances[lo:i][keep], counts[i])
             zs.append(z)
-            harmful = (z <= -cfg.z_threshold) if direction == "down" else (z >= cfg.z_threshold)
+            harmful = (z <= -threshold) if direction == "down" else (z >= threshold)
             deviant.append(bool(harmful))
         m[f"{name}__z"] = zs
         # sustained flag: True at bin i if this and the prior (consecutive-1)
@@ -339,6 +458,15 @@ def first_flag_bin(detected: pd.DataFrame, metric: str) -> Optional[int]:
     return int(idx[0]) if len(idx) else None
 
 
+def flag_onsets(detected: pd.DataFrame, metric: str) -> list[int]:
+    """Bins where a run of flagged bins starts."""
+    col = f"{metric}__flag"
+    if col not in detected.columns:
+        return []
+    flags = detected[col].to_numpy(dtype=bool)
+    return [i for i in range(len(flags)) if flags[i] and (i == 0 or not flags[i - 1])]
+
+
 # ---------------------------------------------------------------------------
 # Injection harness (Pass B) — plant a controlled regime change, measure floor
 # ---------------------------------------------------------------------------
@@ -354,30 +482,25 @@ def inject(df: pd.DataFrame, kind: str, magnitude: float, seed: int = 0) -> pd.D
     if kind == "effort":
         # Reduce thinking by `magnitude` fraction after the cut.
         d.loc[post, "thinking_tokens"] = d.loc[post, "thinking_tokens"] * (1 - magnitude)
-        d["thinking_fraction"] = d["thinking_tokens"] / d["output_tokens"].clip(lower=1)
 
     elif kind == "haiku":
         # Flip `magnitude` fraction of post-cut turns to a haiku model.
         post_idx = list(d.index[post])
         k = int(round(len(post_idx) * magnitude))
-        for i in rng.sample(post_idx, k) if k else []:
-            d.loc[i, "model"] = "claude-haiku-4-5"
-        d["is_haiku"] = d["model"].str.lower().str.contains("haiku").astype(float)
+        d.loc[rng.sample(post_idx, k), "model"] = "claude-haiku-4-5"
 
     elif kind == "cache":
-        # Depress cache-read ratio on post-cut, post-idle turns by moving mass
+        # Depress cache-read ratio on post-cut new-prompt turns by moving mass
         # from cache_read into cache_creation.
-        mask = post & d["post_idle"].fillna(False)
+        mask = post & d["prompt_within_ttl"]
         moved = d.loc[mask, "cache_read"] * magnitude
         d.loc[mask, "cache_read"] = d.loc[mask, "cache_read"] - moved
         d.loc[mask, "cache_creation"] = d.loc[mask, "cache_creation"] + moved
-        denom = (d["cache_read"] + d["cache_creation"]).clip(lower=1)
-        d["cache_read_ratio"] = d["cache_read"] / denom
 
     else:
         raise ValueError(f"unknown injection kind: {kind}")
 
-    return d
+    return add_ratios(d)
 
 
 KIND_TO_METRIC = {"effort": "effort_proxy", "haiku": "haiku_fraction", "cache": "cache_ratio"}
@@ -386,35 +509,47 @@ KIND_TO_METRIC = {"effort": "effort_proxy", "haiku": "haiku_fraction", "cache": 
 def sweep(df: pd.DataFrame, kind: str, cfg: DetectorConfig,
           grid: Optional[list[float]] = None, by: str = "day") -> pd.DataFrame:
     """Sweep injection magnitude; report detection + onset lag at each level.
-    The smallest detected magnitude is the detection floor."""
+    The smallest detected magnitude is the detection floor. Only flags the
+    planted change adds, from the bin where it begins on, count: real logs can
+    already hold an incident of their own (on the user's logs one flagged 11
+    days before the change, making every size look caught), and borderline days
+    just before the change can open the run that the change completes."""
     if grid is None:
         grid = [0.05, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70]
     metric = KIND_TO_METRIC[kind]
-    # cut bin index = first bin whose turns are mostly post-cut. Approx via the
-    # day that contains the global midpoint turn.
+    key = "day" if by == "day" else "session_id"
+    # The planted change starts at the global midpoint turn (see inject).
     base = df.sort_values("timestamp", kind="stable").reset_index(drop=True)
-    cut_day = base.loc[len(base) // 2, "day"]
+    cut_label = base.loc[len(base) // 2, key]
+
+    clean = detect(bin_metrics(df, by=by), cfg)
+    clean_flags = clean[f"{metric}__flag"].to_numpy(dtype=bool)
 
     results = []
+    cut_bin = None
     for mag in grid:
-        injected = inject(df, kind, mag, seed=7)
-        m = bin_metrics(injected, by=by)
-        det = detect(m, cfg)
-        flag_bin = first_flag_bin(det, metric)
-        cut_bin = int(det.index[det["bin"] == cut_day][0]) if (det["bin"] == cut_day).any() else None
-        lag = (flag_bin - cut_bin) if (flag_bin is not None and cut_bin is not None) else None
+        det = detect(bin_metrics(inject(df, kind, mag, seed=7), by=by), cfg)
+        matches = det.index[det["bin"] == cut_label]
+        cut_bin = int(matches[0]) if len(matches) else None
+        flags = det[f"{metric}__flag"].to_numpy(dtype=bool)
+        # first bin from the cut on flagged only because of the planted change
+        flag_bin = None if cut_bin is None else next(
+            (i for i in range(cut_bin, len(flags)) if flags[i] and not clean_flags[i]), None)
         results.append({
             "magnitude": mag,
             "detected": flag_bin is not None,
             "onset_bin": flag_bin,
             "cut_bin": cut_bin,
-            "lag_bins": lag,
+            "lag_bins": None if flag_bin is None else flag_bin - cut_bin,
         })
     res = pd.DataFrame(results)
     detected = res[res["detected"]]
     floor = detected["magnitude"].min() if not detected.empty else None
     res.attrs["detection_floor"] = floor
     res.attrs["metric"] = metric
+    res.attrs["cut_label"] = cut_label
+    res.attrs["cut_bin"] = cut_bin
+    res.attrs["clean_flag_onsets"] = [clean["bin"].iloc[i] for i in flag_onsets(clean, metric)]
     return res
 
 
@@ -458,27 +593,36 @@ class CusumState:
         return False
 
 
-def _robust_baseline(vals: np.ndarray, is_binary: bool) -> tuple[float, float]:
+# Smallest event rate a streaming baseline assumes, so a warmup that happens to
+# contain no events still gets the spread of a 1% yes/no event. On real logs
+# the first 150 new-prompt turns had no cache misses (spread 0.0014), so a
+# single later miss scored z = 692 and every miss alarmed.
+MIN_EVENT_RATE = 0.01
+
+
+def _baseline(vals: np.ndarray, is_binary: bool) -> tuple[float, float]:
     vals = vals[~np.isnan(vals)]
     if len(vals) == 0:
         return 0.0, 1.0
     if is_binary:
-        p = float(np.clip(vals.mean(), 0.01, 0.99))   # floor so sigma>0
+        p = float(np.clip(vals.mean(), MIN_EVENT_RATE, 1 - MIN_EVENT_RATE))
         return p, math.sqrt(p * (1 - p))
-    med = float(np.median(vals))
-    mad = float(np.median(np.abs(vals - med)))
-    sigma = 1.4826 * mad if mad > 0 else (float(np.std(vals)) or 1.0)
-    return med, sigma
+    # Mean and std, not median and MAD: per-turn values are bounded in [0, 1]
+    # and lumpy. Effort is 0 on about half of turns, so its median is 0 and a
+    # drop can never register; cache hits cluster at 1.0, so the MAD is ~0.001
+    # and every single miss would alarm.
+    return float(vals.mean()), max(float(vals.std()), math.sqrt(MIN_EVENT_RATE * (1 - MIN_EVENT_RATE)))
 
 
 def _stream_values(df: pd.DataFrame, kind: str) -> tuple[np.ndarray, np.ndarray]:
     """Return (values, original_indices) for the streaming metric, in global time
-    order. For 'cache' we stream only post-idle turns (the batch run showed the
-    all-turn median dilutes the signal to nothing)."""
+    order. For 'cache' we stream only main-thread turns that open with a new
+    prompt within the cache TTL, where caching regressions show (see
+    CACHE_TTL_SECONDS)."""
     col, _, _ = STREAM_METRICS[kind]
     d = df.sort_values("timestamp", kind="stable").reset_index(drop=True)
     if kind == "cache":
-        d = d[d["post_idle"].fillna(False)].reset_index()  # keeps original idx in 'index'
+        d = d[d["prompt_within_ttl"]].reset_index()  # keeps original idx in 'index'
         return d[col].to_numpy(float), d["index"].to_numpy()
     return d[col].to_numpy(float), np.arange(len(d))
 
@@ -489,7 +633,7 @@ def replay_cusum(values: np.ndarray, direction: str, is_binary: bool,
     First `warmup` samples set the baseline and produce no alarms."""
     if len(values) <= warmup + 1:
         return []
-    mu0, sigma = _robust_baseline(values[:warmup], is_binary)
+    mu0, sigma = _baseline(values[:warmup], is_binary)
     det = CusumState(mu0=mu0, sigma=sigma, k=k, h=h, direction=direction)
     alarms = []
     for i in range(warmup, len(values)):
@@ -503,34 +647,50 @@ def replay_cusum(values: np.ndarray, direction: str, is_binary: bool,
 def cusum_latency_curve(df: pd.DataFrame, kind: str, magnitude: float,
                         k: float = 0.5, warmup: int = 150,
                         h_grid: Optional[list[float]] = None,
-                        n_seeds: int = 25) -> pd.DataFrame:
+                        n_seeds: int = 25,
+                        incidents: Optional[list[tuple[str, str]]] = None) -> pd.DataFrame:
     """For each threshold h: ARL0 (false-alarm budget on the CLEAN stream) and
-    median detection latency in turns (on the INJECTED stream, over n_seeds)."""
+    median detection latency in turns (on the INJECTED stream, over n_seeds).
+    An alarm counts as catching the planted change only if it fires before the
+    clean stream's own first alarm after the cut: later ones would fire anyway
+    (on the user's logs a real incident was still alarming when it started).
+    Alarms on known incident days (START, END ISO dates, inclusive) are real, so
+    they don't count as false alarms, and those days don't count toward the
+    turns the false-alarm rate is measured over."""
     _, direction, is_binary = STREAM_METRICS[kind]
     if h_grid is None:
         h_grid = [3, 4, 5, 6, 8, 10, 12, 15, 20]
 
     # --- clean stream: false-alarm behaviour (deterministic) ---
-    clean_vals, _ = _stream_values(df, kind)
+    clean_vals, clean_idx = _stream_values(df, kind)
 
     # --- injected streams: detection latency, in ORIGINAL turn coordinates ---
     base = df.sort_values("timestamp", kind="stable").reset_index(drop=True)
     cut_turn = len(base) // 2
+    sample_days = base["day"].astype(str).to_numpy()[clean_idx]
+    in_incident = np.array([any(lo <= d <= hi for lo, hi in incidents or []) for d in sample_days], dtype=bool)
 
     rows = []
+    h_clean_alarm_after_cut = []
     for h in h_grid:
         fa = replay_cusum(clean_vals, direction, is_binary, k, h, warmup)
-        n_eval = max(1, len(clean_vals) - warmup)
-        arl0 = (n_eval / len(fa)) if fa else float("inf")
-        fa_per_1k = 1000.0 * len(fa) / n_eval
+        clean_after_cut = [clean_idx[a] for a in fa if clean_idx[a] >= cut_turn]
+        attributable_until = clean_after_cut[0] if clean_after_cut else float("inf")
+        if clean_after_cut:
+            h_clean_alarm_after_cut.append(h)
+        false_alarms = [a for a in fa if not in_incident[a]]
+        n_eval = max(1, int((~in_incident[warmup:]).sum()))
+        arl0 = (n_eval / len(false_alarms)) if false_alarms else float("inf")
+        fa_per_1k = 1000.0 * len(false_alarms) / n_eval
 
         latencies = []
         for s in range(n_seeds):
             inj = inject(df, kind, magnitude, seed=100 + s)
             vals, orig_idx = _stream_values(inj, kind)
             alarms = replay_cusum(vals, direction, is_binary, k, h, warmup)
-            # first alarm whose ORIGINAL turn index is at/after the cut
-            post = [orig_idx[a] for a in alarms if orig_idx[a] >= cut_turn]
+            # first alarm at/after the cut, in ORIGINAL turn coordinates, that
+            # fires before the clean stream alarms on its own
+            post = [orig_idx[a] for a in alarms if cut_turn <= orig_idx[a] < attributable_until]
             if post:
                 latencies.append(int(post[0] - cut_turn))
         det_rate = len(latencies) / n_seeds
@@ -538,7 +698,7 @@ def cusum_latency_curve(df: pd.DataFrame, kind: str, magnitude: float,
         p90_lat = float(np.percentile(latencies, 90)) if latencies else float("nan")
         rows.append({
             "h": h,
-            "false_alarms_clean": len(fa),
+            "false_alarms_clean": len(false_alarms),
             "ARL0_turns": round(arl0, 1) if math.isfinite(arl0) else np.inf,
             "false_alarms_per_1k_turns": round(fa_per_1k, 2),
             "detect_rate": round(det_rate, 2),
@@ -548,6 +708,7 @@ def cusum_latency_curve(df: pd.DataFrame, kind: str, magnitude: float,
     out = pd.DataFrame(rows)
     out.attrs["kind"] = kind
     out.attrs["magnitude"] = magnitude
+    out.attrs["h_clean_alarm_after_cut"] = h_clean_alarm_after_cut
     # turns/day for wall-clock translation
     if "day" in df.columns:
         per_day = df.groupby("day").size()
@@ -588,7 +749,11 @@ def plot_cusum_curve(curve: pd.DataFrame, out_dir: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 def generate_synthetic(out_dir: Path, days: int = 40, seed: int = 1) -> Path:
-    """Write realistic-ish JSONL mimicking ~/.claude/projects/<proj>/<sess>.jsonl.
+    """Write realistic-ish JSONL mimicking ~/.claude/projects/<proj>/<sess>.jsonl,
+    shaped like real logs: one line per content block sharing the response's
+    message.id and usage, thinking stored as a bare signature, user prompts and
+    tool results between main-thread responses, and subagents in
+    <sess>/subagents/agent-*.jsonl.
     Clean baseline only (no planted incident) — use --sweep to plant one."""
     rng = random.Random(seed)
     proj = out_dir / "synthetic-project"
@@ -597,72 +762,126 @@ def generate_synthetic(out_dir: Path, days: int = 40, seed: int = 1) -> Path:
 
     for d in range(days):
         day0 = start + timedelta(days=d)
-        n_sessions = rng.randint(1, 3)
+        n_sessions = rng.randint(3, 8)
         for s in range(n_sessions):
             sid = f"sess-{d:02d}-{s}"
-            fp = proj / f"{sid}.jsonl"
             t = day0 + timedelta(hours=rng.randint(8, 20), minutes=rng.randint(0, 59))
-            n_turns = rng.randint(8, 40)
+            n_turns = rng.randint(20, 60)
             sidechain_left = 0
-            with fp.open("w", encoding="utf-8") as fh:
-                for turn in range(n_turns):
-                    # occasional idle gap to exercise the cache signal
-                    if rng.random() < 0.15:
-                        t += timedelta(minutes=rng.randint(70, 180))
+            agent = 0
+            turn_open = False          # main thread is mid tool loop
+            last_tool_use = ""
+            transcripts: dict[Path, list[dict]] = {}
+            last_seen: dict[Path, datetime] = {}
+            for turn in range(n_turns):
+                # Subagent bursts: mirror reality — Haiku concentrates in
+                # dense sidechain runs, main thread stays ~Haiku-free.
+                if sidechain_left == 0 and rng.random() < 0.03:
+                    sidechain_left = rng.randint(4, 40)
+                    agent += 1
+                    # about 1 in 10 subagents runs on Haiku (6% of subagent
+                    # transcripts in real logs)
+                    agent_model = "claude-haiku-4-5" if rng.random() < 0.10 else "claude-sonnet-4-6"
+                sidechain = sidechain_left > 0
+                if sidechain:
+                    sidechain_left -= 1
+                    fp = proj / sid / "subagents" / f"agent-{agent}.jsonl"
+                    t += timedelta(seconds=rng.randint(5, 60))
+                    model = agent_model
+                    visible = rng.randint(2, 40)     # cheap, mechanical
+                    ttl = SUBAGENT_CACHE_TTL_SECONDS
+                    new_prompt = False
+                else:
+                    fp = proj / f"{sid}.jsonl"
+                    new_prompt = not turn_open
+                    if new_prompt:
+                        # The user types the next prompt after a pause: mostly
+                        # quick, sometimes a break a 1 h cache survives,
+                        # occasionally one it doesn't.
+                        r = rng.random()
+                        if r < 0.05:
+                            t += timedelta(minutes=rng.randint(70, 180))
+                        elif r < 0.15:
+                            t += timedelta(minutes=rng.randint(6, 55))
+                        else:
+                            t += timedelta(seconds=rng.randint(20, 240))
+                        user_content = "next request"
                     else:
-                        t += timedelta(seconds=rng.randint(20, 400))
+                        t += timedelta(seconds=rng.randint(5, 90))   # tool result
+                        user_content = [{"type": "tool_result", "tool_use_id": last_tool_use, "content": "ok"}]
+                    transcripts.setdefault(fp, []).append({
+                        "type": "user",
+                        "timestamp": t.isoformat().replace("+00:00", "Z"),
+                        "sessionId": sid,
+                        "isSidechain": False,
+                        "message": {"role": "user", "content": user_content},
+                    })
+                    model = "claude-sonnet-4-6" if rng.random() < 0.82 else "claude-opus-4-8"
+                    visible = rng.randint(40, 400)
+                    ttl = CACHE_TTL_SECONDS
+                # About half of responses think, subagents as often as the main
+                # thread (54% vs 56% in real logs); healthy effort when they do.
+                think = int(visible * rng.uniform(0.5, 1.5)) if rng.random() < 0.55 else 0
 
-                    # Subagent bursts: mirror reality — Haiku concentrates in
-                    # dense sidechain runs, main thread stays ~Haiku-free.
-                    if sidechain_left == 0 and rng.random() < 0.03:
-                        sidechain_left = rng.randint(4, 40)
-                    sidechain = sidechain_left > 0
-                    if sidechain:
-                        sidechain_left -= 1
-                        model = "claude-haiku-4-5"       # subagent → Haiku
-                        out_tok = rng.randint(2, 40)     # cheap, mechanical
-                        think = 0
-                    else:
-                        model = "claude-sonnet-4-6" if rng.random() < 0.82 else "claude-opus-4-8"
-                        out_tok = rng.randint(300, 2500)
-                        think = int(out_tok * rng.uniform(0.25, 0.6))  # healthy effort
+                # cache: cold at the start of a transcript or past its TTL
+                gap = (t - last_seen[fp]).total_seconds() if fp in last_seen else None
+                last_seen[fp] = t
+                # rare misses otherwise, likelier when a prompt opens a turn
+                if gap is None or gap > ttl or rng.random() < (0.02 if new_prompt else 0.002):
+                    cache_read = rng.randint(0, 3000)
+                    cache_creation = rng.randint(8000, 30000)
+                else:
+                    cache_read = rng.randint(15000, 60000)
+                    cache_creation = rng.randint(0, 4000)
 
-                    # cache: first turn of a session, or post-idle, misses more
-                    post_idle = turn > 0 and rng.random() < 0.15
-                    if turn == 0 or post_idle:
-                        cache_read = rng.randint(0, 3000)
-                        cache_creation = rng.randint(8000, 30000)
-                    else:
-                        cache_read = rng.randint(15000, 60000)
-                        cache_creation = rng.randint(0, 4000)
-                    content = [
-                        {"type": "thinking", "thinking": "x" * (think * 4)},
-                        {"type": "text", "text": "ok"},
-                    ]
-                    if rng.random() < 0.3:
-                        content.append({
-                            "type": "tool_use",
-                            "name": rng.choice(["mcp__github__search", "mcp__gmail__create_draft"]),
-                            "input": {},
-                        })
-                    rec = {
+                # Thinking is stored as a signature without text, as in real logs.
+                blocks = []
+                if think:
+                    blocks.append({"type": "thinking", "thinking": "",
+                                   "signature": "s" * int(think / TOKENS_PER_SIGNATURE_CHAR)})
+                blocks.append({"type": "text", "text": "x" * (visible * 4)})
+                # Main-thread responses call a tool, so the loop continues, about
+                # two times in three; subagent responses less often.
+                calls_tool = rng.random() < (0.3 if sidechain else 0.65)
+                if calls_tool:
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": f"toolu_{sid}_{turn}",
+                        "name": rng.choice(["mcp__github__search", "mcp__gmail__create_draft"]),
+                        "input": {},
+                    })
+                if not sidechain:
+                    turn_open, last_tool_use = calls_tool, f"toolu_{sid}_{turn}"
+                usage = {
+                    "input_tokens": rng.randint(2000, 20000),
+                    "cache_creation_input_tokens": cache_creation,
+                    "cache_read_input_tokens": cache_read,
+                }
+                # One line per content block, usage repeated on each; the output
+                # count is only final on the last line.
+                for i, block in enumerate(blocks):
+                    last = i == len(blocks) - 1
+                    transcripts.setdefault(fp, []).append({
                         "type": "assistant",
                         "timestamp": t.isoformat().replace("+00:00", "Z"),
                         "sessionId": sid,
                         "isSidechain": sidechain,
+                        "requestId": f"req_{sid}_{turn}",
                         "message": {
+                            "id": f"msg_{sid}_{turn}",
                             "role": "assistant",
                             "model": model,
-                            "content": content,
-                            "usage": {
-                                "input_tokens": rng.randint(2000, 20000),
-                                "output_tokens": out_tok,
-                                "cache_creation_input_tokens": cache_creation,
-                                "cache_read_input_tokens": cache_read,
-                            },
+                            "content": [block],
+                            "stop_reason": ("tool_use" if block["type"] == "tool_use"
+                                            else "end_turn") if last else None,
+                            "usage": {**usage, "output_tokens":
+                                      think + visible if last else rng.randint(1, 30)},
                         },
-                    }
-                    fh.write(json.dumps(rec) + "\n")
+                    })
+            for fp, recs in transcripts.items():
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                with fp.open("w", encoding="utf-8") as fh:
+                    fh.writelines(json.dumps(rec) + "\n" for rec in recs)
     return proj
 
 
@@ -747,6 +966,14 @@ def schema_peek(source: Path) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+def date_range(text: str) -> tuple[str, str]:
+    """Parse START..END (UTC dates) into ISO date strings, for --incident."""
+    start, sep, end = text.partition("..")
+    if not sep:
+        raise argparse.ArgumentTypeError("expected START..END, e.g. 2026-08-16..2026-09-04")
+    return date.fromisoformat(start).isoformat(), date.fromisoformat(end).isoformat()
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Claude Code drift-detection validation harness")
     ap.add_argument("--source", type=str, default=str(Path.home() / ".claude" / "projects"),
@@ -754,6 +981,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--synthetic", action="store_true",
                     help="generate synthetic logs and use them instead of --source")
     ap.add_argument("--synthetic-days", type=int, default=40)
+    ap.add_argument("--since", type=date.fromisoformat, default=None,
+                    help="only analyze days on or after this UTC date (YYYY-MM-DD)")
+    ap.add_argument("--until", type=date.fromisoformat, default=None,
+                    help="only analyze days on or before this UTC date (YYYY-MM-DD)")
+    ap.add_argument("--incident", type=date_range, action="append", default=[],
+                    help="a known real incident, START..END (UTC dates, inclusive); --stream "
+                         "doesn't count its alarms as false alarms (repeatable)")
     ap.add_argument("--out", type=str, default="./ccdrift_out")
     ap.add_argument("--bin", choices=["day", "session"], default="day")
     ap.add_argument("--sweep", choices=["effort", "haiku", "cache"], default=None,
@@ -770,6 +1004,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="drop subagent/sidechain turns before analysis — the fix for the Haiku-burst confound (requires isSidechain in logs)")
     ap.add_argument("--baseline-window", type=int, default=14)
     ap.add_argument("--z-threshold", type=float, default=3.5)
+    ap.add_argument("--cache-z-threshold", type=float, default=3.0,
+                    help="z threshold for the cache metric; the other metrics use --z-threshold")
     ap.add_argument("--consecutive", type=int, default=3)
     ap.add_argument("--schema-peek", action="store_true",
                     help="print the first assistant record + resolved fields, then exit")
@@ -779,7 +1015,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     cfg = DetectorConfig(baseline_window=args.baseline_window,
                          z_threshold=args.z_threshold,
-                         consecutive=args.consecutive)
+                         consecutive=args.consecutive,
+                         metric_z_thresholds={"cache_ratio": args.cache_z_threshold})
 
     if args.synthetic:
         tmp = Path(tempfile.mkdtemp(prefix="ccdrift_syn_"))
@@ -799,8 +1036,21 @@ def main(argv: Optional[list[str]] = None) -> int:
               "log format, or --synthetic to smoke-test.", file=sys.stderr)
         return 2
 
+    if args.since or args.until:
+        days = df["day"].astype(str)
+        keep = pd.Series(True, index=df.index)
+        if args.since:
+            keep &= days >= args.since.isoformat()
+        if args.until:
+            keep &= days <= args.until.isoformat()
+        df = df[keep].reset_index(drop=True)
+        print(f"[filter] days {args.since or 'start'} .. {args.until or 'end'}: {len(df)} responses remain")
+        if df.empty:
+            print("No responses in that date range.", file=sys.stderr)
+            return 2
+
     df.to_csv(out_dir / "features.csv", index=False)
-    print(f"[parse] {len(df)} assistant turns -> {out_dir/'features.csv'}")
+    print(f"[parse] {len(df)} responses -> {out_dir/'features.csv'}")
 
     if args.main_thread_only:
         before = len(df)
@@ -812,7 +1062,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.stream:
         curve = cusum_latency_curve(df, args.stream, magnitude=args.stream_magnitude,
-                                    k=args.cusum_k, warmup=args.warmup)
+                                    k=args.cusum_k, warmup=args.warmup, incidents=args.incident)
         curve.to_csv(out_dir / f"cusum_{args.stream}.csv", index=False)
         p = plot_cusum_curve(curve, out_dir)
         tpd = curve.attrs.get("turns_per_day")
@@ -820,6 +1070,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         if tpd:
             print(f"(your data: ~{tpd:.0f} turns/day)")
         print(curve.to_string(index=False))
+        if args.incident:
+            print("(false alarms leave out known incident days: "
+                  f"{', '.join(f'{lo}..{hi}' for lo, hi in args.incident)})")
+        if curve.attrs["h_clean_alarm_after_cut"]:
+            print("Note: without a planted change the stream already alarms after the change starts, at h = "
+                  f"{', '.join(f'{h:g}' for h in curve.attrs['h_clean_alarm_after_cut'])}. Alarms from then on "
+                  "don't count as catches; use --since/--until to leave that stretch out.")
         # headline: strictest h that still detects in >=90% of runs
         ok = curve[curve["detect_rate"] >= 0.9]
         print()
@@ -844,8 +1101,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         p = plot_sweep(res, out_dir)
         print(f"\n=== SWEEP: {args.sweep} ({KIND_TO_METRIC[args.sweep]}) ===")
         print(res.to_string(index=False))
+        print(f"(planted change starts in bin {res.attrs['cut_label']}; only flags it adds from there on count)")
         floor = res.attrs.get("detection_floor")
         print(f"\nDetection floor: {floor if floor is not None else 'NOT DETECTED at any level'}")
+        if res.attrs["clean_flag_onsets"]:
+            print("Note: without a planted change your logs already flag this metric, starting "
+                  f"{', '.join(map(str, res.attrs['clean_flag_onsets']))}. That lowers sensitivity "
+                  "around it; use --since/--until to sweep a window without it.")
+        if res.attrs["cut_bin"] is not None and res.attrs["cut_bin"] < cfg.min_baseline:
+            print(f"Note: only {res.attrs['cut_bin']} bins come before the planted change, fewer than the "
+                  f"{cfg.min_baseline} the detector needs as a baseline; widen the date window.")
         print(f"[plot] {p}")
         print("\nPass/fail reminder: floor <= 0.20 for haiku & cache is the bar; "
               "effort proxy may be coarser.")
