@@ -109,3 +109,4 @@ def main(argv: Optional[list[str]] = None) -> int:
         return run_report(_source(args), _state(args), days=args.days)
     if args.command == "schedule":
         return _schedule(args)
+    raise AssertionError(f"unhandled command: {args.command}")
