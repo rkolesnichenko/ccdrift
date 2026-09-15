@@ -26,6 +26,9 @@ path = "src/ccdrift/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/ccdrift"]
 
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "tests", "lab", "docs/findings.md", "README.md", "LICENSE", "pyproject.toml"]
+
 [tool.pytest.ini_options]
 pythonpath = [".", "src"]
 testpaths = ["tests", "lab"]
