@@ -506,3 +506,69 @@ def test_check_mode_writes_no_output_files(tmp_path):
     ccdrift.main(["--check", "--source", str(tmp_path / "logs"), "--out", str(tmp_path / "out"),
                   "--state", str(tmp_path / "state.json")])
     assert not (tmp_path / "out").exists()
+
+
+def busy_days(path, days, per_day, prompts=True, cache_read=0, cache_creation=0):
+    """One main-thread session a day from Sep 1: `per_day` responses a minute
+    apart, each after a prompt unless prompts=False."""
+    for d in range(days):
+        records = []
+        for k in range(per_day):
+            ts = at(d * DAY + 60 * k)
+            records += [prompt(ts, sid=f"s{d}")] if prompts else []
+            records.append(line(f"m{d}-{k}", text(40), ts=ts, sid=f"s{d}",
+                                cache_read=cache_read, cache_creation=cache_creation))
+        write(path / f"s{d}.jsonl", records)
+
+
+@pytest.fixture
+def sent(monkeypatch):
+    titles = []
+    monkeypatch.setattr(ccdrift, "notify", lambda title, message: titles.append(title))
+    return titles
+
+
+def check_logs(tmp_path, today=date(2026, 9, 4)):
+    return ccdrift.run_check(tmp_path / "logs", tmp_path / "state.json", notify_user=True, today=today)
+
+
+def test_check_alerts_when_busy_days_show_no_cache_usage(tmp_path, sent):
+    # Every Claude Code response reads or writes the prompt cache, so busy days
+    # without cache token counts mean the parser no longer finds them.
+    busy_days(tmp_path / "logs", days=3, per_day=60)
+    check_logs(tmp_path)
+    assert sent == ["ccdrift can't compute the cache metric"]
+
+
+def test_check_alerts_when_busy_days_show_no_prompts(tmp_path, sent):
+    busy_days(tmp_path / "logs", days=3, per_day=60, prompts=False, cache_read=900, cache_creation=100)
+    check_logs(tmp_path)
+    assert sent == ["ccdrift can't compute the cache metric"]
+
+
+def test_check_stays_quiet_when_busy_days_have_cache_values(tmp_path, sent):
+    busy_days(tmp_path / "logs", days=3, per_day=60, cache_read=900, cache_creation=100)
+    check_logs(tmp_path)
+    assert sent == []
+
+
+def test_check_alerts_about_unusable_cache_values_once(tmp_path, sent):
+    busy_days(tmp_path / "logs", days=4, per_day=60)
+    check_logs(tmp_path, today=date(2026, 9, 4))
+    check_logs(tmp_path, today=date(2026, 9, 5))
+    assert sent == ["ccdrift can't compute the cache metric"]
+
+
+def test_check_ignores_quiet_days_without_cache_values(tmp_path, sent):
+    # A quick question a day can leave no new-prompt turn to measure. The quietest
+    # of 29 real days still had 81 main-thread responses and 3 cache values.
+    busy_days(tmp_path / "logs", days=3, per_day=5)
+    check_logs(tmp_path)
+    assert sent == []
+
+
+def test_check_alerts_when_it_cannot_run(tmp_path, sent):
+    # A broken check would otherwise look like a quiet week.
+    (tmp_path / "logs").mkdir()
+    assert check_logs(tmp_path) != 0
+    assert sent == ["ccdrift check failed"]

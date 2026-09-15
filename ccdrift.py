@@ -44,7 +44,8 @@ Usage:
   python3 ccdrift.py --source ~/.claude/projects --out ./out
 
   # Once a day, report cache-ratio or main-thread Haiku flags that are new since
-  # the last check, with a macOS notification (see --state for where it keeps track):
+  # the last check, and days the cache metric can't be computed on (a sign the log
+  # format changed), with a macOS notification. It also alerts when it fails:
   python3 ccdrift.py --check --notify
 
   # Find the detection floor for a silent Haiku-delegation regime change:
@@ -81,6 +82,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import traceback
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -523,7 +525,7 @@ def check(df: pd.DataFrame, today: date, state_path: Path,
     detected = detect(bin_metrics(turns), cfg or DetectorConfig())
     bins = detected["bin"].astype(str).tolist()
     since = (today - timedelta(days=recent_days)).isoformat()
-    state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    state = _load_state(state_path)
     reported = state.setdefault("reported", {})
     new = []
     for metric, label in CHECK_METRICS.items():
@@ -539,8 +541,7 @@ def check(df: pd.DataFrame, today: date, state_path: Path,
                         "z": detected[f"{metric}__z"].iloc[onset:end + 1].round(2).tolist()})
             reported.setdefault(metric, []).append(bins[onset])
     if new:
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        state_path.write_text(json.dumps(state, indent=1) + "\n")
+        _save_state(state_path, state)
     return new
 
 
@@ -550,6 +551,91 @@ def notify(title: str, message: str) -> None:
         script = (f"display notification {json.dumps(message, ensure_ascii=False)} "
                   f"with title {json.dumps(title, ensure_ascii=False)}")
         subprocess.run(["osascript", "-e", script], check=False)
+
+
+def _load_state(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def _save_state(path: Path, state: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=1) + "\n")
+
+
+# A stretch of active days without usable cache values means the cache metric
+# can't be computed, most likely because Claude Code's log format changed: it
+# goes blank when prompts aren't recognised, and reads as all misses when cache
+# usage isn't read.
+CHECK_BLANK_DAYS = 3
+CHECK_ACTIVE_RESPONSES = 50  # main-thread responses; the quietest of 29 real days had 81
+
+
+def blank_cache_stretch(df: pd.DataFrame, today: date, state_path: Path,
+                        days: int = CHECK_BLANK_DAYS,
+                        active: int = CHECK_ACTIVE_RESPONSES) -> Optional[dict[str, Any]]:
+    """The latest run of complete active days (at least `active` main-thread
+    responses) on which no new-prompt turn has cache token counts, once it is
+    `days` long and wasn't reported before. Every Claude Code response reads or
+    writes the prompt cache, so such days mean the parser has lost track of it."""
+    turns = df[(df["day"].astype(str) < today.isoformat()) & df["main_thread"].astype(bool)]
+    usable = turns["prompt_within_ttl"].astype(bool) & ((turns["cache_read"] + turns["cache_creation"]) > 0)
+    per_day = pd.DataFrame({"responses": turns.groupby("day").size(),
+                            "usable": usable.groupby(turns["day"]).sum()})
+    per_day = per_day[per_day["responses"] >= active]
+    blank = (per_day["usable"] == 0).to_numpy()
+    if len(blank) < days or not blank[-days:].all():
+        return None
+    start = len(blank) - days
+    while start > 0 and blank[start - 1]:
+        start -= 1
+    stretch = per_day.iloc[start:]
+    first = str(stretch.index[0])
+    state = _load_state(state_path)
+    if first in state.get("blank_cache", []):
+        return None
+    state.setdefault("blank_cache", []).append(first)
+    _save_state(state_path, state)
+    prompts = int(turns.loc[turns["day"].isin(stretch.index), "new_prompt"].sum())
+    return {"first": first, "days": len(stretch), "responses": int(stretch["responses"].sum()),
+            "prompts": prompts}
+
+
+def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = None,
+              notify_user: bool = False, today: Optional[date] = None) -> int:
+    """Run the daily check and print a line per result. With notify_user, also
+    show a notification for each new flag, for days the cache metric can't be
+    computed on, and when the check fails: a broken check otherwise looks like a
+    quiet week."""
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    def alert(title: str, message: str) -> None:
+        print(f"[check {stamp}] {title}: {message}")
+        if notify_user:
+            notify(title, message)
+
+    try:
+        df = parse_source(source)
+        if df.empty:
+            raise RuntimeError(f"no Claude Code responses found in {source}")
+        today = today or datetime.now(timezone.utc).date()
+        flags = check(df, today, state_path, cfg)
+        blank = blank_cache_stretch(df, today, state_path)
+    except Exception as exc:
+        traceback.print_exc()
+        alert("ccdrift check failed", f"{type(exc).__name__}: {exc}")
+        return 1
+    for f in flags:
+        alert("ccdrift flag", f"{f['label']} flagged from {f['onset']}")
+        z = ", ".join(f"{v:+.1f}" for v in f["z"])
+        print(f"    days {', '.join(f['days'])}; z = {z}")
+    if blank:
+        alert("ccdrift can't compute the cache metric",
+              f"no usable cache values on {blank['days']} active days from {blank['first']} "
+              f"({blank['responses']} responses, {blank['prompts']} prompts recognised). "
+              "Claude Code's log format may have changed; try --schema-peek.")
+    if not flags and not blank:
+        print(f"[check {stamp}] no new flags")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -1135,7 +1221,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="report flags on the cache ratio and main-thread Haiku that start in the last "
                          f"{CHECK_RECENT_DAYS} complete days and weren't reported before; writes no output files")
     ap.add_argument("--notify", action="store_true",
-                    help="with --check, also show a macOS notification for each new flag")
+                    help="with --check, also show a macOS notification for each new flag, for days the "
+                         "cache metric can't be computed on, and when the check fails")
     ap.add_argument("--state", type=str, default=str(CHECK_STATE),
                     help="file where --check remembers the flags it has reported")
     args = ap.parse_args(argv)
@@ -1158,8 +1245,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         schema_peek(source)
         return 0
 
+    if args.check:
+        return run_check(source, Path(args.state).expanduser(), cfg, notify_user=args.notify)
+
     print(f"[parse] reading {source}")
-    df = parse_source(source, verbose=not args.check)
+    df = parse_source(source, verbose=True)
     if df.empty:
         print("No assistant turns parsed. Run with --schema-peek to inspect your "
               "log format, or --synthetic to smoke-test.", file=sys.stderr)
@@ -1177,19 +1267,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         if df.empty:
             print("No responses in that date range.", file=sys.stderr)
             return 2
-
-    if args.check:
-        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        flags = check(df, datetime.now(timezone.utc).date(), Path(args.state).expanduser(), cfg)
-        if not flags:
-            print(f"[check {stamp}] no new flags")
-        for f in flags:
-            z = ", ".join(f"{v:+.1f}" for v in f["z"])
-            print(f"[check {stamp}] NEW FLAG {f['metric']}: {f['label']}, "
-                  f"{f['days'][0]} .. {f['days'][-1]} (z = {z})")
-            if args.notify:
-                notify("ccdrift", f"{f['label']} flagged from {f['onset']}")
-        return 0
 
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_dir / "features.csv", index=False)
