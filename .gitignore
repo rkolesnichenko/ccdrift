@@ -5,3 +5,7 @@ __pycache__/
 .pytest_cache/
 ccdrift_out/
 out/
+build/
+dist/
+.venv/
+.remember/

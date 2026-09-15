@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ccdrift"
+dynamic = ["version"]
+description = "A daily check for silent changes in Claude Code's prompt caching and Haiku use, read from your local session logs"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Roman Kolesnichenko" }]
+dependencies = ["pandas>=2.2", "numpy"]
+
+[project.scripts]
+ccdrift = "ccdrift.cli:main"
+
+[dependency-groups]
+dev = ["pytest"]
+lab = ["matplotlib"]
+
+[tool.hatch.version]
+path = "src/ccdrift/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ccdrift"]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
+testpaths = ["tests", "lab"]
