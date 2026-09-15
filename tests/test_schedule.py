@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 from ccdrift.cli import main
-from ccdrift.schedule import (Launchd, ScheduleError, Systemd, choose_backend, install, launchd_plist,
-                              make_job, parse_at, systemd_units)
+from ccdrift.schedule import (Cron, Launchd, ScheduleError, Systemd, choose_backend, cron_line, install,
+                              launchd_plist, make_job, parse_at, systemd_units)
 
 
 class FakeRun:
@@ -276,3 +276,86 @@ def test_systemd_status_shows_the_last_run_and_log_line(tmp_path):
         "last exit code: 0",
         "last log line: [check 2026-09-16 09:00] no new flags",
     ]
+
+
+class FakeCrontab:
+    """Stands in for `crontab -l` and `crontab -`, keeping the table in memory."""
+
+    def __init__(self, table=None):
+        self.table = table  # None: the user has no crontab yet
+
+    def __call__(self, argv, input=None):
+        if argv == ["crontab", "-l"]:
+            if self.table is None:
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="crontab: no crontab for u\n")
+            return subprocess.CompletedProcess(argv, 0, stdout=self.table, stderr="")
+        if argv == ["crontab", "-"]:
+            self.table = input
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected command {argv}")
+
+
+def test_cron_line_quotes_paths_and_ends_with_the_marker():
+    job = make_job("06:05", notify=True, python="/opt/my env/bin/python",
+                   environ={"CCDRIFT_HOME": "/home/u/.ccdrift"})
+    assert cron_line(job) == (
+        "5 6 * * * '/opt/my env/bin/python' -m ccdrift check --notify --state /home/u/.ccdrift/check-state.json"
+        " >> /home/u/.ccdrift/check.log 2>&1 # ccdrift check"
+    )
+
+
+def test_cron_install_keeps_other_lines_and_replaces_its_own(tmp_path):
+    table = FakeCrontab("0 1 * * * backup.sh\n0 9 * * * old-command >> old.log 2>&1 # ccdrift check\n")
+    started = []
+    job = job_for(tmp_path)
+    Cron(run=table, spawn=lambda argv, log: started.append(argv)).install(job)
+    assert table.table == "0 1 * * * backup.sh\n" + cron_line(job) + "\n"
+    assert started == [job.argv()]
+
+
+def test_cron_install_starts_a_table_when_there_is_none(tmp_path):
+    table = FakeCrontab(None)
+    job = job_for(tmp_path)
+    Cron(run=table, spawn=lambda argv, log: None).install(job)
+    assert table.table == cron_line(job) + "\n"
+
+
+def test_cron_remove_deletes_only_its_line():
+    table = FakeCrontab("0 1 * * * backup.sh\n0 9 * * * x >> y 2>&1 # ccdrift check\n")
+    assert Cron(run=table).remove() is True
+    assert table.table == "0 1 * * * backup.sh\n"
+
+
+def test_cron_remove_says_so_when_nothing_is_installed():
+    table = FakeCrontab("0 1 * * * backup.sh\n")
+    assert Cron(run=table).remove() is False
+    assert table.table == "0 1 * * * backup.sh\n"
+
+
+def test_cron_status_shows_the_time_and_the_last_log_line(tmp_path):
+    job = job_for(tmp_path)
+    table = FakeCrontab(cron_line(job) + "\n")
+    job.log.parent.mkdir(parents=True)
+    job.log.write_text("[check 2026-09-16 09:00] no new flags\n")
+    assert Cron(run=table).status() == [
+        "installed: crontab line, daily at 09:00",
+        "cron keeps no run history; the log shows each run",
+        "last log line: [check 2026-09-16 09:00] no new flags",
+    ]
+
+
+def test_linux_with_a_systemd_user_session_gets_systemd():
+    backend = choose_backend(platform="linux", run=FakeRun(), which=lambda name: f"/usr/bin/{name}")
+    assert isinstance(backend, Systemd)
+
+
+def test_linux_without_a_systemd_user_session_gets_cron():
+    run = FakeRun({("systemctl", "--user", "show-environment"): (1, "")})
+    backend = choose_backend(platform="linux", run=run, which=lambda name: f"/usr/bin/{name}")
+    assert isinstance(backend, Cron)
+
+
+def test_linux_without_systemd_or_cron_gets_no_scheduler():
+    # Passes before this task's change too; it guards against a fallback that
+    # picks a scheduler the system doesn't have.
+    assert choose_backend(platform="linux", run=FakeRun(), which=lambda name: None) is None

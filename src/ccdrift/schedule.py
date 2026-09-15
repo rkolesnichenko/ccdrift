@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import plistlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,7 @@ from ccdrift.notify import notify as send_notification
 
 LAUNCHD_LABEL = "io.github.rkolesnichenko.ccdrift"
 SYSTEMD_UNIT = "ccdrift-check"
+CRON_MARKER = "# ccdrift check"
 
 Run = Callable[..., subprocess.CompletedProcess]
 
@@ -259,6 +261,83 @@ class Systemd:
         return lines
 
 
+def cron_line(job: Job) -> str:
+    """A crontab line that runs `job` daily, appending its output to the log."""
+    command = " ".join(shlex.quote(arg) for arg in job.argv()).replace("%", "\\%")
+    log = shlex.quote(str(job.log)).replace("%", "\\%")
+    return f"{job.minute} {job.hour} * * * {command} >> {log} 2>&1 {CRON_MARKER}"
+
+
+def _spawn(argv: list[str], log: Path) -> None:
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a") as out:
+        subprocess.Popen(argv, stdout=out, stderr=out, stdin=subprocess.DEVNULL, start_new_session=True)
+
+
+class Cron:
+    """A marked line in the user's crontab, for Linux without a systemd user session."""
+
+    name = "cron"
+
+    def __init__(self, run: Run = run_command, spawn: Callable[[list[str], Path], None] = _spawn):
+        self.run = run
+        self.spawn = spawn
+
+    def install_notes(self, job: Job) -> list[str]:
+        notes = ["Cron doesn't catch up on runs missed while the machine was off."]
+        if job.notify:
+            notes.append("Jobs started by cron usually can't show notifications, so alerts will mostly "
+                         "reach only the log.")
+        return notes
+
+    @staticmethod
+    def _ours(line: str) -> bool:
+        return line.rstrip().endswith(CRON_MARKER)
+
+    def _lines(self) -> list[str]:
+        argv = ["crontab", "-l"]
+        listed = self.run(argv)
+        if listed.returncode == 0:
+            return (listed.stdout or "").splitlines()
+        if "no crontab" in (listed.stderr or "").lower():
+            return []
+        raise ScheduleError(_failure(argv, listed))
+
+    def _write(self, lines: list[str]) -> None:
+        _checked(self.run, ["crontab", "-"], input="".join(line + "\n" for line in lines))
+
+    def install(self, job: Job) -> None:
+        """Replace ccdrift's crontab line, keeping every other line. Cron can't start a
+        run on demand, so the job's command also runs once now, in the background."""
+        kept = [line for line in self._lines() if not self._ours(line)]
+        self._write(kept + [cron_line(job)])
+        try:
+            self.spawn(job.argv(), job.log)
+        except OSError as exc:
+            self._write(kept)
+            raise ScheduleError(f"couldn't start a first run: {exc}") from exc
+
+    def remove(self) -> bool:
+        lines = self._lines()
+        kept = [line for line in lines if not self._ours(line)]
+        if len(kept) == len(lines):
+            return False
+        self._write(kept)
+        return True
+
+    def status(self) -> list[str]:
+        ours = [line for line in self._lines() if self._ours(line)]
+        if not ours:
+            return ["not installed"]
+        minute, hour = ours[0].split()[:2]
+        lines = [f"installed: crontab line, daily at {int(hour):02d}:{int(minute):02d}",
+                 "cron keeps no run history; the log shows each run"]
+        log = re.search(r">> (.+) 2>&1 " + re.escape(CRON_MARKER), ours[0])
+        if log:
+            lines.append(last_log_line(Path(shlex.split(log.group(1).replace("\\%", "%"))[0])))
+        return lines
+
+
 def install(job: Job, backend, send: Callable[[str, str], None] = send_notification) -> None:
     """Create the log folder, install the job (the backend also starts a first run),
     and send a test notification unless the job runs without notifications."""
@@ -271,7 +350,13 @@ def install(job: Job, backend, send: Callable[[str, str], None] = send_notificat
 
 def choose_backend(platform: str = sys.platform, run: Run = run_command,
                    which: Callable[[str], Optional[str]] = shutil.which):
-    """The scheduler ccdrift can set up on this system, or None."""
+    """The scheduler ccdrift can set up on this system, or None: launchd on macOS; on
+    Linux a systemd user timer when a user session answers, otherwise cron."""
     if platform == "darwin":
         return Launchd(run=run)
+    if platform.startswith("linux"):
+        if which("systemctl") and run(["systemctl", "--user", "show-environment"]).returncode == 0:
+            return Systemd(run=run)
+        if which("crontab"):
+            return Cron(run=run)
     return None
