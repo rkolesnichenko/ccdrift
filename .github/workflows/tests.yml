@@ -1,0 +1,33 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Tests
+        run: uv run --group dev --group lab pytest -q
+      - name: Install the command
+        if: runner.os == 'Linux'
+        run: |
+          uv tool install .
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install, check and remove a real schedule
+        if: runner.os == 'Linux'
+        run: |
+          ccdrift schedule install --no-notify
+          ccdrift schedule status
+          ccdrift schedule remove
+          ccdrift schedule status | grep -qx "not installed"

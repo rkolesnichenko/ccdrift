@@ -7,3 +7,5 @@ From one developer's Claude Code logs, Aug 6 - Sep 15, 2026. Aggregate numbers o
 - **Effort: not detectable from one user's logs.** Over the 12 clean days its daily level swung between 0.33 and 0.67, more than a 70% cut in thinking tokens moves it, so no size of drop was caught, on all turns or the main thread. Detecting it points to pooled data from many users.
 
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
+
+Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).
