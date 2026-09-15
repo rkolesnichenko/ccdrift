@@ -24,6 +24,6 @@ def notify(title: str, message: str, platform: str = sys.platform,
     else:
         return
     try:
-        run(argv, check=False, capture_output=True)
-    except OSError:
+        run(argv, check=False, capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
         pass

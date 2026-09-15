@@ -1,5 +1,7 @@
 """Desktop notifications for alerts."""
 
+import subprocess
+
 from ccdrift.notify import notify
 
 
@@ -38,3 +40,15 @@ def test_notify_ignores_a_notifier_that_fails_to_start():
 
     notify("ccdrift flag", "message", platform="linux", run=run, which=lambda name: "/usr/bin/notify-send")
     assert calls == [["notify-send", "ccdrift flag", "message"]]
+
+
+def test_notify_ignores_a_notifier_that_times_out():
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        raise subprocess.TimeoutExpired(argv, 10)
+
+    notify("ccdrift flag", "message", platform="linux", run=run, which=lambda name: "/usr/bin/notify-send")
+    assert [argv for argv, kwargs in calls] == [["notify-send", "ccdrift flag", "message"]]
+    assert calls[0][1]["timeout"] == 10
