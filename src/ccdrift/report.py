@@ -76,6 +76,11 @@ def run_report(source: Path, state_path: Path, days: int = 21, today: Optional[d
     if df.empty:
         print(no_transcripts_message(source), file=sys.stderr)
         return 2
+    try:
+        reported = load_state(state_path).get("reported", {})
+    except (OSError, ValueError) as exc:
+        print(f"Can't read the state file {state_path}: {exc}", file=sys.stderr)
+        return 1
     rows = daily_rows(df, today or datetime.now(timezone.utc).date(), days)
-    print(format_report(rows, load_state(state_path).get("reported", {})), end="")
+    print(format_report(rows, reported), end="")
     return 0

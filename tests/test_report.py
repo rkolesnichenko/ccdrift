@@ -43,3 +43,10 @@ def test_report_marks_the_metrics_flagged_each_day():
 def test_report_exits_2_without_transcripts(tmp_path):
     (tmp_path / "empty").mkdir()
     assert main(["report", "--source", str(tmp_path / "empty")]) == 2
+
+
+def test_report_explains_an_unreadable_state_file(tmp_path, capsys):
+    busy_days(tmp_path / "logs", days=1, per_day=60, cache_read=900, cache_creation=100)
+    (tmp_path / "state.json").write_text("not json")
+    assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4)) == 1
+    assert "Can't read the state file" in capsys.readouterr().err
