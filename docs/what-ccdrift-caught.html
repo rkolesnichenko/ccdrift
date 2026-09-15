@@ -177,6 +177,7 @@ figcaption { max-width: 46rem; font-size: 14px; line-height: 1.55; color: var(--
 .bar.hover { filter: brightness(1.15); }
 .cutoff { stroke: var(--ink-2); stroke-width: 1; }
 .cutoff-label { font: 600 11px var(--mono); fill: var(--ink-2); }
+.flag-span { fill: none; stroke: var(--ink-2); stroke-width: 1.5; }
 .cross { stroke: var(--ink-2); stroke-width: 1; }
 .val { font: 600 12px var(--mono); fill: var(--ink); }
 .val-2 { font-weight: 400; fill: var(--ink-2); }
@@ -294,7 +295,7 @@ footer {
       <div>
         <dt>Prompt cache</dt>
         <dd><span class="state">Real signal</span></dd>
-        <dd class="why">A regression in Claude Code 2.1.233–2.1.258 stands out in the data, and a planted 5% drop is caught.</dd>
+        <dd class="why">A regression in Claude Code 2.1.233–2.1.258 is flagged from Aug 18, and a planted 5% drop is caught.</dd>
       </div>
       <div>
         <dt>Haiku share</dt>
@@ -321,7 +322,7 @@ footer {
           <span class="key"><i class="sw past"></i>past the −3.0 cutoff</span>
           <span class="key"><i class="sw"></i>within it</span>
         </div>
-        <svg class="zscore" role="img" aria-label="Column chart of daily z-scores. Aug 18, 19 and 21 fall past the −3.0 cutoff; Aug 20 scores −2.78, so no three-day run forms."></svg>
+        <svg class="zscore" role="img" aria-label="Column chart of daily z-scores. Aug 18, 19 and 21 fall past the −3.0 cutoff and Aug 20 scores −2.78, so 3 of the 4 days from Aug 18 to Aug 21 are past it and the cache ratio is flagged for those days."></svg>
         <div class="tip" hidden>
           <div class="tip-date"></div>
           <div class="tip-row"><span class="tip-v" data-k="r"></span><span class="tip-l">cache read ratio</span></div>
@@ -329,12 +330,12 @@ footer {
           <div class="tip-row"><span class="tip-v" data-k="z"></span><span class="tip-l" data-k="zl">z-score</span></div>
         </div>
       </div>
-      <figcaption id="timeline-cap">The ratio held near 0.998 through Aug 17, stayed between 0.90 and 0.97 from Aug 18 to Sep 1, and was back near 0.997 on most days from Sep 2. ccdrift flags a metric after three days in a row past the cutoff. On the logs as they are now, Aug 20 scores −2.78 and breaks the run, so nothing is flagged. Before Claude Code’s 30-day cleanup deleted part of Aug 15–16, that day scored −3.1 and Aug 18–22 were flagged. Hover, or focus the chart and use the arrow keys, to read each day.</figcaption>
+      <figcaption id="timeline-cap">The ratio held near 0.998 through Aug 17, stayed between 0.90 and 0.97 from Aug 18 to Sep 1, and was back near 0.997 on most days from Sep 2. ccdrift flags a metric once 3 of any 4 days in a row fall past the cutoff, so the cache ratio is flagged from Aug 18 to Aug 21. After that, incident days fill the 14-day baseline and later days no longer stand out. Aug 20 falls just short at −2.78: under the first rule, three days in a row, that one day hid the incident once Claude Code’s 30-day cleanup had deleted part of Aug 15–16. Hover, or focus the chart and use the arrow keys, to read each day.</figcaption>
       <details>
         <summary>Daily values</summary>
         <div class="table-wrap">
           <table>
-            <thead><tr><th scope="col">Day</th><th scope="col" class="num">Cache read ratio</th><th scope="col" class="num">New-prompt turns</th><th scope="col" class="num">z-score</th></tr></thead>
+            <thead><tr><th scope="col">Day</th><th scope="col" class="num">Cache read ratio</th><th scope="col" class="num">New-prompt turns</th><th scope="col" class="num">z-score</th><th scope="col">Flag</th></tr></thead>
             <tbody id="daily-rows"></tbody>
           </table>
         </div>
@@ -426,7 +427,8 @@ footer {
   <section aria-labelledby="s-limits">
     <h2 id="s-limits">Limits of this analysis</h2>
     <ul class="evidence">
-      <li><strong>Some history is gone.</strong> Claude Code deletes transcripts after 30 days by default. During the analysis it removed part of Aug 15–16, which was enough to change the detector’s verdict on the incident. Retention on this machine is now 365 days.</li>
+      <li><strong>Some history is gone.</strong> Claude Code deletes transcripts after 30 days by default. During the analysis it removed part of Aug 15–16, which was enough to hide the incident from the detector’s first rule. Retention on this machine is now 365 days.</li>
+      <li><strong>The flag rule changed after this incident.</strong> Counting 3 of any 4 days instead of 3 in a row catches it again, and the smallest drops caught in these logs stayed the same. On 5 synthetic 40-day logs it added no false flags on the cache ratio, effort or main-thread Haiku, but Haiku across all turns, which subagent bursts make noisy, was falsely flagged on 3 logs instead of 1.</li>
       <li><strong>One developer, one workload.</strong> Every number here describes these logs, not Claude Code users in general.</li>
       <li><strong>Twelve clean days.</strong> The detection results rest on three starting days.</li>
     </ul>
@@ -442,7 +444,7 @@ footer {
       <dt>Cache read ratio</dt>
       <dd>Tokens read from cache divided by tokens read plus tokens written. Below 0.5 counts as a miss.</dd>
       <dt>Daily detector</dt>
-      <dd>Each day’s mean compared with the previous 14 days, using their median and spread, with the spread floored at sampling noise. A metric is flagged after three days in a row past the cutoff: −3.0 for the cache ratio, 3.5 for the others.</dd>
+      <dd>Each day’s mean compared with the previous 14 days, using their median and spread, with the spread floored at sampling noise. A metric is flagged once 3 of any 4 days in a row fall past the cutoff: −3.0 for the cache ratio, 3.5 for the others.</dd>
       <dt>Planted drops</dt>
       <dd>A drop of 5–70% starts on each chosen day and runs to the end of the logs. Only flags that the drop itself adds count as a catch.</dd>
     </dl>
@@ -458,10 +460,10 @@ footer {
     { d: "2026-08-15", r: 0.9984, n: 43, z: null },
     { d: "2026-08-16", r: 0.9850, n: 80, z: null },
     { d: "2026-08-17", r: 0.9983, n: 61, z: null },
-    { d: "2026-08-18", r: 0.9720, n: 72, z: -3.82 },
-    { d: "2026-08-19", r: 0.9498, n: 110, z: -5.37 },
-    { d: "2026-08-20", r: 0.9504, n: 60, z: -2.78 },
-    { d: "2026-08-21", r: 0.9472, n: 108, z: -3.17 },
+    { d: "2026-08-18", r: 0.9720, n: 72, z: -3.82, f: true },
+    { d: "2026-08-19", r: 0.9498, n: 110, z: -5.37, f: true },
+    { d: "2026-08-20", r: 0.9504, n: 60, z: -2.78, f: true },
+    { d: "2026-08-21", r: 0.9472, n: 108, z: -3.17, f: true },
     { d: "2026-08-22", r: 0.9287, n: 54, z: -2.58 },
     { d: "2026-08-24", r: 0.9270, n: 27, z: -1.58 },
     { d: "2026-08-25", r: 0.9076, n: 41, z: -1.64 },
@@ -577,6 +579,14 @@ footer {
     });
     el("line", { class: "cutoff", x1: ml, x2: W - mr, y1: Y2(-3), y2: Y2(-3) }, svgZ);
     el("text", { class: "cutoff-label", x: W - mr, y: Y2(-3) - 6, "text-anchor": "end" }, svgZ, "cutoff −3.0");
+    const flagged = DAILY.filter(r => r.f);
+    if (flagged.length) {
+      const fx0 = X(utc(flagged[0].d)) - bw / 2;
+      const fx1 = X(utc(flagged[flagged.length - 1].d)) + bw / 2;
+      const fy = Y2(0.6);
+      el("path", { class: "flag-span", d: `M${fx0} ${fy + 5}V${fy}H${fx1}V${fy + 5}` }, svgZ);
+      el("text", { class: "cutoff-label", x: fx0, y: fy - 6 }, svgZ, "flagged");
+    }
     const ticks = narrow
       ? ["2026-08-08", "2026-08-22", "2026-09-05"]
       : ["2026-08-08", "2026-08-15", "2026-08-22", "2026-08-29", "2026-09-05", "2026-09-12"];
@@ -595,7 +605,7 @@ footer {
     geom.hl.setAttribute("cx", x);
     geom.hl.setAttribute("cy", geom.pts[i][1]);
     for (const m of [geom.cross1, geom.cross2, geom.hl]) m.setAttribute("visibility", "visible");
-    tip.querySelector(".tip-date").textContent = fmtLong.format(utc(r.d));
+    tip.querySelector(".tip-date").textContent = fmtLong.format(utc(r.d)) + (r.f ? " · flagged" : "");
     tip.querySelector('[data-k="r"]').textContent = r.r.toFixed(3);
     tip.querySelector('[data-k="n"]').textContent = String(r.n);
     tip.querySelector('[data-k="z"]').textContent = r.z == null ? "—" : signed(r.z);
@@ -708,10 +718,10 @@ footer {
   const tbody = document.getElementById("daily-rows");
   DAILY.forEach(r => {
     const tr = document.createElement("tr");
-    const cells = [fmtShort.format(utc(r.d)), r.r.toFixed(3), String(r.n), r.z == null ? "—" : signed(r.z)];
+    const cells = [fmtShort.format(utc(r.d)), r.r.toFixed(3), String(r.n), r.z == null ? "—" : signed(r.z), r.f ? "flagged" : ""];
     cells.forEach((value, j) => {
       const cell = document.createElement(j ? "td" : "th");
-      if (j) cell.className = "num"; else cell.scope = "row";
+      if (j === 0) cell.scope = "row"; else if (j < 4) cell.className = "num";
       cell.textContent = value;
       tr.appendChild(cell);
     });
