@@ -43,6 +43,10 @@ Usage:
   # Against your real logs:
   python3 ccdrift.py --source ~/.claude/projects --out ./out
 
+  # Once a day, report cache-ratio or main-thread Haiku flags that are new since
+  # the last check, with a macOS notification (see --state for where it keeps track):
+  python3 ccdrift.py --check --notify
+
   # Find the detection floor for a silent Haiku-delegation regime change:
   python3 ccdrift.py --synthetic --sweep haiku --out ./out
 
@@ -72,7 +76,9 @@ import json
 import math
 import os
 import random
+import shutil
 import statistics
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -487,6 +493,63 @@ def flag_onsets(detected: pd.DataFrame, metric: str) -> list[int]:
         return []
     flags = detected[col].to_numpy(dtype=bool)
     return [i for i in range(len(flags)) if flags[i] and (i == 0 or not flags[i - 1])]
+
+
+# ---------------------------------------------------------------------------
+# Daily check — report each new flag once (run it from launchd or cron)
+# ---------------------------------------------------------------------------
+
+# The daily check leaves effort out: it swings more from day to day than a 70%
+# cut in thinking moves it, so its flags in one user's logs track the work.
+CHECK_METRICS = {"cache_ratio": "Cache read ratio on new prompts",
+                 "haiku_fraction": "Haiku share on the main thread"}
+CHECK_RECENT_DAYS = 14
+CHECK_STATE = Path.home() / ".ccdrift" / "check-state.json"
+
+
+def check(df: pd.DataFrame, today: date, state_path: Path,
+          cfg: Optional[DetectorConfig] = None,
+          recent_days: int = CHECK_RECENT_DAYS) -> list[dict[str, Any]]:
+    """Flags on main-thread turns of complete UTC days that start within the last
+    `recent_days` days and weren't reported before. Main thread only, because
+    subagent Haiku comes in bursts that flag on their own. The recent-days limit
+    keeps a first run from reporting incidents from weeks ago while still
+    covering a week or so without a run. Reported onsets are saved to
+    `state_path`, so each flag is reported once."""
+    before_today = df["day"].astype(str) < today.isoformat()
+    turns = df[before_today & df["main_thread"].astype(bool)]
+    if turns.empty:
+        return []
+    detected = detect(bin_metrics(turns), cfg or DetectorConfig())
+    bins = detected["bin"].astype(str).tolist()
+    since = (today - timedelta(days=recent_days)).isoformat()
+    state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    reported = state.setdefault("reported", {})
+    new = []
+    for metric, label in CHECK_METRICS.items():
+        flags = detected[f"{metric}__flag"].to_numpy(dtype=bool)
+        for onset in flag_onsets(detected, metric):
+            if bins[onset] < since or bins[onset] in reported.get(metric, []):
+                continue
+            end = onset
+            while end + 1 < len(flags) and flags[end + 1]:
+                end += 1
+            new.append({"metric": metric, "label": label, "onset": bins[onset],
+                        "days": bins[onset:end + 1],
+                        "z": detected[f"{metric}__z"].iloc[onset:end + 1].round(2).tolist()})
+            reported.setdefault(metric, []).append(bins[onset])
+    if new:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps(state, indent=1) + "\n")
+    return new
+
+
+def notify(title: str, message: str) -> None:
+    """Show a macOS notification; does nothing where osascript is missing."""
+    if shutil.which("osascript"):
+        script = (f"display notification {json.dumps(message, ensure_ascii=False)} "
+                  f"with title {json.dumps(title, ensure_ascii=False)}")
+        subprocess.run(["osascript", "-e", script], check=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1068,10 +1131,16 @@ def main(argv: Optional[list[str]] = None) -> int:
                          "(set it equal to --deviant-bins to require them in a row)")
     ap.add_argument("--schema-peek", action="store_true",
                     help="print the first assistant record + resolved fields, then exit")
+    ap.add_argument("--check", action="store_true",
+                    help="report flags on the cache ratio and main-thread Haiku that start in the last "
+                         f"{CHECK_RECENT_DAYS} complete days and weren't reported before; writes no output files")
+    ap.add_argument("--notify", action="store_true",
+                    help="with --check, also show a macOS notification for each new flag")
+    ap.add_argument("--state", type=str, default=str(CHECK_STATE),
+                    help="file where --check remembers the flags it has reported")
     args = ap.parse_args(argv)
 
     out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
     cfg = DetectorConfig(baseline_window=args.baseline_window,
                          z_threshold=args.z_threshold,
                          deviant_bins=args.deviant_bins,
@@ -1090,7 +1159,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     print(f"[parse] reading {source}")
-    df = parse_source(source, verbose=True)
+    df = parse_source(source, verbose=not args.check)
     if df.empty:
         print("No assistant turns parsed. Run with --schema-peek to inspect your "
               "log format, or --synthetic to smoke-test.", file=sys.stderr)
@@ -1109,6 +1178,20 @@ def main(argv: Optional[list[str]] = None) -> int:
             print("No responses in that date range.", file=sys.stderr)
             return 2
 
+    if args.check:
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        flags = check(df, datetime.now(timezone.utc).date(), Path(args.state).expanduser(), cfg)
+        if not flags:
+            print(f"[check {stamp}] no new flags")
+        for f in flags:
+            z = ", ".join(f"{v:+.1f}" for v in f["z"])
+            print(f"[check {stamp}] NEW FLAG {f['metric']}: {f['label']}, "
+                  f"{f['days'][0]} .. {f['days'][-1]} (z = {z})")
+            if args.notify:
+                notify("ccdrift", f"{f['label']} flagged from {f['onset']}")
+        return 0
+
+    out_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_dir / "features.csv", index=False)
     print(f"[parse] {len(df)} responses -> {out_dir/'features.csv'}")
 

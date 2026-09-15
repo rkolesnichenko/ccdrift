@@ -2,7 +2,7 @@
 
 import json
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -449,3 +449,60 @@ def test_since_and_until_limit_the_days_analyzed(tmp_path):
     ccdrift.main(["--source", str(tmp_path / "logs"), "--out", str(tmp_path / "out"),
                   "--since", "2026-09-02", "--until", "2026-09-02"])
     assert pd.read_csv(tmp_path / "out" / "metrics.csv")["bin"].tolist() == ["2026-09-02"]
+
+
+# --- daily check ------------------------------------------------------------
+
+def check_days(tmp_path, days, today):
+    df = daily_turns(days)
+    if "main_thread" not in df:
+        df["main_thread"] = True
+    flags = ccdrift.check(df, today=today, state_path=tmp_path / "state.json")
+    return [(f["metric"], f["onset"]) for f in flags]
+
+
+def test_check_reports_a_flag_that_starts_in_recent_days(tmp_path):
+    days = [QUIET] * 14 + [HAIKU] * 3
+    assert check_days(tmp_path, days, date(2026, 9, 18)) == [("haiku_fraction", "2026-09-15")]
+
+
+def test_check_does_not_repeat_a_flag_it_already_reported(tmp_path):
+    days = [QUIET] * 14 + [HAIKU] * 4
+    check_days(tmp_path, days[:17], date(2026, 9, 18))
+    assert check_days(tmp_path, days, date(2026, 9, 19)) == []
+
+
+def test_check_waits_for_the_current_day_to_finish(tmp_path):
+    # A day still in progress holds only part of its turns.
+    days = [QUIET] * 14 + [HAIKU] * 3
+    assert check_days(tmp_path, days, date(2026, 9, 17)) == []
+
+
+def test_check_stays_quiet_about_flags_from_weeks_ago(tmp_path):
+    # Installed on Sep 15, the check would otherwise open with the August cache
+    # regression, four weeks old by then.
+    days = [QUIET] * 14 + [HAIKU] * 3
+    assert check_days(tmp_path, days, date(2026, 10, 10)) == []
+
+
+def test_check_leaves_subagent_haiku_out(tmp_path):
+    # Subagent Haiku comes in bursts: across all turns, 3 of 5 synthetic logs
+    # were falsely flagged.
+    quiet = {"is_haiku": [0.0] * 440, "main_thread": [True] * 400 + [False] * 40}
+    burst = {"is_haiku": [0.0] * 400 + [1.0] * 40, "main_thread": [True] * 400 + [False] * 40}
+    assert check_days(tmp_path, [quiet] * 14 + [burst] * 3, date(2026, 9, 18)) == []
+
+
+def test_check_leaves_effort_out(tmp_path):
+    # Effort swings more from day to day than a 70% cut in thinking moves it,
+    # so an effort flag in one user's logs says more about the work than Claude.
+    days = [{"thinking_fraction": [0.5] * 400}] * 14 + [{"thinking_fraction": [0.1] * 400}] * 3
+    assert check_days(tmp_path, days, date(2026, 9, 18)) == []
+
+
+def test_check_mode_writes_no_output_files(tmp_path):
+    # launchd starts jobs in /, where the default ./ccdrift_out can't be created.
+    write(tmp_path / "logs" / "s1.jsonl", [prompt(at(0)), line("m1", text(40), ts=at(0))])
+    ccdrift.main(["--check", "--source", str(tmp_path / "logs"), "--out", str(tmp_path / "out"),
+                  "--state", str(tmp_path / "state.json")])
+    assert not (tmp_path / "out").exists()
