@@ -19,6 +19,7 @@ MIN_BASELINE = 5
 CHANGE = 0.25       # the window's median moved at least this far from the baseline's
 SIDE = 0.125        # and every window session lies beyond this, on the same side
 DEDUPE_DAYS = 14
+MIN_SESSIONS = 3    # a version's typical session start needs at least this many sessions
 START_COLUMNS = ["source_file", "timestamp", "day", "version", "prompt_tokens"]
 
 

@@ -21,10 +21,9 @@ import numpy as np
 import pandas as pd
 
 from ccdrift.logs import default_source, parse_source
-from ccdrift.sessions import context_changes_in, first_of_each, session_starts
+from ccdrift.sessions import MIN_SESSIONS, context_changes_in, first_of_each, session_starts
 
 MAX_SPREAD = 0.10
-MIN_SESSIONS = 3
 
 
 def version_table(starts: pd.DataFrame) -> pd.DataFrame:

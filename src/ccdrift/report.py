@@ -19,7 +19,7 @@ from ccdrift.history import HistoryError, load_history
 from ccdrift.hooks import hooks_lines, hooks_summary, judged_hook_runs
 from ccdrift.incidents import exclusions, incident_cost
 from ccdrift.logs import judged_subagent_turns, judged_turns, no_transcripts_message
-from ccdrift.sessions import session_starts
+from ccdrift.sessions import MIN_SESSIONS, session_starts
 from ccdrift.settings import settings_lines, settings_summary, subagent_lines, subagent_summary
 from ccdrift.state import load_state
 from ccdrift.texts import INCIDENT_METRICS, SHORT_NAMES, approx, incident_line, version_key
@@ -55,11 +55,12 @@ def daily_rows(turns: pd.DataFrame, days: int = DEFAULT_DAYS, cfg: Optional[Dete
     }, columns=COLUMNS)
 
 
-def _median_for(table: Optional[pd.DataFrame], version: str, column: str) -> float:
+def _median_for(table: Optional[pd.DataFrame], version: str, column: str, least: int = 1) -> float:
+    """The median of `column` over the version's rows; NaN with fewer than `least`."""
     if table is None or table.empty:
         return math.nan
     values = table.loc[table["version"].fillna("unknown").astype(str) == version, column].dropna()
-    return float(values.median()) if len(values) else math.nan
+    return float(values.median()) if len(values) >= least else math.nan
 
 
 def _size(value: float) -> str:
@@ -70,8 +71,8 @@ def version_rows(turns: pd.DataFrame, changelog: Optional[dict] = None, starts: 
                  compactions: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """Per Claude Code version on judged turns, oldest version first: first and last
     day, responses, new-prompt turns with their cache ratio and share of misses,
-    Haiku share, median session-start size and pre-compaction size, and up to 2
-    release notes on file for that version."""
+    Haiku share, median session-start size (over MIN_SESSIONS or more sessions) and
+    pre-compaction size, and up to 2 release notes on file for that version."""
     rows = []
     if not turns.empty:
         versions = (turns["version"].fillna("unknown") if "version" in turns
@@ -84,7 +85,7 @@ def version_rows(turns: pd.DataFrame, changelog: Optional[dict] = None, starts: 
                 "cache_ratio": float(prompts["cache_read_ratio"].mean()) if len(prompts) else math.nan,
                 "miss_share": float(prompts["is_miss"].astype(bool).mean()) if len(prompts) else math.nan,
                 "haiku_share": float(group["is_haiku"].mean()),
-                "session_start": _median_for(starts, str(version), "prompt_tokens"),
+                "session_start": _median_for(starts, str(version), "prompt_tokens", MIN_SESSIONS),
                 "compacts_at": _median_for(compactions, str(version), "pre_tokens"),
                 "release_notes": [text for _, text in release_notes(changelog or {}, [str(version)], REPORT_TOPICS)],
             })

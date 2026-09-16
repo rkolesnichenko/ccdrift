@@ -99,20 +99,21 @@ def test_report_by_version_compares_claude_code_versions_oldest_first(tmp_path, 
         "A miss is a new-prompt turn that reads less than half its input from the cache.",
         "",
         "version      first day   last day    responses  prompt turns  cache ratio  misses  haiku share  session start  compacts at",
-        "2.1.99       2026-09-01  2026-09-02        120           118        0.900    0.0%        0.000             1k            -",
-        "2.1.233      2026-09-03  2026-09-04        120           118        0.900    0.0%        0.000             1k            -",
+        "2.1.99       2026-09-01  2026-09-02        120           118        0.900    0.0%        0.000              -            -",
+        "2.1.233      2026-09-03  2026-09-04        120           118        0.900    0.0%        0.000              -            -",
     ]
 
 
 def test_report_by_version_shows_session_start_size_and_where_compaction_starts(tmp_path, capsys):
-    main_thread_days(tmp_path / "logs", [{"version": "2.1.99"}] * 2 + [{"version": "2.1.233"}] * 2)
+    # A session-start median over 1 or 2 sessions misleads (128k and 508k made 320k), so it needs 3.
+    main_thread_days(tmp_path / "logs", [{"version": "2.1.99"}] * 3 + [{"version": "2.1.233"}] * 2)
     write(tmp_path / "logs" / "compacted.jsonl",
-          [compact_boundary(at(2 * DAY + 30), trigger="auto", pre_tokens=971_000, version="2.1.233")])
-    run_report(tmp_path / "logs", tmp_path / "state.json", by="version", today=date(2026, 9, 5))
+          [compact_boundary(at(3 * DAY + 30), trigger="auto", pre_tokens=971_000, version="2.1.233")])
+    run_report(tmp_path / "logs", tmp_path / "state.json", by="version", today=date(2026, 9, 6))
     assert capsys.readouterr().out.splitlines()[3:6] == [
         "version      first day   last day    responses  prompt turns  cache ratio  misses  haiku share  session start  compacts at",
-        "2.1.99       2026-09-01  2026-09-02        120           118        0.900    0.0%        0.000             1k            -",
-        "2.1.233      2026-09-03  2026-09-04        120           118        0.900    0.0%        0.000             1k         970k",
+        "2.1.99       2026-09-01  2026-09-03        180           177        0.900    0.0%        0.000             1k            -",
+        "2.1.233      2026-09-04  2026-09-05        120           118        0.900    0.0%        0.000              -         970k",
     ]
 
 
