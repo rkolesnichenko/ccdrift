@@ -58,6 +58,15 @@ def test_an_incident_reads_as_one_line():
                  "recovered_from": "2026-09-13", "versions": []}
     assert incident_line(recovered, cost=0) == \
         "cache  2026-09-10..2026-09-12    back to normal from 2026-09-13; no tokens re-cached"
+    # A check-opened incident closed by hand: closed_by wins over the "check" source.
+    closed_by_hand = {**opened(), "end": "2026-09-12", "status": "recovered", "closed_by": "user",
+                      "closed_on": "2026-09-16", "versions": []}
+    assert incident_line(closed_by_hand, cost=0) == \
+        "cache  2026-09-10..2026-09-12    closed by hand on 2026-09-16; no tokens re-cached"
+    persistent = {**opened(), "status": "persistent"}
+    assert incident_line(persistent) == \
+        "cache  2026-09-10..now           still changed after 30 days; ~550k tokens re-cached; " \
+        "on 2.1.273 (since 09-09)"
 
 
 def test_incident_add_through_cli_saves_the_state(tmp_path, capsys):
@@ -76,12 +85,28 @@ def test_incident_commands_change_nothing_on_bad_input(tmp_path, capsys):
     assert capsys.readouterr().err.count("Nothing changed:") == 3
 
 
-def test_incident_close_through_cli_uses_the_last_complete_utc_day(tmp_path):
+def test_incident_close_through_cli_uses_the_last_complete_utc_day(tmp_path, capsys):
     state = tmp_path / "state.json"
     state.write_text(json.dumps({"version": 2, "incidents": [opened("2026-01-01")]}))
     assert main(["incident", "close", "cache", "--state", str(state)]) == 0
     yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     assert load_state(state)["incidents"][0]["end"] == yesterday
+    assert capsys.readouterr().out == (
+        f"cache  2026-01-01..{yesterday}    closed by hand on {today}; ~550k tokens re-cached; "
+        "on 2.1.273 (since 09-09)\n")
+
+
+def test_incident_dismiss_through_cli_saves_the_state(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"version": 2, "incidents": [opened()]}))
+    assert main(["incident", "dismiss", "cache", "2026-09-10", "--state", str(state)]) == 0
+    yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    saved = load_state(state)["incidents"][0]
+    assert saved["status"] == "dismissed"
+    assert saved["end"] == max("2026-09-10", yesterday)
+    assert capsys.readouterr().out == (
+        f"cache  2026-09-10..{saved['end']}    dismissed; ~550k tokens re-cached; on 2.1.273 (since 09-09)\n")
 
 
 def test_incident_list_shows_each_incident_with_its_cost_newest_first(tmp_path, capsys):
