@@ -21,7 +21,9 @@ your usage limits:
 
 Each alert names the Claude Code version that was running, and what a regression has
 cost: tokens re-cached, or extra Haiku responses, and quotes the matching lines of
-Claude Code's own release notes from `~/.claude/cache/changelog.md` in the log.
+Claude Code's own release notes in the log. Claude Code keeps them in the config
+folder that holds the transcripts: `~/.claude/cache/changelog.md`, or
+`$CLAUDE_CONFIG_DIR/cache/changelog.md` when that variable is set.
 
 It can't tell you whether responses think less: in one person's logs, effort swings
 more from day to day than a 70% cut in thinking moves it. See
@@ -56,7 +58,8 @@ crontab line where systemd user sessions aren't available. Installing again repl
 the job. On Windows, run `ccdrift check` from Task Scheduler instead.
 
 Hourly runs let ccdrift warn about cache misses within hours; the full verdict still
-takes days.
+takes days. Upgrading from 0.2.0, run `ccdrift schedule install` again: the job 0.2.0
+installed keeps running once a day until you do.
 
 Claude Code deletes transcripts after 30 days by default. From its first run on,
 ccdrift keeps its own history of every response it has read, so later deletions don't
