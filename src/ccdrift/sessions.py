@@ -85,15 +85,20 @@ def context_changes_in(starts: pd.DataFrame) -> list[ContextChange]:
 
 def first_of_each(changes: Sequence[ContextChange], recorded: Sequence[dict] = ()) -> list[ContextChange]:
     """One change per step: a change is dropped when a kept or recorded one in the same
-    direction started no more than DEDUPE_DAYS days before it. `recorded` holds dicts
-    with `since`, `from` and `to`."""
-    kept = [(r["since"], r["to"] > r["from"]) for r in recorded]
+    direction either started no more than DEDUPE_DAYS days before it, or has `from` and
+    `to` each within SIDE (relative) of the change's own `before` and `after` -- the
+    same step re-detected, which sparse sessions can keep doing for weeks as the
+    baseline slowly refills with post-step sessions. `recorded` holds dicts with
+    `since`, `from` and `to`; kept changes are compared by their own `before`/`after`."""
+    kept = [(r["since"], r["to"] > r["from"], r["from"], r["to"]) for r in recorded]
     found = []
     for change in changes:
         earliest = (date.fromisoformat(change.since) - timedelta(days=DEDUPE_DAYS)).isoformat()
-        if any(up == change.up and since >= earliest for since, up in kept):
+        if any(up == change.up and (since >= earliest or (
+                abs(change.before / r_from - 1) <= SIDE and abs(change.after / r_to - 1) <= SIDE))
+               for since, up, r_from, r_to in kept):
             continue
-        kept.append((change.since, change.up))
+        kept.append((change.since, change.up, change.before, change.after))
         found.append(change)
     return found
 

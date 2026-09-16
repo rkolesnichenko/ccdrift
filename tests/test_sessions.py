@@ -5,7 +5,8 @@ from datetime import date
 import pandas as pd
 
 from ccdrift.logs import parse_source
-from ccdrift.sessions import context_alerts, context_changes_in, context_message, first_of_each, session_starts
+from ccdrift.sessions import (ContextChange, context_alerts, context_changes_in, context_message, first_of_each,
+                              session_starts)
 from ccdrift.state import new_state
 from tests.helpers import DAY, at, line, nth_day, prompt, text, write
 
@@ -45,6 +46,20 @@ def test_a_step_already_recorded_is_not_found_again():
     changes = context_changes_in(starts_of([128_000] * 8 + [54_000] * 3))
     recorded = [{"since": "2026-09-05", "from": 130_000.0, "to": 50_000.0}]
     assert first_of_each(changes, recorded) == []
+
+
+def test_a_stale_recorded_step_re_detected_by_sparse_sessions_is_not_found_again():
+    # With under one session a day, the same step can still be showing up in windows
+    # more than DEDUPE_DAYS after it was first recorded, as the baseline slowly refills.
+    change = ContextChange("2026-09-30", "2026-10-02", 128_000.0, 54_000.0)
+    recorded = [{"since": "2026-09-10", "from": 128_000.0, "to": 54_000.0}]
+    assert first_of_each([change], recorded) == []
+
+
+def test_a_later_genuine_step_in_the_same_direction_is_still_found():
+    change = ContextChange("2026-09-30", "2026-10-02", 54_000.0, 30_000.0)
+    recorded = [{"since": "2026-09-10", "from": 128_000.0, "to": 54_000.0}]
+    assert first_of_each([change], recorded) == [change]
 
 
 def test_a_session_start_step_is_alerted_once_with_its_sizes():
