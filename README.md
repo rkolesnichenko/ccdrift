@@ -22,9 +22,10 @@ more from day to day than a 70% cut in thinking moves it. See
 [docs/findings.md](docs/findings.md).
 
 Everything stays on your machine. ccdrift reads the transcripts and keeps a state
-file, a log and its own history of responses (token counts, models, versions and
-settings; no prompt or response text) in `~/.ccdrift`. It sends nothing anywhere,
-unless you give it a command to run with `--exec`.
+file, a log and its own history of responses in `~/.ccdrift`. The history holds token
+counts, models, versions and settings, plus each transcript's path (which includes
+your project folder names) and session id; no prompt or response text. ccdrift sends
+nothing anywhere, unless you give it a command to run with `--exec`.
 
 ## Install
 
