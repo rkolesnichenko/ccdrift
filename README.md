@@ -93,9 +93,16 @@ ccdrift incident dismiss cache 2026-09-14           a false alarm: its days rejo
 ## Status line
 
 `ccdrift status --short` prints one line when something needs attention, and nothing
-otherwise: a failing check, no check for 3 days, or an open incident. It reads only
-the state file, so it's cheap enough to call from a Claude Code status line command.
-`ccdrift status` shows the last run, open and recent incidents, and setting changes.
+otherwise: a failing check, no check for 3 days, or an open incident.
+
+```console
+$ ccdrift status --short
+ccdrift: cache ratio down since 08-18
+```
+
+It reads only the state file and always exits 0, so it's cheap and safe to call from
+the command your Claude Code status line runs. `ccdrift status` shows the last run,
+open and recent incidents, and setting changes.
 
 ## Alerts elsewhere
 
