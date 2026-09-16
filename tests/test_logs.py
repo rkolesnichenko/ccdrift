@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from ccdrift.detector import bin_metrics
-from ccdrift.logs import parse_durations, parse_source
+from ccdrift.logs import frame, parse_durations, parse_source
 from tests.helpers import (DAY, at, compact_boundary, line, prompt, response, text, thinking,
                            tool_result, turn_duration, write)
 
@@ -204,3 +204,25 @@ def test_turn_durations_are_read_with_their_day_and_version(tmp_path):
     durations = parse_durations(tmp_path)
     assert durations[["day", "version", "duration_ms", "message_count"]].values.tolist() == [
         ["2026-09-01", "2.1.233", 90000.0, 3], ["2026-09-02", "2.1.226", 30000.0, 1]]
+
+
+def test_frame_coerces_integer_flags_from_the_history_store_to_bool():
+    # The history store (next task) loads rows from SQLite, where boolean columns
+    # come back as 0/1 integers. add_ratios combines new_prompt/after_compaction
+    # with & and ~, which is silently wrong on raw ints, so frame() must coerce
+    # them to bool the same way it already does for is_sidechain.
+    base = {
+        "key": "m1", "timestamp": at(0), "model": "claude-opus-5",
+        "version": None, "entrypoint": None, "effort": None, "speed": None, "service_tier": None,
+        "input_tokens": 10.0, "output_tokens": 40.0, "cache_creation": 0.0, "cache_read": 0.0,
+        "cache_1h": 0.0, "cache_5m": 0.0, "thinking_logged": None,
+        "signature_chars": 0, "visible_chars": 40, "n_mcp_calls": 0,
+        "is_sidechain": 0, "new_prompt": 0, "after_compaction": 0,
+        "source_file": "s1.jsonl", "session_id": "s1",
+    }
+    row1 = dict(base)
+    row2 = {**base, "key": "m2", "timestamp": at(60), "cache_read": 900.0, "cache_creation": 100.0,
+            "new_prompt": 1, "after_compaction": 0}
+    row = frame([row1, row2]).iloc[1]
+    assert row["prompt_within_ttl"]
+    assert not row["is_miss"]

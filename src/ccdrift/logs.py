@@ -324,20 +324,41 @@ def parse_source(source: Path, verbose: bool = False) -> pd.DataFrame:
 FLOAT_COLUMNS = TOKEN_FIELDS + ("thinking_logged",)
 
 
-def frame(rows) -> pd.DataFrame:
-    """The response table the detector reads, from raw response rows as parse_file
-    makes them or the history store loads them: estimated token counts, the
-    main-thread flag, idle gaps, the UTC day and the metric columns."""
+def _rows_with_parsed_timestamp(rows) -> pd.DataFrame:
+    """The DataFrame both `frame` and `duration_frame` start from: raw rows (as
+    parse_file makes them or the history store loads them), minus the internal
+    `key`, with `timestamp` parsed to UTC. Empty when `rows` is empty."""
     df = pd.DataFrame(rows)
     if df.empty:
         return df
     df = df.drop(columns=["key"], errors="ignore")
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).astype("datetime64[ns, UTC]")
+    return df
+
+
+def _with_day(df: pd.DataFrame) -> pd.DataFrame:
+    """Add the UTC day bucket used for binning. Called after sorting by timestamp,
+    since callers may rely on `day` reflecting the final row order."""
+    df["day"] = df["timestamp"].dt.tz_convert("UTC").dt.date.astype("string")
+    return df
+
+
+def frame(rows) -> pd.DataFrame:
+    """The response table the detector reads, from raw response rows as parse_file
+    makes them or the history store loads them: estimated token counts, the
+    main-thread flag, idle gaps, the UTC day and the metric columns."""
+    df = _rows_with_parsed_timestamp(rows)
+    if df.empty:
+        return df
     for col in FLOAT_COLUMNS:
         df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
     df["thinking_tokens"] = (df["signature_chars"] * TOKENS_PER_SIGNATURE_CHAR).round()
     df["visible_tokens"] = (df["visible_chars"] / 4.0).round()
+    # The history store loads these as 0/1 integers, and add_ratios combines them
+    # with & and ~, which is silently wrong on raw ints.
     df["is_sidechain"] = df["is_sidechain"].fillna(False).astype(bool)
+    df["new_prompt"] = df["new_prompt"].fillna(False).astype(bool)
+    df["after_compaction"] = df["after_compaction"].fillna(False).astype(bool)
     df["main_thread"] = ~df["is_sidechain"]
 
     # Gaps are measured within one transcript: subagents share the parent's
@@ -345,23 +366,19 @@ def frame(rows) -> pd.DataFrame:
     transcript = ["source_file", "is_sidechain"]
     df = df.sort_values(transcript + ["timestamp"], kind="stable").reset_index(drop=True)
     df["gap_seconds"] = df.groupby(transcript)["timestamp"].diff().dt.total_seconds()
-    # day bucket (UTC) for binning
-    df["day"] = df["timestamp"].dt.tz_convert("UTC").dt.date.astype("string")
+    df = _with_day(df)
     return add_ratios(df)
 
 
 def duration_frame(rows) -> pd.DataFrame:
     """Turn durations, from raw rows, with their UTC day."""
-    df = pd.DataFrame(rows)
+    df = _rows_with_parsed_timestamp(rows)
     if df.empty:
         return df
-    df = df.drop(columns=["key"], errors="ignore")
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).astype("datetime64[ns, UTC]")
     df["duration_ms"] = df["duration_ms"].astype(float)
     df["is_sidechain"] = df["is_sidechain"].astype(bool)
     df = df.sort_values(["source_file", "timestamp"], kind="stable").reset_index(drop=True)
-    df["day"] = df["timestamp"].dt.tz_convert("UTC").dt.date.astype("string")
-    return df
+    return _with_day(df)
 
 
 def parse_durations(source: Path) -> pd.DataFrame:
