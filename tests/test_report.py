@@ -120,6 +120,17 @@ def test_report_json_holds_aggregates_without_paths_or_session_ids(tmp_path, cap
     assert str(tmp_path) not in out and ".jsonl" not in out and '"s0"' not in out
 
 
+@pytest.mark.parametrize("days", ["0", "-3", "two"])
+def test_report_days_must_be_a_positive_whole_number(tmp_path, capsys, days):
+    # --by version --days 0 showed every day, and negative values dropped days.
+    with pytest.raises(SystemExit) as exited:
+        main(["report", "--by", "version", "--days", days, "--source", str(tmp_path / "logs"),
+              "--state", str(tmp_path / "state.json")])
+    assert exited.value.code == 2
+    assert capsys.readouterr().err.endswith(
+        f"ccdrift report: error: argument --days: expected a whole number of days, 1 or more, not '{days}'\n")
+
+
 def test_report_options_reach_the_report(tmp_path, capsys):
     main_thread_days(tmp_path / "logs", [{}] * 3)
     assert main(["report", "--by", "version", "--json", "--days", "2", "--source", str(tmp_path / "logs"),

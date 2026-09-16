@@ -38,6 +38,16 @@ def _state(args: argparse.Namespace) -> Path:
     return Path(args.state).expanduser() if args.state else ccdrift_home() / "check-state.json"
 
 
+def _days(text: str) -> int:
+    try:
+        days = int(text)
+    except ValueError:
+        days = 0
+    if days < 1:
+        raise argparse.ArgumentTypeError(f"expected a whole number of days, 1 or more, not {text!r}")
+    return days
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ccdrift",
@@ -57,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_source(peek_command)
 
     report = commands.add_parser("report", help="recent days or Claude Code versions, incidents and settings")
-    report.add_argument("--days", type=int, default=None,
+    report.add_argument("--days", type=_days, default=None,
                         help="how many recent days to cover (default: 21 by day, all by version)")
     report.add_argument("--by", choices=["day", "version"], default="day",
                         help="one row per day (default) or per Claude Code version")
