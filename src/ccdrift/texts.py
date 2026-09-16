@@ -72,3 +72,24 @@ def version_key(version: str) -> tuple:
     if version == "unknown":
         return (1,)
     return (0, *((0, int(part), "") if part.isdigit() else (1, 0, part) for part in re.split(r"[.+-]", version)))
+
+
+def context_change_line(change: dict[str, Any]) -> str:
+    return f"session start ~{approx(change['from'])} -> ~{approx(change['to'])} tokens from {change['since']}"
+
+
+def hook_failure_line(failure: dict[str, Any]) -> str:
+    (first, second), (runs1, runs2), (failed1, failed2) = failure["days"], failure["runs"], failure["failed"]
+    return (f"stop hooks failing from {failure['since']}: {failed1} of {runs1} runs on {first}, "
+            f"{failed2} of {runs2} on {second}")
+
+
+def field_gap_line(gap: dict[str, Any]) -> str:
+    where = "" if gap["version"] == "unknown" else f" on {gap['version']}"
+    return (f"{gap['field']} not logged{where}: {gap['share']:.0%} of {gap['responses']} responses, "
+            f"{gap['share_before']:.0%} before")
+
+
+def early_warning_line(warning: dict[str, Any]) -> str:
+    return (f"cache misses rising at {warning['at'][:16].replace('T', ' ')} UTC: {warning['misses']} of "
+            f"{warning['turns']} new-prompt turns (usually {warning['base_rate']:.1%})")

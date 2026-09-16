@@ -28,9 +28,10 @@ from ccdrift.texts import (INCIDENT_METRICS, METRIC_ARGS, MOVES, PERSISTENT_DAYS
 # without a run.
 RECENT_DAYS = 14
 # Days pooled to judge recovery, and pooled windows inside the cutoff in a row that
-# close an incident. On the real caching regression, single days closed it at
-# Sep 4 "from Sep 2" although Sep 3 still missed; pooling 3 days closed it at
-# Sep 6, "from Sep 4", when the fixed versions were in use.
+# close an incident. On the real caching regression, single days closed it on the
+# Sep 4 run "from Sep 2" although Sep 3 still missed; pooling 3 days closed it on the
+# Sep 7 run, "from Sep 4", the first day without misses (judged CLI turns still ran
+# 2.1.247 that day).
 RECOVERY_BINS = 3
 EXCLUDING = ("open", "recovered")
 OPEN_END = "9999-12-31"

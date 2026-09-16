@@ -94,11 +94,13 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     if warning:
         alerts.append(("early", "ccdrift: cache misses rising", early_message(warning, now), []))
     # `ccdrift status` reads only the state file, so it shows the cost and versions
-    # saved here: for open incidents, and for incidents added by hand, which start
-    # without either. describe() has just refreshed the incidents it alerted about.
+    # saved here: for open incidents, and for incidents added or closed by hand, which
+    # start without a cost or keep the one from before they were closed. describe()
+    # has just refreshed the incidents it alerted about.
     described = {id(event.incident) for event in events}
     for incident in incidents:
-        if id(incident) in described or (incident["status"] != "open" and incident["source"] != "user"):
+        by_hand = incident["source"] == "user" or incident["closed_by"] == "user"
+        if id(incident) in described or (incident["status"] != "open" and not by_hand):
             continue
         incident["cost"] = round(incident_cost(turns, incident, incidents, cfg))
         if incident["source"] == "user" and not incident["versions"]:

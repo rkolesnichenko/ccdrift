@@ -94,6 +94,34 @@ def test_status_shows_the_last_check_incidents_and_setting_changes(tmp_path, cap
         "  cache  2026-08-18..2026-09-03    back to normal from 2026-09-04; ~18M tokens re-cached",
         "Setting changes in the last 30 days:",
         "  cache tier for claude-opus-5: 1h -> 5m from 2026-09-17",
+        "Other changes in the last 30 days: none",
+    ]
+
+
+def test_status_lists_other_changes_of_the_last_30_days(tmp_path, capsys):
+    path = state_file(
+        tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00",
+        context_changes=[{"since": "2026-09-10", "from": 128_000.0, "to": 54_000.0,
+                          "days": ["2026-09-10", "2026-09-12"], "reported_on": "2026-09-13"}],
+        hook_failures=[{"since": "2026-09-16", "days": ["2026-09-16", "2026-09-17"], "runs": [15, 14],
+                        "failed": [12, 14], "reported_on": "2026-09-18"},
+                       {"since": "2026-08-01", "days": ["2026-08-01", "2026-08-02"], "runs": [10, 10],
+                        "failed": [10, 10], "reported_on": "2026-08-03"}],
+        field_gaps=[{"field": "effort", "version": "2.1.280", "share_before": 1.0, "share": 0.0,
+                     "responses": 312, "reported_on": "2026-09-19"},
+                    {"field": "version", "version": "unknown", "share_before": 1.0, "share": 0.0,
+                     "responses": 60, "reported_on": "2026-09-19"}],
+        early_warnings=[{"at": "2026-09-20T08:40:00+00:00", "since": "2026-09-20T08:00:00+00:00", "misses": 3,
+                         "turns": 7, "base_rate": 0.005, "versions": [], "reported_on": "2026-09-20"}])
+    run_status(path, now=NOW)
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[lines.index("Other changes in the last 30 days:"):] == [
+        "Other changes in the last 30 days:",
+        "  session start ~130k -> ~54k tokens from 2026-09-10",
+        "  stop hooks failing from 2026-09-16: 12 of 15 runs on 2026-09-16, 14 of 14 on 2026-09-17",
+        "  effort not logged on 2.1.280: 0% of 312 responses, 100% before",
+        "  version not logged: 0% of 60 responses, 100% before",
+        "  cache misses rising at 2026-09-20 08:40 UTC: 3 of 7 new-prompt turns (usually 0.5%)",
     ]
 
 

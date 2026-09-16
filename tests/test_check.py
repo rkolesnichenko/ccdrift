@@ -7,7 +7,7 @@ import pytest
 
 import ccdrift.check
 from ccdrift.check import run_check
-from ccdrift.incidents import add_incident
+from ccdrift.incidents import add_incident, close_incident
 from ccdrift.state import load_state, new_state, save_state
 from ccdrift.status import status_report
 from tests.helpers import (DAY, at, busy_days, damage_responses_table, hook_days_logs, line, main_thread_days,
@@ -114,6 +114,20 @@ def test_check_works_out_the_cost_and_versions_of_an_incident_added_by_hand(tmp_
         "Closed in the last 30 days:",
         "  cache  2026-09-15..2026-09-17    added by hand; ~18k tokens re-cached; on 2.1.233 (since 09-15)",
     ]
+    assert sent == []
+
+
+def test_check_refreshes_the_cost_of_an_incident_closed_by_hand(tmp_path, sent):
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"misses": 6, "version": "2.1.233"}] * 3)
+    state = new_state()
+    state["incidents"].append({"metric": "cache_ratio", "start": "2026-09-15", "end": None, "status": "open",
+                               "source": "check", "closed_by": None, "recovered_from": None,
+                               "opened_on": "2026-09-17", "closed_on": None,
+                               "versions": ["2.1.233 (since 09-15)"], "cost": 0})
+    close_incident(state["incidents"], "cache_ratio", date(2026, 9, 18))
+    save_state(tmp_path / "state.json", state)
+    check_logs(tmp_path, today=date(2026, 9, 18))
+    assert load_state(tmp_path / "state.json")["incidents"][0]["cost"] == 18_000
     assert sent == []
 
 
