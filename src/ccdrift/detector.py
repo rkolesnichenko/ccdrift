@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -86,8 +86,30 @@ def _robust_z(value: float, baseline: np.ndarray, counts: np.ndarray,
     return (value - med) / spread
 
 
-def detect(metrics: pd.DataFrame, cfg: DetectorConfig) -> pd.DataFrame:
-    """Annotate each bin with robust-z and a sustained-flag per metric."""
+def baseline_bins(i: int, excluded: np.ndarray, window: int) -> list[int]:
+    """The last `window` bins before bin i that aren't excluded."""
+    kept = [j for j in range(i) if not excluded[j]]
+    return kept[-window:] if window > 0 else []
+
+
+def pooled_z(metrics: pd.DataFrame, metric: str, bins: Sequence[int], baseline: Sequence[int]) -> float:
+    """Robust z of the turn-weighted mean over `bins`, scored against the `baseline`
+    bins as one bin of their summed turns would be. Pooling days keeps a day with
+    few turns, or one stray miss, from deciding on its own."""
+    vals = metrics[metric].to_numpy(dtype=float)
+    counts = metrics[f"{metric}__n"].to_numpy(dtype=float)
+    variances = metrics[f"{metric}__var"].to_numpy(dtype=float)
+    bins, baseline = list(bins), list(baseline)
+    n = float(counts[bins].sum())
+    value = float((vals[bins] * counts[bins]).sum() / max(n, 1.0))
+    return _robust_z(value, vals[baseline], counts[baseline], variances[baseline], n)
+
+
+def detect(metrics: pd.DataFrame, cfg: DetectorConfig,
+           excluded: Optional[Mapping[str, Sequence[bool]]] = None) -> pd.DataFrame:
+    """Annotate each bin with robust-z and a sustained-flag per metric. Bins marked
+    in `excluded` for a metric (an incident's days) are still scored but stay out
+    of later bins' baselines, so a long shift is judged against the days before it."""
     m = metrics.copy()
     for name, (_, _, direction) in METRICS.items():
         zs: list[float] = []
@@ -96,15 +118,16 @@ def detect(metrics: pd.DataFrame, cfg: DetectorConfig) -> pd.DataFrame:
         vals = m[name].to_numpy(dtype=float)
         counts = m[f"{name}__n"].to_numpy(dtype=float)
         variances = m[f"{name}__var"].to_numpy(dtype=float)
+        skip = np.zeros(len(vals), dtype=bool)
+        if excluded and name in excluded:
+            skip = np.asarray(excluded[name], dtype=bool)
         for i in range(len(vals)):
-            lo = max(0, i - cfg.baseline_window)
-            keep = ~np.isnan(vals[lo:i])
-            baseline = vals[lo:i][keep]
-            if len(baseline) < cfg.min_baseline or math.isnan(vals[i]):
+            window = [j for j in baseline_bins(i, skip, cfg.baseline_window) if not np.isnan(vals[j])]
+            if len(window) < cfg.min_baseline or math.isnan(vals[i]):
                 zs.append(np.nan)
                 deviant.append(False)
                 continue
-            z = _robust_z(vals[i], baseline, counts[lo:i][keep], variances[lo:i][keep], counts[i])
+            z = _robust_z(vals[i], vals[window], counts[window], variances[window], counts[i])
             zs.append(z)
             harmful = (z <= -threshold) if direction == "down" else (z >= threshold)
             deviant.append(bool(harmful))

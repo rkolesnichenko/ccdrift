@@ -1,7 +1,7 @@
 """Log-writing helpers and day fixtures shared by the package and lab tests."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -87,10 +87,15 @@ def write(path, records):
     path.write_text("".join(json.dumps(r) + "\n" for r in records))
 
 
+def nth_day(i):
+    """The ISO date i days after Sep 1, 2026."""
+    return (date(2026, 9, 1) + timedelta(days=i)).isoformat()
+
+
 def daily_turns(days):
-    """Turn-level rows for bin_metrics, one dict per day mapping a per-turn
-    column to its values; metric columns left out are 0."""
-    df = pd.concat([pd.DataFrame({"day": f"2026-09-{i + 1:02d}", **cols})
+    """Turn-level rows for bin_metrics, one dict per day from Sep 1 mapping a
+    per-turn column to its values; metric columns left out are 0."""
+    df = pd.concat([pd.DataFrame({"day": nth_day(i), **cols})
                     for i, cols in enumerate(days)], ignore_index=True)
     for col in ("thinking_fraction", "prompt_cache_read_ratio", "is_haiku"):
         if col not in df:
