@@ -66,8 +66,9 @@ installed keeps running once a day until you do.
 Claude Code deletes transcripts after 30 days by default. From its first run on,
 ccdrift keeps its own history of every response it has read, so later deletions don't
 affect it; the history grows by about 65 MB a year for a heavy user. Each check reads
-its last 90 days (more while it follows an older incident); `ccdrift report` and
-`ccdrift incident list` read all of it. Its first run
+its last 90 days, or its last 60 days of use when those reach further back, and back
+to an older incident whose cost it works out; `ccdrift report` and `ccdrift incident
+list` read all of it. Its first run
 can only see what's still on disk, and it judges each day against the 14 before it.
 To give that first run more to go on, and to keep transcripts for your own digging,
 set this in `~/.claude/settings.json`:
