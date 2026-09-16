@@ -53,8 +53,11 @@ def miss_cusum(misses: Sequence[bool], base_rate: float, h: float, p1: float = P
 
 
 def prompt_turns(df: pd.DataFrame) -> pd.DataFrame:
-    """CLI main-thread new-prompt turns, in time order."""
-    keep = df["main_thread"].astype(bool) & df["prompt_within_ttl"].astype(bool)
+    """CLI main-thread new-prompt turns with cache token counts, in time order. Every
+    response reads or writes the prompt cache, so a turn without them means the parser
+    lost track of it (the blank-cache alert's case), not a miss."""
+    keep = (df["main_thread"].astype(bool) & df["prompt_within_ttl"].astype(bool)
+            & ((df["cache_read"] + df["cache_creation"]) > 0))
     if "entrypoint" in df:
         keep &= ~df["entrypoint"].fillna("").astype(str).str.startswith("sdk-")
     turns = df.loc[keep, ["timestamp", "day", "is_miss"]].copy()

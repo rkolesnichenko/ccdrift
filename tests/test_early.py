@@ -39,13 +39,16 @@ def test_each_alarm_comes_with_the_turn_its_rise_began():
 NOW = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
 
 
-def prompt_frame(misses, days=21, per_day=30):
+def prompt_frame(misses, days=21, per_day=30, blank=()):
     """CLI main-thread new-prompt turns from Sep 1, every 20 minutes from 08:00 UTC, on
-    2.1.270 and, the last day, on 2.1.280; `misses` holds the (day, turn) pairs that miss."""
+    2.1.270 and, the last day, on 2.1.280; `misses` holds the (day, turn) pairs that miss,
+    `blank` those logged without cache token counts, which read as misses too."""
     return pd.DataFrame([
         {"timestamp": pd.Timestamp(f"{nth_day(d)}T08:00:00Z") + pd.Timedelta(minutes=20 * k), "day": nth_day(d),
          "main_thread": True, "entrypoint": "cli", "prompt_within_ttl": True,
-         "version": "2.1.280" if d == days - 1 else "2.1.270", "is_miss": (d, k) in misses}
+         "version": "2.1.280" if d == days - 1 else "2.1.270",
+         "cache_read": 0.0 if (d, k) in blank else 900.0, "cache_creation": 0.0 if (d, k) in blank else 100.0,
+         "is_miss": (d, k) in misses or (d, k) in blank}
         for d in range(days) for k in range(per_day)])
 
 
@@ -74,6 +77,13 @@ def test_a_sustained_rise_across_several_alarms_reports_the_whole_rise():
     warning = early_warning(prompt_frame(misses), [], new_state(), NOW, h=6)
     assert (warning["at"], warning["since"], warning["misses"], warning["turns"]) == (
         "2026-09-21T11:40:00+00:00", "2026-09-21T09:00:00+00:00", 9, 9)
+
+
+def test_turns_without_cache_token_counts_dont_count_toward_a_warning():
+    # A parser that loses the cache counts makes every turn read as a miss; the
+    # blank-cache alert is the one for that, and a warning would block real ones for a week.
+    blank = {(20, k) for k in range(3, 13)}
+    assert early_warning(prompt_frame({(2, 0), (9, 0)}, blank=blank), [], new_state(), NOW, h=6) is None
 
 
 def test_no_warning_while_a_cache_incident_is_open_or_over_its_days():

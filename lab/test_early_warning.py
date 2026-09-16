@@ -18,7 +18,7 @@ def turns_frame(days=40, per_day=60, incident=(), incident_rate=0.07, seed=3):
             rate = incident_rate if day in incident else 0.005
             rows.append({"timestamp": pd.Timestamp(f"{day}T08:00:00Z") + pd.Timedelta(minutes=10 * k), "day": day,
                          "main_thread": True, "entrypoint": "cli", "prompt_within_ttl": True,
-                         "is_miss": rng.random() < rate})
+                         "cache_read": 900.0, "cache_creation": 100.0, "is_miss": rng.random() < rate})
     return pd.DataFrame(rows)
 
 
@@ -27,6 +27,7 @@ def test_prompt_turns_keep_cli_main_thread_new_prompts_in_time_order():
                                                     "2026-09-01T12:00Z"]),
                        "day": ["2026-09-01"] * 4, "main_thread": [True, True, False, True],
                        "entrypoint": ["cli", "cli", "cli", "sdk-py"], "prompt_within_ttl": [True] * 4,
+                       "cache_read": [900.0] * 4, "cache_creation": [100.0] * 4,
                        "is_miss": [False, True, False, False]})
     assert prompt_turns(df)["is_miss"].tolist() == [True, False]
 
