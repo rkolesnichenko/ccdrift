@@ -135,25 +135,33 @@ def has_tool_result(content: Any) -> bool:
         isinstance(block, dict) and block.get("type") == "tool_result" for block in content)
 
 
+# Times a transcript line can carry: pandas holds 1677 to 2262 in nanoseconds.
+MIN_TIME = datetime(1970, 1, 1, tzinfo=timezone.utc)
+MAX_TIME = datetime(2200, 1, 1, tzinfo=timezone.utc)
+
+
 def parse_ts(raw: Any) -> Optional[datetime]:
-    if raw is None:
-        return None
-    if isinstance(raw, (int, float)):
+    """The time `raw` names, in UTC; None when it names none, or one pandas can't hold."""
+    dt = None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
         # epoch seconds or millis
         val = float(raw)
         if val > 1e12:
             val /= 1000.0
-        return datetime.fromtimestamp(val, tz=timezone.utc)
-    if isinstance(raw, str):
-        s = raw.replace("Z", "+00:00")
         try:
-            dt = datetime.fromisoformat(s)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
+            dt = datetime.fromtimestamp(val, tz=timezone.utc)
+        except (OverflowError, ValueError, OSError):
+            return None
+    elif isinstance(raw, str):
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError:
             return None
-    return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    if dt is None or not MIN_TIME <= dt <= MAX_TIME:
+        return None
+    return dt
 
 
 # ---------------------------------------------------------------------------
@@ -523,16 +531,21 @@ def add_ratios(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# No token count or duration in milliseconds comes near this; SQLite's integers stop
+# at 2**63, and sums of a few thousand counts must stay below it.
+MAX_COUNT = 1e12
+
+
 def _num(v: Any) -> float:
     """`v` as a number; 0.0 when it isn't one, including Infinity and NaN, which JSON
-    parsing accepts."""
+    parsing accepts, and numbers beyond MAX_COUNT."""
     try:
         if v is None:
             return 0.0
         number = float(v)
     except (TypeError, ValueError, OverflowError):
         return 0.0
-    return number if math.isfinite(number) else 0.0
+    return number if math.isfinite(number) and abs(number) <= MAX_COUNT else 0.0
 
 
 # ---------------------------------------------------------------------------

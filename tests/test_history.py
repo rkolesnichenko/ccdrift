@@ -38,6 +38,22 @@ def test_history_holds_the_same_responses_as_the_transcripts(tmp_path):
     pd.testing.assert_frame_equal(stored, parse_source(tmp_path / "logs"), check_like=True)
 
 
+def test_counts_and_times_out_of_range_dont_fail_the_history(tmp_path):
+    # SQLite can't store integers of 2**63 or more, and pandas can't hold times after
+    # 2262; either failed every check while such a transcript was on disk.
+    huge = line("m2", text(40), ts=at(60))
+    huge["message"]["usage"]["input_tokens"] = 2 ** 70
+    hooks = stop_hook_summary(at(90), 1, uuid="h1")
+    hooks["hookCount"] = 1e300
+    write(tmp_path / "logs" / "s1.jsonl", [
+        prompt(at(0)), line("m1", text(40), ts=at(0)), prompt(at(60)), huge, hooks,
+        line("m3", text(40), ts="9999-12-31T00:00:00Z"), line("m4", text(40), ts=1e300)])
+    tables = load_history(tmp_path / "logs", tmp_path / "state.json", claim=True)
+    assert tables.responses[["input_tokens"]].values.tolist() == [[10.0], [0.0], [10.0], [10.0]]
+    assert tables.responses["timestamp"].isna().tolist() == [False, False, True, True]
+    assert tables.hook_runs["hook_count"].tolist() == [0]
+
+
 def test_history_holds_the_same_turn_durations_as_the_transcripts(tmp_path):
     transcripts(tmp_path / "logs")
     with History(tmp_path / "history.sqlite") as history:
