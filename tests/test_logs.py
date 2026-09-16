@@ -255,6 +255,18 @@ def test_stop_hook_summaries_become_hook_runs_without_their_commands(tmp_path):
     assert "secret-hook" not in runs.to_string()
 
 
+def test_infinite_or_nan_counts_read_as_0(tmp_path):
+    # JSON parsers accept Infinity and NaN, and int() of them raised, failing every check
+    # while such a transcript was on disk.
+    hooks = stop_hook_summary(at(10), 1, uuid="h1")
+    hooks["hookCount"] = float("inf")
+    write(tmp_path / "s1.jsonl", [prompt(at(0)), line("m1", text(40), ts=at(0)), hooks,
+                                  turn_duration(at(30), float("inf"), float("nan"), uuid="d1")])
+    tables = parse_all(tmp_path)
+    assert tables.hook_runs["hook_count"].tolist() == [0]
+    assert tables.durations[["duration_ms", "message_count"]].values.tolist() == [[0.0, 0]]
+
+
 def test_compaction_boundaries_become_compactions_and_still_mark_the_next_turn(tmp_path):
     write(tmp_path / "s1.jsonl", [
         prompt(at(0)), line("m1", text(40), ts=at(0)),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass, field
@@ -523,12 +524,15 @@ def add_ratios(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _num(v: Any) -> float:
+    """`v` as a number; 0.0 when it isn't one, including Infinity and NaN, which JSON
+    parsing accepts."""
     try:
         if v is None:
             return 0.0
-        return float(v)
-    except (TypeError, ValueError):
+        number = float(v)
+    except (TypeError, ValueError, OverflowError):
         return 0.0
+    return number if math.isfinite(number) else 0.0
 
 
 # ---------------------------------------------------------------------------
