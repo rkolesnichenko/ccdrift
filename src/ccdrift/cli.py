@@ -55,8 +55,12 @@ def build_parser() -> argparse.ArgumentParser:
     peek_command = commands.add_parser("peek", help="show the first response and the fields ccdrift reads from it")
     _add_source(peek_command)
 
-    report = commands.add_parser("report", help="recent daily metrics and flags: the details behind an alert")
-    report.add_argument("--days", type=int, default=21, help="how many recent days to list (default: 21)")
+    report = commands.add_parser("report", help="recent days or Claude Code versions, incidents and settings")
+    report.add_argument("--days", type=int, default=None,
+                        help="how many recent days to cover (default: 21 by day, all by version)")
+    report.add_argument("--by", choices=["day", "version"], default="day",
+                        help="one row per day (default) or per Claude Code version")
+    report.add_argument("--json", action="store_true", help="print the report as JSON")
     _add_source(report)
     _add_state(report)
 
@@ -170,7 +174,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.command == "peek":
         return 0 if peek(_source(args)) else 2
     if args.command == "report":
-        return run_report(_source(args), _state(args), days=args.days)
+        return run_report(_source(args), _state(args), days=args.days, by=args.by, as_json=args.json)
     if args.command == "incident":
         return _incident(args)
     if args.command == "schedule":
