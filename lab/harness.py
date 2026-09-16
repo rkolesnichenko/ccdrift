@@ -371,6 +371,11 @@ def plot_cusum_curve(curve: pd.DataFrame, out_dir: Path) -> Path:
 # Synthetic log generator — makes the harness runnable with zero real data
 # ---------------------------------------------------------------------------
 
+# Synthetic logs start on a fixed day. Anchored to the current time, the UTC day
+# each session fell on changed with the hour the tests ran, and so did results.
+SYNTHETIC_START = datetime(2026, 7, 1, tzinfo=timezone.utc)
+
+
 def generate_synthetic(out_dir: Path, days: int = 40, seed: int = 1) -> Path:
     """Write realistic-ish JSONL mimicking ~/.claude/projects/<proj>/<sess>.jsonl,
     shaped like real logs: one line per content block sharing the response's
@@ -381,7 +386,7 @@ def generate_synthetic(out_dir: Path, days: int = 40, seed: int = 1) -> Path:
     rng = random.Random(seed)
     proj = out_dir / "synthetic-project"
     proj.mkdir(parents=True, exist_ok=True)
-    start = datetime.now(timezone.utc) - timedelta(days=days)
+    start = SYNTHETIC_START
 
     for d in range(days):
         day0 = start + timedelta(days=d)

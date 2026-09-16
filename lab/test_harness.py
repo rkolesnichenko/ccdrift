@@ -186,3 +186,20 @@ def test_since_and_until_limit_the_days_analyzed(tmp_path):
     main(["--source", str(tmp_path / "logs"), "--out", str(tmp_path / "out"),
                   "--since", "2026-09-02", "--until", "2026-09-02"])
     assert pd.read_csv(tmp_path / "out" / "metrics.csv")["bin"].tolist() == ["2026-09-02"]
+
+
+def test_synthetic_logs_are_the_same_whenever_they_are_generated(tmp_path, monkeypatch):
+    # They started at the current time, so the UTC day each session landed on
+    # changed with the hour: at 06:00 UTC one planted effort drop went uncaught.
+    import lab.harness
+    first = parse_source(generate_synthetic(tmp_path / "a", days=3, seed=1))
+
+    class LaterClock(lab.harness.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return lab.harness.datetime(2030, 1, 1, 6, 0, tzinfo=tz)
+
+    monkeypatch.setattr(lab.harness, "datetime", LaterClock)
+    second = parse_source(generate_synthetic(tmp_path / "b", days=3, seed=1))
+    assert first["timestamp"].tolist() == second["timestamp"].tolist()
+    assert first["day"].iloc[0] == "2026-07-01"
