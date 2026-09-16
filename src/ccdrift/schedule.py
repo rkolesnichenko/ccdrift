@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional
@@ -22,6 +23,7 @@ from ccdrift.state import ccdrift_home
 LAUNCHD_LABEL = "io.github.rkolesnichenko.ccdrift"
 SYSTEMD_UNIT = "ccdrift-check"
 CRON_MARKER = "# ccdrift check"
+BOOTSTRAP_ATTEMPTS = 5
 
 Run = Callable[..., subprocess.CompletedProcess]
 
@@ -135,8 +137,10 @@ class Launchd:
 
     name = "launchd"
 
-    def __init__(self, run: Run = run_command, home: Optional[Path] = None, uid: Optional[int] = None):
+    def __init__(self, run: Run = run_command, home: Optional[Path] = None, uid: Optional[int] = None,
+                 sleep: Callable[[float], None] = time.sleep):
         self.run = run
+        self.sleep = sleep
         self.plist = (home or Path.home()) / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
         self.domain = f"gui/{os.getuid() if uid is None else uid}"
         self.service = f"{self.domain}/{LAUNCHD_LABEL}"
@@ -145,18 +149,41 @@ class Launchd:
         return []
 
     def install(self, job: Job) -> None:
-        """Write and load the agent, then start a first run. On failure, unload and
-        delete it and raise ScheduleError."""
+        """Write and load the agent, then start a first run. On failure, unload it, put
+        back the agent it replaced or delete it when there was none, and raise
+        ScheduleError."""
+        previous = self.plist.read_bytes() if self.plist.exists() else None
         self.run(["launchctl", "bootout", self.service])  # replaces a loaded agent; fails harmlessly otherwise
         self.plist.parent.mkdir(parents=True, exist_ok=True)
         self.plist.write_text(launchd_plist(job))
         try:
-            _checked(self.run, ["launchctl", "bootstrap", self.domain, str(self.plist)])
+            self._bootstrap()
             _checked(self.run, ["launchctl", "kickstart", self.service])
-        except ScheduleError:
+        except ScheduleError as exc:
             self.run(["launchctl", "bootout", self.service])
-            self.plist.unlink(missing_ok=True)
-            raise
+            if previous is None:
+                self.plist.unlink(missing_ok=True)
+                raise
+            self.plist.write_bytes(previous)
+            try:
+                self._bootstrap()
+            except ScheduleError:
+                raise ScheduleError(f"{exc}. The job installed before is back in place but didn't load; "
+                                    "`ccdrift schedule status` shows it.") from exc
+            raise ScheduleError(f"{exc}. The job installed before is back in place.") from exc
+
+    def _bootstrap(self) -> None:
+        """Load the agent. bootout can return while the agent it unloads, or a check
+        that agent runs, is still going, and bootstrap fails until it is gone, so a
+        failure is tried again for a few seconds."""
+        argv = ["launchctl", "bootstrap", self.domain, str(self.plist)]
+        for attempt in range(BOOTSTRAP_ATTEMPTS):
+            if attempt:
+                self.sleep(1)
+            result = self.run(argv)
+            if result.returncode == 0:
+                return
+        raise ScheduleError(_failure(argv, result))
 
     def remove(self) -> bool:
         if not self.plist.exists():
@@ -234,8 +261,10 @@ class Systemd:
                 "(loginctl enable-linger)."]
 
     def install(self, job: Job) -> None:
-        """Write both units, enable the timer and start a first run. On failure,
-        disable and delete them and raise ScheduleError."""
+        """Write both units, enable the timer and start a first run. On failure, put
+        back the units they replaced, or disable and delete them when there were none,
+        and raise ScheduleError."""
+        previous = {path: path.read_text() for path in (self.timer, self.service) if path.exists()}
         self.unit_dir.mkdir(parents=True, exist_ok=True)
         for name, text in systemd_units(job).items():
             (self.unit_dir / name).write_text(text)
@@ -243,9 +272,20 @@ class Systemd:
             _checked(self.run, ["systemctl", "--user", "daemon-reload"])
             _checked(self.run, ["systemctl", "--user", "enable", "--now", self.timer.name])
             _checked(self.run, ["systemctl", "--user", "start", "--no-block", self.service.name])
-        except ScheduleError:
-            self._delete()
-            raise
+        except ScheduleError as exc:
+            if self.timer not in previous:
+                self._delete()
+                raise
+            for path in (self.timer, self.service):
+                if path in previous:
+                    path.write_text(previous[path])
+                else:
+                    path.unlink(missing_ok=True)
+            self.run(["systemctl", "--user", "daemon-reload"])
+            if self.run(["systemctl", "--user", "enable", "--now", self.timer.name]).returncode != 0:
+                raise ScheduleError(f"{exc}. The job installed before is back in place but couldn't be enabled; "
+                                    "`ccdrift schedule status` shows it.") from exc
+            raise ScheduleError(f"{exc}. The job installed before is back in place.") from exc
 
     def _delete(self) -> None:
         self.run(["systemctl", "--user", "disable", "--now", self.timer.name])
@@ -330,13 +370,14 @@ class Cron:
 
     def install(self, job: Job) -> None:
         """Replace ccdrift's crontab line, keeping every other line. Cron can't start a
-        run on demand, so the job's command also runs once now, in the background."""
-        kept = [line for line in self._lines() if not self._ours(line)]
-        self._write(kept + [cron_line(job)])
+        run on demand, so the job's command also runs once now, in the background. When
+        it can't, the crontab is put back as it was."""
+        lines = self._lines()
+        self._write([line for line in lines if not self._ours(line)] + [cron_line(job)])
         try:
             self.spawn(job.argv(), job.log)
         except OSError as exc:
-            self._write(kept)
+            self._write(lines)
             raise ScheduleError(f"couldn't start a first run: {exc}") from exc
 
     def remove(self) -> bool:
@@ -355,9 +396,13 @@ class Cron:
         schedule = "every hour" if hour == "*" else f"daily at {int(hour):02d}:{int(minute):02d}"
         lines = [f"installed: crontab line, {schedule}",
                  "cron keeps no run history; the log shows each run"]
-        log = re.search(r">> (.+) 2>&1 " + re.escape(CRON_MARKER), ours[0])
-        if log:
-            lines.append(last_log_line(Path(shlex.split(log.group(1).replace("\\%", "%"))[0])))
+        # The line ends `>> LOG 2>&1 # ccdrift check`; an --exec command can hold `>> ` too.
+        try:
+            words = shlex.split(ours[0].replace("\\%", "%"))
+        except ValueError:
+            words = []
+        if len(words) >= 6 and words[-6] == ">>":
+            lines.append(last_log_line(Path(words[-5])))
         return lines
 
 

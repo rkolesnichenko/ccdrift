@@ -29,9 +29,9 @@ class FakeRun:
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
 
-def launchd(tmp_path, results=None):
+def launchd(tmp_path, results=None, sleep=lambda seconds: None):
     run = FakeRun(results)
-    return run, Launchd(run=run, home=tmp_path, uid=501)
+    return run, Launchd(run=run, home=tmp_path, uid=501, sleep=sleep)
 
 
 def job_for(tmp_path):
@@ -102,6 +102,26 @@ def test_launchd_install_leaves_nothing_behind_when_loading_fails(tmp_path):
         backend.install(job_for(tmp_path))
     assert not (tmp_path / "Library" / "LaunchAgents" / "io.github.rkolesnichenko.ccdrift.plist").exists()
     assert run.calls[-1] == ["launchctl", "bootout", "gui/501/io.github.rkolesnichenko.ccdrift"]
+
+
+def test_launchd_install_waits_for_the_agent_it_replaces_to_unload(tmp_path):
+    # bootout can return while the old agent, or a check it runs, is still going; bootstrap then fails.
+    run, backend = launchd(tmp_path, sleep=lambda seconds: run.results.clear())
+    run.results[("launchctl", "bootstrap")] = (5, "")
+    backend.install(job_for(tmp_path))
+    assert [argv[1] for argv in run.calls] == ["bootout", "bootstrap", "bootstrap", "kickstart"]
+
+
+def test_a_failed_launchd_reinstall_puts_back_the_agent_it_replaced(tmp_path):
+    run, backend = launchd(tmp_path)
+    backend.install(make_job("09:00", notify=True, python="/venv/bin/python", environ={}))
+    before = backend.plist.read_bytes()
+    run.results[("launchctl", "kickstart")] = (1, "")
+    run.calls.clear()
+    with pytest.raises(ScheduleError, match="The job installed before is back in place"):
+        backend.install(job_for(tmp_path))
+    assert backend.plist.read_bytes() == before
+    assert run.calls[-1] == ["launchctl", "bootstrap", "gui/501", str(backend.plist)]
 
 
 def test_launchd_remove_unloads_the_agent_and_deletes_it(tmp_path):
@@ -284,6 +304,19 @@ def test_systemd_install_leaves_nothing_behind_when_enabling_fails(tmp_path):
     assert list((tmp_path / "config" / "systemd" / "user").iterdir()) == []
 
 
+def test_a_failed_systemd_reinstall_puts_back_the_units_it_replaced(tmp_path):
+    run, backend = systemd(tmp_path)
+    backend.install(make_job("09:00", notify=True, python="/venv/bin/python", environ={}))
+    before = {path.name: path.read_text() for path in (backend.timer, backend.service)}
+    run.results[("systemctl", "--user", "start")] = (1, "")
+    run.calls.clear()
+    with pytest.raises(ScheduleError, match="The job installed before is back in place"):
+        backend.install(make_job(None, notify=False, python="/venv/bin/python", environ={}))
+    assert {path.name: path.read_text() for path in (backend.timer, backend.service)} == before
+    assert run.calls[-2:] == [["systemctl", "--user", "daemon-reload"],
+                              ["systemctl", "--user", "enable", "--now", "ccdrift-check.timer"]]
+
+
 def test_systemd_remove_disables_the_timer_and_deletes_both_units(tmp_path):
     run, backend = systemd(tmp_path)
     backend.install(job_for(tmp_path))
@@ -355,6 +388,18 @@ def test_cron_install_starts_a_table_when_there_is_none(tmp_path):
     assert table.table == cron_line(job) + "\n"
 
 
+def test_a_failed_cron_reinstall_keeps_the_line_it_would_replace(tmp_path):
+    table = FakeCrontab("0 1 * * * backup.sh\n0 9 * * * old-command >> old.log 2>&1 # ccdrift check\n")
+    before = table.table
+
+    def spawn(argv, log):
+        raise OSError("no such python")
+
+    with pytest.raises(ScheduleError, match="couldn't start a first run"):
+        Cron(run=table, spawn=spawn).install(job_for(tmp_path))
+    assert table.table == before
+
+
 def test_cron_remove_deletes_only_its_line():
     table = FakeCrontab("0 1 * * * backup.sh\n0 9 * * * x >> y 2>&1 # ccdrift check\n")
     assert Cron(run=table).remove() is True
@@ -377,6 +422,15 @@ def test_cron_status_shows_the_time_and_the_last_log_line(tmp_path):
         "cron keeps no run history; the log shows each run",
         "last log line: [check 2026-09-16 09:00] no new flags",
     ]
+
+
+def test_cron_status_finds_the_log_when_the_exec_command_appends_to_a_file(tmp_path):
+    job = make_job("09:00", notify=False, exec_command='echo "$CCDRIFT_MESSAGE" >> ~/alerts.txt',
+                   python="/venv/bin/python", environ={"CCDRIFT_HOME": str(tmp_path / "data")})
+    job.log.parent.mkdir(parents=True)
+    job.log.write_text("[check 2026-09-16 09:00] no alerts\n")
+    assert Cron(run=FakeCrontab(cron_line(job) + "\n")).status()[-1] == \
+        "last log line: [check 2026-09-16 09:00] no alerts"
 
 
 def test_linux_with_a_systemd_user_session_gets_systemd():

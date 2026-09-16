@@ -56,7 +56,8 @@ ccdrift schedule status                          # installed? how did the last r
 
 On macOS this adds a launchd agent. On Linux it adds a systemd user timer, or a
 crontab line where systemd user sessions aren't available. Installing again replaces
-the job. On Windows, run `ccdrift check` from Task Scheduler instead.
+the job, and keeps the old one when the new one can't be set up. On Windows, run
+`ccdrift check` from Task Scheduler instead.
 
 Hourly runs let ccdrift warn about cache misses within hours, once its history holds
 200 or more new prompts in the two weeks before the latest week; the full verdict still
