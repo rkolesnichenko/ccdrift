@@ -30,7 +30,8 @@ more from day to day than a 70% cut in thinking moves it. See
 [docs/findings.md](docs/findings.md).
 
 Everything stays on your machine. ccdrift reads the transcripts and keeps a state
-file, a log and its own history of responses in `~/.ccdrift`. The history holds token
+file, a log, its own history of responses and, once a failing check has notified you,
+the time it did (`check-state.json.last-failure-notice`) in `~/.ccdrift`. The history holds token
 counts, models, versions and settings, plus each transcript's path (which includes
 your project folder names) and session id; no prompt or response text. ccdrift sends
 nothing anywhere, unless you give it a command to run with `--exec`.
@@ -57,13 +58,16 @@ On macOS this adds a launchd agent. On Linux it adds a systemd user timer, or a
 crontab line where systemd user sessions aren't available. Installing again replaces
 the job. On Windows, run `ccdrift check` from Task Scheduler instead.
 
-Hourly runs let ccdrift warn about cache misses within hours; the full verdict still
+Hourly runs let ccdrift warn about cache misses within hours, once its history holds
+200 or more new prompts in the two weeks before the latest week; the full verdict still
 takes days. Upgrading from 0.2.0, run `ccdrift schedule install` again: the job 0.2.0
 installed keeps running once a day until you do.
 
 Claude Code deletes transcripts after 30 days by default. From its first run on,
 ccdrift keeps its own history of every response it has read, so later deletions don't
-affect it; the history grows by about 65 MB a year for a heavy user. Its first run
+affect it; the history grows by about 65 MB a year for a heavy user. Each check reads
+its last 90 days (more while it follows an older incident); `ccdrift report` and
+`ccdrift incident list` read all of it. Its first run
 can only see what's still on disk, and it judges each day against the 14 before it.
 To give that first run more to go on, and to keep transcripts for your own digging,
 set this in `~/.claude/settings.json`:
@@ -187,7 +191,8 @@ Every run also follows new-prompt turns one by one with a likelihood-ratio CUSUM
 tests the usual miss rate of the 14 days before the last week against 5%, the August
 regression's rate. It warns when the sum passes h = 4 (measured in
 [lab/early_warning.py](lab/early_warning.py)) within the last day, at most once a
-week, and not while a cache incident is open.
+week, and not while a cache incident is open. It needs 200 or more new-prompt turns in
+those 14 days, so it stays quiet for the first three weeks or so of history.
 
 A session's start is the prompt size (input plus cache tokens) of its first response.
 The latest 3 sessions are compared with the 10 before them: a change is at least 25%,
