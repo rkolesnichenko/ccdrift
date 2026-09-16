@@ -6,6 +6,7 @@ from datetime import date
 import pytest
 
 from ccdrift.cli import main
+from ccdrift.history import load_history
 from ccdrift.logs import judged_turns
 from ccdrift.report import daily_rows, run_report, version_key
 from tests.helpers import HAIKU, QUIET, busy_days, daily_turns, damage_responses_table, main_thread_days
@@ -79,8 +80,8 @@ def test_report_explains_an_unreadable_state_file(tmp_path, capsys):
 
 def test_report_explains_a_history_store_whose_rows_cant_be_read(tmp_path, capsys):
     main_thread_days(tmp_path / "logs", [{}] * 3)
-    run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4))
-    capsys.readouterr()
+    # report no longer claims a store on its own; build one the way the check would.
+    load_history(tmp_path / "logs", tmp_path / "state.json", claim=True)
     damage_responses_table(tmp_path / "history.sqlite")
     assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4)) == 1
     captured = capsys.readouterr()
