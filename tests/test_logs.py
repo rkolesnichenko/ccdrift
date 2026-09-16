@@ -1,11 +1,12 @@
 """Parsing Claude Code transcripts into responses and their metric columns."""
 
+import pandas as pd
 import pytest
 
 from ccdrift.detector import bin_metrics
-from ccdrift.logs import parse_source
+from ccdrift.logs import parse_durations, parse_source
 from tests.helpers import (DAY, at, compact_boundary, line, prompt, response, text, thinking,
-                           tool_result, write)
+                           tool_result, turn_duration, write)
 
 
 def test_split_lines_of_one_response_become_one_turn(tmp_path):
@@ -126,3 +127,80 @@ def test_idle_gap_is_measured_within_one_transcript(tmp_path):
           [line("m2", text(40), ts=at(600), sidechain=True)])
     df = parse_source(tmp_path)
     assert df.loc[~df["is_sidechain"], "gap_seconds"].dropna().tolist() == [1200]
+
+
+def test_responses_carry_the_version_entrypoint_and_settings_claude_code_logged(tmp_path):
+    write(tmp_path / "s1.jsonl", [
+        line("m1", thinking(40), ts=at(0)),
+        line("m1", text(40), ts=at(1), version="2.1.233", entrypoint="cli", effort="xhigh",
+             speed="standard", service_tier="standard"),
+    ])
+    row = parse_source(tmp_path).iloc[0]
+    assert (row["version"], row["entrypoint"], row["effort"], row["speed"], row["service_tier"]) == \
+        ("2.1.233", "cli", "xhigh", "standard", "standard")
+
+
+def test_settings_missing_from_older_versions_are_left_empty(tmp_path):
+    write(tmp_path / "s1.jsonl", [line("m1", text(40), ts=at(0))])
+    row = parse_source(tmp_path).iloc[0]
+    assert row["version"] is None and row["effort"] is None
+
+
+def test_cache_writes_are_split_into_the_1_hour_and_5_minute_tiers(tmp_path):
+    # Claude Code writes the main thread's cache for an hour and subagents' and
+    # Agent SDK sessions' for 5 minutes.
+    write(tmp_path / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), cache_creation=900, cache_1h=900, cache_5m=0),
+        line("m2", text(40), ts=at(60), cache_creation=900, cache_1h=0, cache_5m=900),
+        line("m3", text(40), ts=at(120), cache_read=900, cache_1h=0, cache_5m=0),
+        line("m4", text(40), ts=at(180), cache_creation=900),
+    ])
+    assert parse_source(tmp_path)["cache_tier"].tolist() == ["1h", "5m", None, None]
+
+
+def test_logged_thinking_tokens_are_read_from_the_final_line(tmp_path):
+    write(tmp_path / "s1.jsonl", [
+        line("m1", thinking(400), ts=at(0)),
+        line("m1", text(40), ts=at(1), thinking_logged=130),
+        line("m2", text(40), ts=at(60)),
+    ])
+    logged = parse_source(tmp_path)["thinking_logged"].tolist()
+    assert logged[0] == 130.0
+    assert pd.isna(logged[1])
+
+
+def test_a_miss_is_a_prompt_turn_that_reads_under_half_its_input_from_cache(tmp_path):
+    # Misses are all-or-nothing: in real logs cutoffs of 0.3, 0.5 and 0.8
+    # selected 2.82%, 2.82% and 2.88% of prompt turns.
+    write(tmp_path / "s1.jsonl", [
+        prompt(at(0)),   line("m1", text(40), ts=at(0),   cache_creation=1000),
+        prompt(at(60)),  line("m2", text(40), ts=at(60),  cache_read=400, cache_creation=600),
+        prompt(at(120)), line("m3", text(40), ts=at(120), cache_read=990, cache_creation=10),
+    ])
+    assert parse_source(tmp_path)["is_miss"].tolist() == [False, True, False]
+
+
+def test_a_response_in_two_transcripts_counts_from_the_path_that_sorts_first(tmp_path):
+    # Paths compare as strings, so "a-b.jsonl" comes before "a/b.jsonl"; the
+    # history store relies on the same order.
+    rec = line("m1", text(40), ts=at(0))
+    write(tmp_path / "a" / "b.jsonl", [rec])
+    write(tmp_path / "a-b.jsonl", [rec])
+    assert parse_source(tmp_path)["source_file"].tolist() == ["a-b.jsonl"]
+
+
+def test_every_response_in_a_transcript_takes_its_first_session_id(tmp_path):
+    write(tmp_path / "s1.jsonl", [line("m1", text(40), ts=at(0), sid="first"),
+                                  line("m2", text(40), ts=at(60), sid="second")])
+    assert parse_source(tmp_path)["session_id"].tolist() == ["first", "first"]
+
+
+def test_turn_durations_are_read_with_their_day_and_version(tmp_path):
+    write(tmp_path / "s1.jsonl", [
+        prompt(at(0)), line("m1", text(40), ts=at(0)),
+        turn_duration(at(90), 90000, 3, uuid="d1", version="2.1.233"),
+        turn_duration(at(DAY), 30000, 1),
+    ])
+    durations = parse_durations(tmp_path)
+    assert durations[["day", "version", "duration_ms", "message_count"]].values.tolist() == [
+        ["2026-09-01", "2.1.233", 90000.0, 3], ["2026-09-02", "2.1.226", 30000.0, 1]]

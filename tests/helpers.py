@@ -23,15 +23,28 @@ def thinking(signature_chars: int) -> dict:
 
 
 def line(mid, block, *, ts, sid="s1", out=100, cache_read=0, cache_creation=0,
-         model="claude-opus-5", sidechain=False):
+         model="claude-opus-5", sidechain=False, version=None, entrypoint=None, effort=None,
+         cache_1h=None, cache_5m=None, thinking_logged=None, speed=None, service_tier=None):
     """One JSONL line as Claude Code writes it: a single content block, with the
-    response's message.id and usage repeated on every line of that response."""
-    msg = {"role": "assistant", "model": model, "content": [block],
-           "usage": {"input_tokens": 10, "output_tokens": out,
-                     "cache_read_input_tokens": cache_read,
-                     "cache_creation_input_tokens": cache_creation}}
+    response's message.id and usage repeated on every line of that response.
+    Fields left as None are left out, as older Claude Code versions do."""
+    usage = {"input_tokens": 10, "output_tokens": out,
+             "cache_read_input_tokens": cache_read,
+             "cache_creation_input_tokens": cache_creation}
+    if cache_1h is not None or cache_5m is not None:
+        usage["cache_creation"] = {"ephemeral_1h_input_tokens": cache_1h or 0,
+                                   "ephemeral_5m_input_tokens": cache_5m or 0}
+    if thinking_logged is not None:
+        usage["output_tokens_details"] = {"thinking_tokens": thinking_logged}
+    for name, value in (("speed", speed), ("service_tier", service_tier)):
+        if value is not None:
+            usage[name] = value
+    msg = {"role": "assistant", "model": model, "content": [block], "usage": usage}
     rec = {"type": "assistant", "timestamp": ts, "sessionId": sid,
            "isSidechain": sidechain, "message": msg}
+    for name, value in (("version", version), ("entrypoint", entrypoint), ("effort", effort)):
+        if value is not None:
+            rec[name] = value
     if mid is not None:
         msg["id"] = mid
         rec["requestId"] = f"req_{mid}"
@@ -57,6 +70,16 @@ def tool_result(ts, sid="s1", sidechain=False):
 
 def compact_boundary(ts, sid="s1"):
     return {"type": "system", "subtype": "compact_boundary", "timestamp": ts, "sessionId": sid}
+
+
+def turn_duration(ts, duration_ms, message_count, sid="s1", uuid=None, version="2.1.226", entrypoint="cli"):
+    """The record Claude Code writes when a main-thread turn ends."""
+    rec = {"type": "system", "subtype": "turn_duration", "timestamp": ts, "sessionId": sid,
+           "isSidechain": False, "isMeta": False, "entrypoint": entrypoint, "version": version,
+           "durationMs": duration_ms, "messageCount": message_count}
+    if uuid is not None:
+        rec["uuid"] = uuid
+    return rec
 
 
 def write(path, records):
