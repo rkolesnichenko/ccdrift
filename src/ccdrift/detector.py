@@ -95,11 +95,14 @@ def baseline_bins(i: int, excluded: np.ndarray, window: int) -> list[int]:
 def pooled_z(metrics: pd.DataFrame, metric: str, bins: Sequence[int], baseline: Sequence[int]) -> float:
     """Robust z of the turn-weighted mean over `bins`, scored against the `baseline`
     bins as one bin of their summed turns would be. Pooling days keeps a day with
-    few turns, or one stray miss, from deciding on its own."""
+    few turns, or one stray miss, from deciding on its own. Days without a value
+    (NaN, e.g. no new-prompt turns that day) are left out of both `bins` and
+    `baseline`."""
     vals = metrics[metric].to_numpy(dtype=float)
     counts = metrics[f"{metric}__n"].to_numpy(dtype=float)
     variances = metrics[f"{metric}__var"].to_numpy(dtype=float)
-    bins, baseline = list(bins), list(baseline)
+    bins = [j for j in bins if not np.isnan(vals[j])]
+    baseline = [j for j in baseline if not np.isnan(vals[j])]
     n = float(counts[bins].sum())
     value = float((vals[bins] * counts[bins]).sum() / max(n, 1.0))
     return _robust_z(value, vals[baseline], counts[baseline], variances[baseline], n)

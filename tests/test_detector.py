@@ -88,3 +88,20 @@ def test_pooled_z_scores_days_together_weighted_by_their_turns():
                     for c in ("haiku_fraction", "haiku_fraction__n", "haiku_fraction__var"))
     expected = _robust_z(20 / 800, vals[:14], n[:14], var[:14], 800)
     assert pooled_z(metrics, "haiku_fraction", [14, 15], list(range(14))) == pytest.approx(expected)
+
+
+def test_pooled_z_leaves_out_days_without_a_value():
+    # A day with no new-prompt turns has a NaN cache ratio and 0 turns; it must
+    # not turn the whole pooled score into NaN.
+    clean = {"prompt_cache_read_ratio": [0.9] * 40}
+    blank = {"prompt_cache_read_ratio": [float("nan")] * 400}
+    days = [clean] * 5 + [blank] + [clean] * 8 + [clean, blank]
+    metrics = bin_metrics(daily_turns(days))
+    bins, baseline = [14, 15], list(range(14))
+    vals = metrics["cache_ratio"].to_numpy(dtype=float)
+    kept_bins = [j for j in bins if not np.isnan(vals[j])]
+    kept_baseline = [j for j in baseline if not np.isnan(vals[j])]
+    assert kept_bins != bins and kept_baseline != baseline
+    scored = pooled_z(metrics, "cache_ratio", bins, baseline)
+    assert scored == pytest.approx(pooled_z(metrics, "cache_ratio", kept_bins, kept_baseline))
+    assert not np.isnan(scored)
