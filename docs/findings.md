@@ -12,6 +12,8 @@ From one developer's Claude Code logs, Aug 6 - Sep 15, 2026. Aggregate numbers o
 
 - **Early warning on cache misses: works.** A Bernoulli likelihood-ratio CUSUM on new-prompt misses (usual rate against 5%) with h = 4 raised 0 false alarms on the clean days, caught a planted 5% miss rate in a median of 26 new-prompt turns (38 of 40 runs), and alarmed on the real regression at 2026-08-18 21:55 UTC, 4 days before the daily check's alert. G3 passes, so the check runs hourly and warns within hours.
 
+- **Subagent models: no built-in agent keeps one model steadily enough.** Of 7 agent types other than general-purpose — 4 of Claude Code's own (Plan, Explore, claude-code-guide, statusline-setup) and 3 other agent types — none had 5 or more days with 5+ responses and one model on 90% or more of them; the closest was Plan, with only 1 such day (100% on Opus 5), and Explore's busiest 2 days ran 56% on Sonnet 5. A caller can pick any subagent's model, so ccdrift only reports subagent models. G7 fails.
+
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
 
 Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).
