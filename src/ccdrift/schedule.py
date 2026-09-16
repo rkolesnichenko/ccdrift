@@ -1,4 +1,4 @@
-"""Run the daily check once a day: launchd on macOS, a systemd user timer or cron on
+"""Run the check every hour or once a day: launchd on macOS, a systemd user timer or cron on
 Linux. Every scheduler command goes through a `run` callable, so tests can stand in
 for the real system."""
 
@@ -55,8 +55,8 @@ class Job:
     when the schedule was installed, since schedulers don't see shell variables."""
 
     python: str
-    hour: int
-    minute: int
+    hour: Optional[int]
+    minute: Optional[int]  # both None: every hour
     notify: bool
     log: Path
     source: Optional[Path] = None
@@ -75,6 +75,13 @@ class Job:
             args += ["--exec", self.exec_command]
         return args
 
+    @property
+    def hourly(self) -> bool:
+        return self.hour is None
+
+    def when(self) -> str:
+        return "every hour" if self.hourly else f"daily at {self.hour:02d}:{self.minute:02d}"
+
 
 def parse_at(text: str) -> tuple[int, int]:
     """'09:00' -> (9, 0). Raises ValueError for anything but a 24-hour HH:MM time."""
@@ -84,9 +91,9 @@ def parse_at(text: str) -> tuple[int, int]:
     return int(match.group(1)), int(match.group(2))
 
 
-def make_job(at: str, notify: bool, source: Optional[str] = None, exec_command: Optional[str] = None,
+def make_job(at: Optional[str], notify: bool, source: Optional[str] = None, exec_command: Optional[str] = None,
              environ: Mapping[str, str] = os.environ, python: str = sys.executable) -> Job:
-    hour, minute = parse_at(at)
+    hour, minute = parse_at(at) if at is not None else (None, None)
     if source:
         source_path: Optional[Path] = Path(source).expanduser().absolute()
     elif environ.get("CLAUDE_CONFIG_DIR"):
@@ -108,10 +115,12 @@ def last_log_line(log: Path) -> str:
 
 
 def launchd_plist(job: Job) -> str:
+    when = ({"StartInterval": 3600} if job.hourly
+            else {"StartCalendarInterval": {"Hour": job.hour, "Minute": job.minute}})
     return plistlib.dumps({
         "Label": LAUNCHD_LABEL,
         "ProgramArguments": job.argv(),
-        "StartCalendarInterval": {"Hour": job.hour, "Minute": job.minute},
+        **when,
         "StandardOutPath": str(job.log),
         "StandardErrorPath": str(job.log),
     }, sort_keys=False).decode()
@@ -156,8 +165,9 @@ class Launchd:
         if not self.plist.exists():
             return ["not installed"]
         job = plistlib.loads(self.plist.read_bytes())
-        when = job["StartCalendarInterval"]
-        lines = [f"installed: launchd agent {LAUNCHD_LABEL}, daily at {when['Hour']:02d}:{when['Minute']:02d}"]
+        when = job.get("StartCalendarInterval")
+        schedule = f"daily at {when['Hour']:02d}:{when['Minute']:02d}" if when else "every hour"
+        lines = [f"installed: launchd agent {LAUNCHD_LABEL}, {schedule}"]
         printed = self.run(["launchctl", "print", self.service])
         if printed.returncode != 0:
             lines.append("not loaded; run `ccdrift schedule install` again")
@@ -175,12 +185,12 @@ def _systemd_quote(arg: str) -> str:
 
 
 def systemd_units(job: Job) -> dict[str, str]:
-    """The service and timer files for a systemd user timer that runs `job` daily."""
+    """The service and timer files for a systemd user timer that runs `job` every hour or daily."""
     command = " ".join(_systemd_quote(arg) for arg in job.argv())
     log = str(job.log).replace("%", "%%")
     service = (
         "[Unit]\n"
-        "Description=ccdrift daily check\n"
+        "Description=ccdrift check\n"
         "\n"
         "[Service]\n"
         "Type=oneshot\n"
@@ -190,10 +200,10 @@ def systemd_units(job: Job) -> dict[str, str]:
     )
     timer = (
         "[Unit]\n"
-        "Description=Run the ccdrift daily check\n"
+        "Description=Run the ccdrift check\n"
         "\n"
         "[Timer]\n"
-        f"OnCalendar=*-*-* {job.hour:02d}:{job.minute:02d}:00\n"
+        f"OnCalendar={'hourly' if job.hourly else f'*-*-* {job.hour:02d}:{job.minute:02d}:00'}\n"
         "Persistent=true\n"
         "\n"
         "[Install]\n"
@@ -248,9 +258,13 @@ class Systemd:
     def status(self) -> list[str]:
         if not self.timer.exists():
             return ["not installed"]
-        when = re.search(r"^OnCalendar=\*-\*-\* (\d\d:\d\d):00$", self.timer.read_text(), re.MULTILINE)
-        lines = [f"installed: systemd timer {self.timer.name}, "
-                 f"daily at {when.group(1) if when else 'an unreadable time'}"]
+        text = self.timer.read_text()
+        daily = re.search(r"^OnCalendar=\*-\*-\* (\d\d:\d\d):00$", text, re.MULTILINE)
+        if re.search(r"^OnCalendar=hourly$", text, re.MULTILINE):
+            schedule = "every hour"
+        else:
+            schedule = f"daily at {daily.group(1) if daily else 'an unreadable time'}"
+        lines = [f"installed: systemd timer {self.timer.name}, {schedule}"]
         enabled = self.run(["systemctl", "--user", "is-enabled", self.timer.name])
         lines.append(f"enabled: {(enabled.stdout or '').strip() or 'unknown'}")
         shown = self.run(["systemctl", "--user", "show", self.service.name,
@@ -265,10 +279,11 @@ class Systemd:
 
 
 def cron_line(job: Job) -> str:
-    """A crontab line that runs `job` daily, appending its output to the log."""
+    """A crontab line that runs `job` every hour or daily, appending its output to the log."""
     command = " ".join(shlex.quote(arg) for arg in job.argv()).replace("%", "\\%")
     log = shlex.quote(str(job.log)).replace("%", "\\%")
-    return f"{job.minute} {job.hour} * * * {command} >> {log} 2>&1 {CRON_MARKER}"
+    timing = "0 * * * *" if job.hourly else f"{job.minute} {job.hour} * * *"
+    return f"{timing} {command} >> {log} 2>&1 {CRON_MARKER}"
 
 
 def _spawn(argv: list[str], log: Path) -> None:
@@ -333,7 +348,8 @@ class Cron:
         if not ours:
             return ["not installed"]
         minute, hour = ours[0].split()[:2]
-        lines = [f"installed: crontab line, daily at {int(hour):02d}:{int(minute):02d}",
+        schedule = "every hour" if hour == "*" else f"daily at {int(hour):02d}:{int(minute):02d}"
+        lines = [f"installed: crontab line, {schedule}",
                  "cron keeps no run history; the log shows each run"]
         log = re.search(r">> (.+) 2>&1 " + re.escape(CRON_MARKER), ours[0])
         if log:
@@ -347,8 +363,7 @@ def install(job: Job, backend, send: Callable[[str, str], None] = send_notificat
     job.log.parent.mkdir(parents=True, exist_ok=True)
     backend.install(job)
     if job.notify:
-        send("ccdrift", f"The daily check will run at {job.hour:02d}:{job.minute:02d}. "
-                        "Alerts will look like this.")
+        send("ccdrift", f"The check will run {job.when()}. Alerts will look like this.")
 
 
 def choose_backend(platform: str = sys.platform, run: Run = run_command,

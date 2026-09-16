@@ -102,16 +102,17 @@ def build_parser() -> argparse.ArgumentParser:
     dismiss_action.add_argument("start", help="the incident's first day")
     _add_state(dismiss_action)
 
-    schedule = commands.add_parser("schedule", help="run the check once a day")
+    schedule = commands.add_parser("schedule", help="run the check every hour, or once a day")
     actions = schedule.add_subparsers(dest="action", required=True, metavar="ACTION")
-    install_action = actions.add_parser("install", help="set up the daily job, replacing an existing one")
-    install_action.add_argument("--at", default="09:00", help="local time to run, 24-hour HH:MM (default: 09:00)")
+    install_action = actions.add_parser("install", help="set up the job, replacing an existing one")
+    install_action.add_argument("--at", default=None,
+                                help="run once a day at this local time, 24-hour HH:MM (default: every hour)")
     install_action.add_argument("--no-notify", action="store_true",
                                 help="write alerts to the log without desktop notifications")
     install_action.add_argument("--exec", metavar="CMD", help="also run CMD through the shell for each alert "
                                 "(see `ccdrift check --help`)")
     _add_source(install_action)
-    actions.add_parser("remove", help="remove the daily job")
+    actions.add_parser("remove", help="remove the job")
     actions.add_parser("status", help="show whether the job is installed and how its last run went")
     return parser
 
@@ -119,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _schedule(args: argparse.Namespace) -> int:
     from ccdrift.schedule import ScheduleError, install as install_job, make_job
     try:
-        job = make_job(args.at if args.action == "install" else "09:00",
+        job = make_job(args.at if args.action == "install" else None,
                        notify=not getattr(args, "no_notify", False),
                        source=getattr(args, "source", None),
                        exec_command=getattr(args, "exec", None))
@@ -128,7 +129,7 @@ def _schedule(args: argparse.Namespace) -> int:
         return 2
     backend = choose_backend()
     if backend is None:
-        print("ccdrift can't set up a daily job on this system. Run this command once a day "
+        print("ccdrift can't set up a scheduled job on this system. Run this command every hour, or once a day, "
               "with your system's scheduler:", file=sys.stderr)
         print("  " + " ".join(shlex.quote(arg) for arg in job.argv()), file=sys.stderr)
         return 2
@@ -138,7 +139,7 @@ def _schedule(args: argparse.Namespace) -> int:
         except ScheduleError as exc:
             print(f"Nothing installed: {exc}", file=sys.stderr)
             return 1
-        print(f"Installed a {backend.name} job: `ccdrift check` runs daily at {job.hour:02d}:{job.minute:02d}.")
+        print(f"Installed a {backend.name} job: `ccdrift check` runs {job.when()}.")
         print(f"Log: {job.log}")
         print("A first run has started. Check `ccdrift schedule status` in a minute.")
         for note in backend.install_notes(job):
@@ -150,7 +151,7 @@ def _schedule(args: argparse.Namespace) -> int:
         except ScheduleError as exc:
             print(f"Nothing removed: {exc}", file=sys.stderr)
             return 1
-        print("Removed the daily job." if removed else "No daily job was installed.")
+        print("Removed the ccdrift job." if removed else "No ccdrift job was installed.")
         return 0
     try:
         status = backend.status()

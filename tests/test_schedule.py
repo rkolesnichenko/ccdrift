@@ -219,10 +219,10 @@ def test_schedule_remove_through_cli_reports_whether_a_job_was_installed(tmp_pat
     run, backend = launchd(tmp_path)
     monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: backend)
     assert main(["schedule", "remove"]) == 0
-    assert capsys.readouterr().out.splitlines() == ["No daily job was installed."]
+    assert capsys.readouterr().out.splitlines() == ["No ccdrift job was installed."]
     backend.install(job_for(tmp_path))
     assert main(["schedule", "remove"]) == 0
-    assert capsys.readouterr().out.splitlines() == ["Removed the daily job."]
+    assert capsys.readouterr().out.splitlines() == ["Removed the ccdrift job."]
 
 
 def test_schedule_status_through_cli_says_when_nothing_is_installed(tmp_path, monkeypatch, capsys):
@@ -243,7 +243,7 @@ def test_systemd_units_run_the_job_daily_with_quoted_arguments():
     units = systemd_units(job)
     assert units["ccdrift-check.service"] == (
         "[Unit]\n"
-        "Description=ccdrift daily check\n"
+        "Description=ccdrift check\n"
         "\n"
         "[Service]\n"
         "Type=oneshot\n"
@@ -254,7 +254,7 @@ def test_systemd_units_run_the_job_daily_with_quoted_arguments():
     )
     assert units["ccdrift-check.timer"] == (
         "[Unit]\n"
-        "Description=Run the ccdrift daily check\n"
+        "Description=Run the ccdrift check\n"
         "\n"
         "[Timer]\n"
         "OnCalendar=*-*-* 06:05:00\n"
@@ -419,3 +419,32 @@ def test_schedule_install_passes_exec_to_the_job(tmp_path, monkeypatch):
     monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: backend)
     assert main(["schedule", "install", "--no-notify", "--exec", NTFY]) == 0
     assert plistlib.loads(backend.plist.read_bytes())["ProgramArguments"][-2:] == ["--exec", NTFY]
+
+
+def test_a_job_without_a_time_runs_every_hour_on_each_scheduler():
+    job = make_job(None, notify=True, python="/venv/bin/python", environ={"CCDRIFT_HOME": "/data"})
+    assert job.when() == "every hour"
+    plist = plistlib.loads(launchd_plist(job).encode())
+    assert (plist["StartInterval"], "StartCalendarInterval" in plist) == (3600, False)
+    assert "OnCalendar=hourly\nPersistent=true\n" in systemd_units(job)["ccdrift-check.timer"]
+    assert cron_line(job).startswith("0 * * * * /venv/bin/python -m ccdrift check --notify ")
+
+
+def test_each_scheduler_reports_an_hourly_job_as_every_hour(tmp_path):
+    job = make_job(None, notify=False, python="/venv/bin/python", environ={"CCDRIFT_HOME": str(tmp_path / "data")})
+    _, agent = launchd(tmp_path)
+    agent.install(job)
+    assert agent.status()[0] == "installed: launchd agent io.github.rkolesnichenko.ccdrift, every hour"
+    _, timer = systemd(tmp_path)
+    timer.install(job)
+    assert timer.status()[0] == "installed: systemd timer ccdrift-check.timer, every hour"
+    assert Cron(run=FakeCrontab(cron_line(job) + "\n")).status()[0] == "installed: crontab line, every hour"
+
+
+def test_schedule_install_without_a_time_sets_up_an_hourly_job(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CCDRIFT_HOME", str(tmp_path / "data"))
+    run, backend = launchd(tmp_path)
+    monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: backend)
+    assert main(["schedule", "install", "--no-notify"]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == "Installed a launchd job: `ccdrift check` runs every hour."
+    assert plistlib.loads(backend.plist.read_bytes())["StartInterval"] == 3600
