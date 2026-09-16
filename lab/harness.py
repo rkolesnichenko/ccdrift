@@ -30,6 +30,10 @@ Run from a clone of the repo:
   # Inspect the raw schema of your logs:
   uv run --group lab python lab/harness.py --schema-peek
 
+  # Logged thinking token counts against the estimate, and the effort sweep with them:
+  uv run --group lab python lab/harness.py --compare-thinking --incident 2026-08-16..2026-09-04
+  uv run --group lab python lab/harness.py --sweep effort --thinking logged --incident 2026-08-16..2026-09-04 --out ./out
+
 The cache metric flags at |z| >= 3.0 (--cache-z-threshold); the other metrics
 use --z-threshold (3.5).
 """
@@ -174,6 +178,33 @@ def sweep(df: pd.DataFrame, kind: str, cfg: DetectorConfig,
                      detection_floor=None if median == math.inf else median,
                      clean_flag_onsets=[labels[i] for i in flag_onsets(clean, metric)])
     return res
+
+
+def use_logged_thinking(df: pd.DataFrame) -> pd.DataFrame:
+    """The same responses with effort computed from the thinking token counts Claude
+    Code logs, instead of the estimate from signature length. Responses that log no
+    count are left out of the effort metric."""
+    d = df.copy()
+    d["thinking_tokens"] = d["thinking_logged"]
+    return add_ratios(d)
+
+
+def compare_thinking(df: pd.DataFrame, incidents: Optional[list[tuple[str, str]]] = None) -> dict:
+    """How the logged thinking token counts compare with the signature estimate,
+    leaving out known incident days: how many responses log a count, the
+    correlation of the two on responses that think, and the range of the daily
+    effort level under each, on all turns and on the main thread."""
+    clean = df[~in_date_ranges(df["day"].astype(str), incidents)]
+    logged = clean["thinking_logged"].notna()
+    both = clean[logged & ((clean["thinking_tokens"] > 0) | (clean["thinking_logged"] > 0))]
+    ranges = {}
+    for scope, turns in (("all turns", clean), ("main thread", clean[clean["main_thread"]])):
+        for source, frame in (("estimate", turns), ("logged", use_logged_thinking(turns))):
+            daily = bin_metrics(frame)["effort_proxy"].dropna()
+            ranges[(scope, source)] = (float(daily.min()), float(daily.max())) if len(daily) else (math.nan, math.nan)
+    return {"responses": len(clean), "logged": int(logged.sum()),
+            "correlation": float(both["thinking_tokens"].corr(both["thinking_logged"])) if len(both) > 2 else math.nan,
+            "ranges": ranges}
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +421,7 @@ def generate_synthetic(out_dir: Path, days: int = 40, seed: int = 1) -> Path:
 
     for d in range(days):
         day0 = start + timedelta(days=d)
+        version = "2.1.226" if d < days // 2 else "2.1.233"
         n_sessions = rng.randint(3, 8)
         for s in range(n_sessions):
             sid = f"sess-{d:02d}-{s}"
@@ -398,6 +430,8 @@ def generate_synthetic(out_dir: Path, days: int = 40, seed: int = 1) -> Path:
             sidechain_left = 0
             agent = 0
             turn_open = False          # main thread is mid tool loop
+            turn_started = t
+            turn_messages = 0
             last_tool_use = ""
             transcripts: dict[Path, list[dict]] = {}
             last_seen: dict[Path, datetime] = {}
@@ -433,6 +467,8 @@ def generate_synthetic(out_dir: Path, days: int = 40, seed: int = 1) -> Path:
                             t += timedelta(minutes=rng.randint(6, 55))
                         else:
                             t += timedelta(seconds=rng.randint(20, 240))
+                        turn_started = t
+                        turn_messages = 0
                         user_content = "next request"
                     else:
                         t += timedelta(seconds=rng.randint(5, 90))   # tool result
@@ -484,6 +520,10 @@ def generate_synthetic(out_dir: Path, days: int = 40, seed: int = 1) -> Path:
                     "input_tokens": rng.randint(2000, 20000),
                     "cache_creation_input_tokens": cache_creation,
                     "cache_read_input_tokens": cache_read,
+                    # Claude Code writes the main thread's cache for an hour and
+                    # subagents' for 5 minutes.
+                    "cache_creation": {"ephemeral_1h_input_tokens": 0 if sidechain else cache_creation,
+                                       "ephemeral_5m_input_tokens": cache_creation if sidechain else 0},
                 }
                 # One line per content block, usage repeated on each; the output
                 # count is only final on the last line.
@@ -494,6 +534,7 @@ def generate_synthetic(out_dir: Path, days: int = 40, seed: int = 1) -> Path:
                         "timestamp": t.isoformat().replace("+00:00", "Z"),
                         "sessionId": sid,
                         "isSidechain": sidechain,
+                        "version": version, "entrypoint": "cli", "effort": "xhigh",
                         "requestId": f"req_{sid}_{turn}",
                         "message": {
                             "id": f"msg_{sid}_{turn}",
@@ -503,9 +544,22 @@ def generate_synthetic(out_dir: Path, days: int = 40, seed: int = 1) -> Path:
                             "stop_reason": ("tool_use" if block["type"] == "tool_use"
                                             else "end_turn") if last else None,
                             "usage": {**usage, "output_tokens":
-                                      think + visible if last else rng.randint(1, 30)},
+                                      think + visible if last else rng.randint(1, 30),
+                                      **({"output_tokens_details": {"thinking_tokens": think}} if last else {})},
                         },
                     })
+                if not sidechain:
+                    turn_messages += 1
+                    if not calls_tool:
+                        # Claude Code logs how long a main-thread turn took when it ends.
+                        transcripts[fp].append({
+                            "type": "system", "subtype": "turn_duration",
+                            "timestamp": t.isoformat().replace("+00:00", "Z"),
+                            "sessionId": sid, "isSidechain": False, "isMeta": False,
+                            "entrypoint": "cli", "version": version, "uuid": f"dur_{sid}_{turn}",
+                            "durationMs": int((t - turn_started).total_seconds() * 1000) + 4000,
+                            "messageCount": turn_messages,
+                        })
             for fp, recs in transcripts.items():
                 fp.parent.mkdir(parents=True, exist_ok=True)
                 with fp.open("w", encoding="utf-8") as fh:
@@ -605,6 +659,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="turns used to set the streaming baseline before detection")
     ap.add_argument("--main-thread-only", action="store_true",
                     help="drop subagent/sidechain turns before analysis — the fix for the Haiku-burst confound (requires isSidechain in logs)")
+    ap.add_argument("--thinking", choices=["estimate", "logged"], default="estimate",
+                    help="effort from the estimate from signature length (default) or from the thinking "
+                         "token counts Claude Code logs")
+    ap.add_argument("--compare-thinking", action="store_true",
+                    help="compare logged thinking token counts with the estimate, then exit")
     ap.add_argument("--baseline-window", type=int, default=14)
     ap.add_argument("--z-threshold", type=float, default=3.5)
     ap.add_argument("--cache-z-threshold", type=float, default=3.0,
@@ -659,6 +718,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_dir / "features.csv", index=False)
     print(f"[parse] {len(df)} responses -> {out_dir/'features.csv'}")
+
+    if args.compare_thinking:
+        result = compare_thinking(df, args.incident)
+        print("\n=== THINKING: logged token counts vs the signature estimate ===")
+        print(f"responses {result['responses']}, with a logged count {result['logged']} "
+              f"({result['logged'] / max(result['responses'], 1):.0%})")
+        print(f"correlation on responses that think: {result['correlation']:.2f}")
+        print("daily effort level on clean days (min-max):")
+        for scope in ("all turns", "main thread"):
+            est, log = result["ranges"][(scope, "estimate")], result["ranges"][(scope, "logged")]
+            print(f"  {scope:<12} estimate {est[0]:.2f}-{est[1]:.2f}   logged {log[0]:.2f}-{log[1]:.2f}")
+        return 0
+
+    if args.thinking == "logged":
+        df = use_logged_thinking(df)
+        print("[thinking] effort from logged thinking token counts")
 
     if args.main_thread_only:
         before = len(df)

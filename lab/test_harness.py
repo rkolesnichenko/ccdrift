@@ -8,9 +8,10 @@ import pandas as pd
 import pytest
 
 from ccdrift.detector import DetectorConfig
-from ccdrift.logs import add_ratios, parse_source
-from lab.harness import cusum_latency_curve, generate_synthetic, main, replay_cusum, sweep
-from tests.helpers import DAY, at, line, prompt, text, write
+from ccdrift.logs import add_ratios, parse_durations, parse_source
+from lab.harness import (compare_thinking, cusum_latency_curve, generate_synthetic, main,
+                         replay_cusum, sweep, use_logged_thinking)
+from tests.helpers import DAY, at, line, prompt, text, thinking, write
 
 
 def test_stream_detects_a_drop_in_a_metric_that_is_mostly_zero():
@@ -203,3 +204,36 @@ def test_synthetic_logs_are_the_same_whenever_they_are_generated(tmp_path, monke
     second = parse_source(generate_synthetic(tmp_path / "b", days=3, seed=1))
     assert first["timestamp"].tolist() == second["timestamp"].tolist()
     assert first["day"].iloc[0] == "2026-07-01"
+
+
+def test_synthetic_logs_carry_versions_cache_tiers_logged_thinking_and_turn_durations(synthetic_project,
+                                                                                       synthetic_turns):
+    df = synthetic_turns
+    assert set(df["version"]) == {"2.1.226", "2.1.233"}
+    assert set(df.loc[df["main_thread"], "cache_tier"].dropna()) == {"1h"}
+    assert set(df.loc[~df["main_thread"], "cache_tier"].dropna()) == {"5m"}
+    assert df["thinking_logged"].notna().all()
+    durations = parse_durations(synthetic_project)
+    assert len(durations) > 100
+    assert (durations["message_count"] >= 1).all()
+
+
+def test_logged_thinking_replaces_the_estimate_and_leaves_out_responses_without_a_count(tmp_path):
+    write(tmp_path / "s1.jsonl", [line("m1", thinking(1000), ts=at(0), thinking_logged=900),
+                                  line("m2", thinking(1000), ts=at(60))])
+    df = use_logged_thinking(parse_source(tmp_path))
+    assert df["thinking_tokens"].iloc[0] == 900
+    assert pd.isna(df["thinking_fraction"].iloc[1])
+
+
+def test_logged_thinking_matches_the_estimate_on_synthetic_logs(synthetic_turns):
+    result = compare_thinking(synthetic_turns)
+    assert result["logged"] == len(synthetic_turns)
+    assert result["correlation"] > 0.99
+    assert set(result["ranges"]) == {("all turns", "estimate"), ("all turns", "logged"),
+                                     ("main thread", "estimate"), ("main thread", "logged")}
+
+
+def test_sweep_detects_a_large_effort_drop_with_logged_thinking(synthetic_turns):
+    res = sweep(use_logged_thinking(synthetic_turns), "effort", DetectorConfig(), grid=[0.7])
+    assert res["detected"].all()

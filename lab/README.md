@@ -18,6 +18,12 @@ uv run --group lab python lab/harness.py --sweep cache --incident 2026-08-16..20
 
 # Turn-by-turn detection time against false alarms
 uv run --group lab python lab/harness.py --stream cache --incident 2026-08-16..2026-09-04 --out ./out
+
+# Logged thinking token counts against the estimate, leaving out a known incident
+uv run --group lab python lab/harness.py --compare-thinking --incident 2026-08-16..2026-09-04
+
+# Effort sweep with effort computed from logged thinking token counts
+uv run --group lab python lab/harness.py --sweep effort --thinking logged --incident 2026-08-16..2026-09-04 --out ./out
 ```
 
 `--help` lists every option, including `--main-thread-only`, `--since`, `--until` and
