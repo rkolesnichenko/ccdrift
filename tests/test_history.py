@@ -1,5 +1,6 @@
 """ccdrift's history store: the responses it keeps after Claude Code deletes transcripts."""
 
+import os
 import sqlite3
 
 import pandas as pd
@@ -8,7 +9,8 @@ import pytest
 import ccdrift.history
 from ccdrift.history import History, HistoryError, load_turns
 from ccdrift.logs import parse_durations, parse_source
-from tests.helpers import at, line, prompt, response, text, thinking, tool_result, turn_duration, write
+from tests.helpers import (at, damage_responses_table, line, prompt, response, text, thinking, tool_result,
+                           turn_duration, write)
 
 
 def transcripts(folder):
@@ -139,3 +141,42 @@ def test_an_unusable_store_says_how_to_rebuild_it(tmp_path):
     (tmp_path / "history.sqlite").write_text("not a database")
     with pytest.raises(HistoryError, match="Move it aside"):
         load_turns(tmp_path / "logs", tmp_path / "state.json")
+
+
+def test_a_store_whose_rows_cant_be_read_says_how_to_rebuild_it(tmp_path):
+    transcripts(tmp_path / "logs")
+    load_turns(tmp_path / "logs", tmp_path / "state.json")
+    damage_responses_table(tmp_path / "history.sqlite")
+    with pytest.raises(HistoryError, match="Move it aside"):
+        load_turns(tmp_path / "logs", tmp_path / "state.json")
+
+
+def test_a_store_with_a_schema_version_that_isnt_a_number_is_unusable(tmp_path):
+    History(tmp_path / "history.sqlite").close()
+    db = sqlite3.connect(tmp_path / "history.sqlite")
+    db.execute("UPDATE meta SET value = 'one' WHERE key = 'schema_version'")
+    db.commit()
+    db.close()
+    with pytest.raises(HistoryError, match="Move it aside"):
+        History(tmp_path / "history.sqlite")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write a read-only file")
+def test_a_store_that_cant_record_its_schema_version_is_unusable(tmp_path):
+    path = tmp_path / "history.sqlite"
+    History(path).close()
+    db = sqlite3.connect(path)
+    db.execute("DELETE FROM meta WHERE key = 'schema_version'")
+    db.commit()
+    db.close()
+    path.chmod(0o444)
+    with pytest.raises(HistoryError, match="Move it aside"):
+        History(path)
+
+
+def test_a_store_that_cant_be_created_doesnt_suggest_moving_it_aside(tmp_path):
+    # Moving a store aside can't help when its folder can't be made.
+    (tmp_path / "home").write_text("a file where the folder should be")
+    with pytest.raises(HistoryError, match="Can't open the history store") as raised:
+        load_turns(tmp_path / "logs", tmp_path / "home" / "state.json")
+    assert "Move it aside" not in str(raised.value)

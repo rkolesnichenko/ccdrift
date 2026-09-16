@@ -104,7 +104,8 @@ class History:
             path.parent.mkdir(parents=True, exist_ok=True)
             self.db = sqlite3.connect(path, timeout=30)
         except (OSError, sqlite3.Error) as exc:
-            raise _unusable(path, exc) from exc
+            # Nothing is wrong with the store itself, so moving it aside wouldn't help.
+            raise HistoryError(f"Can't open the history store {path}: {exc}") from exc
         try:
             has_meta = self.db.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").fetchone()
@@ -115,18 +116,24 @@ class History:
         # Check the schema version before running any DDL: a newer store's tables may
         # not match this version's SCHEMA, and applying it could fail with a confusing
         # error, or silently add tables the newer ccdrift doesn't expect.
-        if int(self.meta.get("schema_version", SCHEMA_VERSION)) > SCHEMA_VERSION:
+        stored = self.meta.get("schema_version", str(SCHEMA_VERSION))
+        try:
+            schema_version = int(stored)
+        except (TypeError, ValueError) as exc:
+            self.db.close()
+            raise _unusable(path, ValueError(f"its schema version {stored!r} isn't a number")) from exc
+        if schema_version > SCHEMA_VERSION:
             self.db.close()
             raise HistoryError(f"The history store {path} was written by a newer ccdrift. Upgrade ccdrift, "
                                "or move the store aside to rebuild it from the transcripts still on disk.")
         try:
             self.db.executescript(SCHEMA)
             self.meta = dict(self.db.execute("SELECT key, value FROM meta"))
+            if "schema_version" not in self.meta:
+                self._set_meta("schema_version", str(SCHEMA_VERSION))
         except sqlite3.Error as exc:
             self.db.close()
             raise _unusable(path, exc) from exc
-        if "schema_version" not in self.meta:
-            self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     def __enter__(self) -> "History":
         return self
@@ -225,3 +232,6 @@ def load_turns(source: Path, state_path: Path) -> pd.DataFrame:
             return history.responses()
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc
+    except pd.errors.DatabaseError as exc:
+        # pandas wraps SQLite's error in one that repeats the whole query.
+        raise _unusable(path, exc.__cause__ or exc) from exc

@@ -1,6 +1,7 @@
 """Log-writing helpers and day fixtures shared by the package and lab tests."""
 
 import json
+import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
@@ -85,6 +86,15 @@ def turn_duration(ts, duration_ms, message_count, sid="s1", uuid=None, version="
 def write(path, records):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(r) + "\n" for r in records))
+
+
+def damage_responses_table(path):
+    """Replace a history store's responses table with one whose rows can't be read."""
+    db = sqlite3.connect(path)
+    db.execute("DROP TABLE responses")
+    db.execute("CREATE TABLE responses (key INTEGER PRIMARY KEY, file_id INTEGER)")
+    db.commit()
+    db.close()
 
 
 def nth_day(i):

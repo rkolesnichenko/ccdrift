@@ -10,7 +10,7 @@ from ccdrift.check import run_check
 from ccdrift.incidents import add_incident
 from ccdrift.state import load_state, new_state, save_state
 from ccdrift.status import status_report
-from tests.helpers import busy_days, main_thread_days
+from tests.helpers import busy_days, damage_responses_table, main_thread_days
 
 
 @pytest.fixture
@@ -159,6 +159,18 @@ def test_check_names_an_unusable_history_store(tmp_path, sent, capsys):
     (tmp_path / "history.sqlite").write_text("not a database")
     assert check_logs(tmp_path) == 1
     assert "Can't use the history store" in capsys.readouterr().out
+
+
+def test_check_says_how_to_rebuild_a_history_store_whose_rows_cant_be_read(tmp_path, sent, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    check_logs(tmp_path)
+    capsys.readouterr()
+    damage_responses_table(tmp_path / "history.sqlite")
+    assert check_logs(tmp_path) == 1
+    assert sent == ["ccdrift check failed"]
+    assert capsys.readouterr().out.endswith(
+        f"ccdrift check failed: HistoryError: Can't use the history store {tmp_path / 'history.sqlite'}: "
+        "no such column: r.ts. Move it aside to rebuild it from the transcripts still on disk.\n")
 
 
 def test_check_alerts_when_the_main_thread_moves_to_the_5_minute_cache(tmp_path, sent, capsys):

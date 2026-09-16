@@ -8,7 +8,7 @@ import pytest
 from ccdrift.cli import main
 from ccdrift.logs import judged_turns
 from ccdrift.report import daily_rows, run_report, version_key
-from tests.helpers import HAIKU, QUIET, busy_days, daily_turns, main_thread_days
+from tests.helpers import HAIKU, QUIET, busy_days, daily_turns, damage_responses_table, main_thread_days
 
 
 def test_report_lists_recent_days_with_their_metrics(tmp_path, capsys):
@@ -75,6 +75,18 @@ def test_report_explains_an_unreadable_state_file(tmp_path, capsys):
     (tmp_path / "state.json").write_text("not json")
     assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4)) == 1
     assert "Can't read the state file" in capsys.readouterr().err
+
+
+def test_report_explains_a_history_store_whose_rows_cant_be_read(tmp_path, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4))
+    capsys.readouterr()
+    damage_responses_table(tmp_path / "history.sqlite")
+    assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4)) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith(f"Can't use the history store {tmp_path / 'history.sqlite'}: ")
+    assert captured.err.endswith("Move it aside to rebuild it from the transcripts still on disk.\n")
 
 
 def test_report_by_version_compares_claude_code_versions_oldest_first(tmp_path, capsys):
