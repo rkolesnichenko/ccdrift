@@ -13,7 +13,7 @@ from typing import Any, Mapping, Optional
 import pandas as pd
 
 from ccdrift.detector import DetectorConfig, bin_metrics, detect, flag_onsets
-from ccdrift.logs import no_transcripts_message, parse_source
+from ccdrift.logs import judged_turns, no_transcripts_message, parse_source
 from ccdrift.notify import notify
 
 
@@ -35,13 +35,6 @@ def ccdrift_home(environ: Mapping[str, str] = os.environ) -> Path:
     return Path(home).expanduser() if home else Path.home() / ".ccdrift"
 
 
-def complete_main_turns(df: pd.DataFrame, today: date) -> pd.DataFrame:
-    """Main-thread turns of complete UTC days: what the daily check and the report
-    judge. Subagent Haiku comes in bursts that flag on their own, and a day still in
-    progress holds only part of its turns."""
-    return df[(df["day"].astype(str) < today.isoformat()) & df["main_thread"].astype(bool)]
-
-
 def check(df: pd.DataFrame, today: date, state_path: Path,
           cfg: Optional[DetectorConfig] = None,
           recent_days: int = CHECK_RECENT_DAYS) -> list[dict[str, Any]]:
@@ -51,7 +44,7 @@ def check(df: pd.DataFrame, today: date, state_path: Path,
     keeps a first run from reporting incidents from weeks ago while still
     covering a week or so without a run. Reported onsets are saved to
     `state_path`, so each flag is reported once."""
-    turns = complete_main_turns(df, today)
+    turns = judged_turns(df, today)
     if turns.empty:
         return []
     detected = detect(bin_metrics(turns), cfg or DetectorConfig())
@@ -101,7 +94,7 @@ def blank_cache_stretch(df: pd.DataFrame, today: date, state_path: Path,
     responses) on which no new-prompt turn has cache token counts, once it is
     `days` long and wasn't reported before. Every Claude Code response reads or
     writes the prompt cache, so such days mean the parser has lost track of it."""
-    turns = complete_main_turns(df, today)
+    turns = judged_turns(df, today)
     usable = turns["prompt_within_ttl"].astype(bool) & ((turns["cache_read"] + turns["cache_creation"]) > 0)
     per_day = pd.DataFrame({"responses": turns.groupby("day").size(),
                             "usable": usable.groupby(turns["day"]).sum()})

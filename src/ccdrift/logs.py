@@ -395,6 +395,18 @@ def parse_durations(source: Path) -> pd.DataFrame:
     return duration_frame(list(rows.values()))
 
 
+def judged_turns(df: pd.DataFrame, today: date) -> pd.DataFrame:
+    """The turns the daily check, the report and setting changes judge: main-thread
+    turns of complete UTC days, without Agent SDK sessions. Subagent Haiku comes in
+    bursts that flag on their own, a day still in progress holds only part of its
+    turns, and SDK sessions are the user's own scripts, on the 5-minute cache.
+    Transcripts from before Claude Code logged an entrypoint count as the CLI."""
+    keep = (df["day"].astype(str) < today.isoformat()) & df["main_thread"].astype(bool)
+    if "entrypoint" in df:
+        keep &= ~df["entrypoint"].fillna("").astype(str).str.startswith("sdk-")
+    return df[keep]
+
+
 # Turns the cache metric uses. In real logs a caching regression showed up on
 # main-thread turns that open with a new user prompt: on Claude Code
 # 2.1.233-2.1.258 they missed 4.3% of the time (0.5% before and after), however

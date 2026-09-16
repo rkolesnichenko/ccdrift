@@ -57,6 +57,12 @@ def test_check_leaves_effort_out(tmp_path):
     assert check_days(tmp_path, days, date(2026, 9, 18)) == []
 
 
+def test_check_leaves_agent_sdk_haiku_out(tmp_path):
+    quiet = {"is_haiku": [0.0] * 440, "entrypoint": ["cli"] * 400 + ["sdk-py"] * 40}
+    burst = {"is_haiku": [0.0] * 400 + [1.0] * 40, "entrypoint": ["cli"] * 400 + ["sdk-py"] * 40}
+    assert check_days(tmp_path, [quiet] * 14 + [burst] * 3, date(2026, 9, 18)) == []
+
+
 @pytest.fixture
 def sent(monkeypatch):
     titles = []

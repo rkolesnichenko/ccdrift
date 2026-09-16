@@ -10,9 +10,9 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from ccdrift.check import CHECK_METRICS, complete_main_turns, load_state
+from ccdrift.check import CHECK_METRICS, load_state
 from ccdrift.detector import DetectorConfig, bin_metrics, detect
-from ccdrift.logs import no_transcripts_message, parse_source
+from ccdrift.logs import judged_turns, no_transcripts_message, parse_source
 
 SHORT_NAMES = {"cache_ratio": "cache", "haiku_fraction": "haiku"}
 COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", "flagged"]
@@ -23,7 +23,7 @@ def daily_rows(df: pd.DataFrame, today: date, days: int = 21,
     """The last `days` complete UTC days with main-thread turns, each judged against
     the days before it: responses, cache ratio and Haiku share with their z-scores,
     and the metrics flagged that day."""
-    turns = complete_main_turns(df, today)
+    turns = judged_turns(df, today)
     if turns.empty:
         return pd.DataFrame(columns=COLUMNS)
     detected = detect(bin_metrics(turns), cfg or DetectorConfig()).tail(days)

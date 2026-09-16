@@ -1,10 +1,12 @@
 """Parsing Claude Code transcripts into responses and their metric columns."""
 
+from datetime import date
+
 import pandas as pd
 import pytest
 
 from ccdrift.detector import bin_metrics
-from ccdrift.logs import frame, parse_durations, parse_source
+from ccdrift.logs import frame, judged_turns, parse_durations, parse_source
 from tests.helpers import (DAY, at, compact_boundary, line, prompt, response, text, thinking,
                            tool_result, turn_duration, write)
 
@@ -226,3 +228,15 @@ def test_frame_coerces_integer_flags_from_the_history_store_to_bool():
     row = frame([row1, row2]).iloc[1]
     assert row["prompt_within_ttl"]
     assert not row["is_miss"]
+
+
+def test_judged_turns_leave_out_subagents_sdk_sessions_and_the_current_day(tmp_path):
+    # Agent SDK sessions are the user's own scripts, on the 5-minute cache.
+    write(tmp_path / "cli.jsonl", [line("m1", text(40), ts=at(0), entrypoint="cli"),
+                                   line("m2", text(40), ts=at(DAY), entrypoint="cli")])
+    write(tmp_path / "old.jsonl", [line("m3", text(40), ts=at(60))])
+    write(tmp_path / "sdk.jsonl", [line("m4", text(40), ts=at(120), entrypoint="sdk-py")])
+    write(tmp_path / "cli" / "subagents" / "agent-a.jsonl",
+          [line("a1", text(40), ts=at(180), sidechain=True, entrypoint="cli")])
+    turns = judged_turns(parse_source(tmp_path), date(2026, 9, 2))
+    assert sorted(turns["source_file"]) == ["cli.jsonl", "old.jsonl"]
