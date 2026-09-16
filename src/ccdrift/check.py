@@ -19,6 +19,7 @@ from ccdrift.hooks import failure_message, hook_failures, judged_hook_runs
 from ccdrift.incidents import describe, incident_cost, update_incidents, versions_text
 from ccdrift.logs import judged_turns, no_transcripts_message
 from ccdrift.notify import notify, run_exec
+from ccdrift.sessions import context_alerts, context_message, session_starts
 from ccdrift.settings import change_message, setting_changes
 from ccdrift.state import ccdrift_home, load_state, record_run, save_state
 
@@ -104,6 +105,11 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
                               TOPIC_OF[change["setting"]])
         alerts.append(("setting", "ccdrift: setting changed",
                        change_message(change, versions_text(turns, change["days"])), note_lines(notes)))
+    for change in context_alerts(session_starts(df), state, today):
+        notes = release_notes(changelog, new_versions(turns, days_before(change["since"], 7), change["days"][-1]),
+                              "context")
+        alerts.append(("context", "ccdrift: session start changed",
+                       context_message(change, versions_text(turns, change["days"])), note_lines(notes)))
     for failure in hook_failures(judged_hook_runs(tables.hook_runs, today), state, today):
         notes = release_notes(changelog, new_versions(turns, days_before(failure["since"], 7), failure["days"][-1]),
                               "hooks")

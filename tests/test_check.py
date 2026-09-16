@@ -10,7 +10,8 @@ from ccdrift.check import run_check
 from ccdrift.incidents import add_incident
 from ccdrift.state import load_state, new_state, save_state
 from ccdrift.status import status_report
-from tests.helpers import busy_days, damage_responses_table, hook_days_logs, main_thread_days
+from tests.helpers import (DAY, at, busy_days, damage_responses_table, hook_days_logs, line, main_thread_days,
+                           prompt, text, write)
 
 
 @pytest.fixture
@@ -242,3 +243,16 @@ def test_check_alerts_when_stop_hooks_start_failing(tmp_path, sent, capsys):
     assert ("ccdrift: hooks failing: Stop hooks failed on 10 of 10 runs on 2026-09-15 and 10 of 10 on 2026-09-16, "
             "on Claude Code 2.1.226 (since 09-01). Check your hooks; a Claude Code update may have changed their "
             "input.") in capsys.readouterr().out
+
+
+def test_check_alerts_when_sessions_start_with_much_less_context(tmp_path, sent, capsys):
+    # One session a day; its first request reads the rest from the cache, so the cache ratio stays high.
+    for d, (tokens, version) in enumerate([(128_000, "2.1.261")] * 8 + [(54_000, "2.1.267")] * 3):
+        write(tmp_path / "logs" / f"session-{d}.jsonl",
+              [prompt(at(d * DAY), sid=f"s{d}"),
+               line(f"m{d}", text(40), ts=at(d * DAY), sid=f"s{d}", cache_creation=100, cache_read=tokens - 110,
+                    version=version, entrypoint="cli")])
+    check_logs(tmp_path, today=date(2026, 9, 12))
+    assert sent == ["ccdrift: session start changed"]
+    assert ("ccdrift: session start changed: New sessions start with ~54k tokens of context from 2026-09-09, on "
+            "Claude Code 2.1.267 (since 09-09), down from ~130k.") in capsys.readouterr().out

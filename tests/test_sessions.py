@@ -1,9 +1,12 @@
 """Session starts: the context a new Claude Code session sends with its first request."""
 
+from datetime import date
+
 import pandas as pd
 
 from ccdrift.logs import parse_source
-from ccdrift.sessions import context_changes_in, first_of_each, session_starts
+from ccdrift.sessions import context_alerts, context_changes_in, context_message, first_of_each, session_starts
+from ccdrift.state import new_state
 from tests.helpers import DAY, at, line, nth_day, prompt, text, write
 
 
@@ -42,3 +45,21 @@ def test_a_step_already_recorded_is_not_found_again():
     changes = context_changes_in(starts_of([128_000] * 8 + [54_000] * 3))
     recorded = [{"since": "2026-09-05", "from": 130_000.0, "to": 50_000.0}]
     assert first_of_each(changes, recorded) == []
+
+
+def test_a_session_start_step_is_alerted_once_with_its_sizes():
+    state = new_state()
+    starts = starts_of([128_000] * 8 + [54_000] * 3)
+    changes = context_alerts(starts, state, date(2026, 9, 12))
+    assert [(c["since"], c["from"], c["to"], c["days"]) for c in changes] == [
+        ("2026-09-09", 128_000.0, 54_000.0, ["2026-09-09", "2026-09-11"])]
+    assert context_alerts(starts, state, date(2026, 9, 12)) == []
+    assert context_message(changes[0], ["2.1.267 (since 09-09)"]) == (
+        "New sessions start with ~54k tokens of context from 2026-09-09, on Claude Code 2.1.267 (since 09-09), "
+        "down from ~130k. Your MCP servers, plugins or CLAUDE.md can change this too.")
+
+
+def test_steps_from_weeks_ago_and_on_the_current_day_are_not_alerted():
+    starts = starts_of([128_000] * 8 + [54_000] * 3)
+    assert context_alerts(starts, new_state(), date(2026, 10, 10)) == []
+    assert context_alerts(starts, new_state(), date(2026, 9, 11)) == []

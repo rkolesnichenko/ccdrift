@@ -7,9 +7,11 @@ from __future__ import annotations
 import statistics
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Sequence
+from typing import Any, Sequence
 
 import pandas as pd
+
+from ccdrift.texts import approx
 
 WINDOW = 3          # the latest sessions judged together
 BASELINE = 10       # sessions before them, at most
@@ -94,3 +96,29 @@ def first_of_each(changes: Sequence[ContextChange], recorded: Sequence[dict] = (
         kept.append((change.since, change.up))
         found.append(change)
     return found
+
+
+RECENT_DAYS = 14
+
+
+def context_alerts(starts: pd.DataFrame, state: dict[str, Any], today: date) -> list[dict[str, Any]]:
+    """Steps in session-start size among the sessions of complete UTC days whose window
+    ends within the last RECENT_DAYS days and that aren't recorded yet; each is
+    recorded in state["context_changes"]."""
+    complete = starts[starts["day"].astype(str) < today.isoformat()].reset_index(drop=True)
+    since = (today - timedelta(days=RECENT_DAYS)).isoformat()
+    changes = [c for c in context_changes_in(complete) if c.until >= since]
+    new = []
+    for change in first_of_each(changes, state["context_changes"]):
+        record = {"since": change.since, "from": change.before, "to": change.after,
+                  "days": [change.since, change.until], "reported_on": today.isoformat()}
+        state["context_changes"].append(record)
+        new.append(record)
+    return new
+
+
+def context_message(change: dict[str, Any], versions: Sequence[str]) -> str:
+    on = f", on Claude Code {', '.join(versions)}" if versions else ""
+    direction = "down" if change["to"] < change["from"] else "up"
+    return (f"New sessions start with ~{approx(change['to'])} tokens of context from {change['since']}{on}, "
+            f"{direction} from ~{approx(change['from'])}. Your MCP servers, plugins or CLAUDE.md can change this too.")
