@@ -54,6 +54,33 @@ def test_counts_and_times_out_of_range_dont_fail_the_history(tmp_path):
     assert tables.hook_runs["hook_count"].tolist() == [0]
 
 
+def test_a_store_holding_times_out_of_range_still_loads(tmp_path):
+    # ccdrift 0.3.0 stored times pandas can't hold, and kept them after their transcript went.
+    transcripts(tmp_path / "logs")
+    load_history(tmp_path / "logs", tmp_path / "state.json", claim=True)
+    db = sqlite3.connect(tmp_path / "history.sqlite")
+    with db:
+        db.execute("UPDATE responses SET ts = 253402214400000000 WHERE ts = (SELECT MAX(ts) FROM responses)")
+        db.execute("UPDATE durations SET ts = -62135596800000000")
+    db.close()
+    with History(tmp_path / "history.sqlite") as history:
+        assert history.responses()["timestamp"].isna().sum() == 1
+        assert history.durations()["timestamp"].isna().tolist() == [True]
+
+
+def test_odd_value_types_dont_fail_the_history(tmp_path):
+    # A model of 2**70 couldn't be stored, and a numeric id had no text to hash.
+    odd_model = line("m1", text(40), ts=at(0))
+    odd_model["message"]["model"] = 2 ** 70
+    numeric_id = line(None, text(40), ts=at(60))
+    numeric_id["message"]["id"], numeric_id["requestId"] = 12345, 12345
+    hooks = stop_hook_summary(at(90), 1, uuid=67890)
+    write(tmp_path / "logs" / "s1.jsonl", [prompt(at(0)), odd_model, prompt(at(60)), numeric_id, hooks])
+    tables = load_history(tmp_path / "logs", tmp_path / "state.json", claim=True)
+    assert tables.responses["model"].tolist() == ["unknown", "claude-opus-5"]
+    assert len(tables.hook_runs) == 1
+
+
 def test_history_since_a_day_holds_whole_transcripts_active_since_then_and_each_versions_first_day(tmp_path):
     # Whole transcripts, so idle gaps and session starts read as in the full history.
     write(tmp_path / "logs" / "old.jsonl", [prompt(at(0)), line("o1", text(40), ts=at(0), version="2.1.99")])
@@ -137,7 +164,7 @@ def test_a_new_parser_version_reads_every_transcript_again(tmp_path, monkeypatch
     transcripts(tmp_path / "logs")
     with History(tmp_path / "history.sqlite") as history:
         history.update(tmp_path / "logs")
-    monkeypatch.setattr(ccdrift.history, "PARSER_VERSION", 3)
+    monkeypatch.setattr(ccdrift.history, "PARSER_VERSION", 4)
     with History(tmp_path / "history.sqlite") as history:
         assert history.update(tmp_path / "logs") == 2
         assert history.update(tmp_path / "logs") == 0
@@ -279,12 +306,12 @@ def test_a_known_transcript_that_becomes_unreadable_is_marked_for_retry_and_the_
         history.update(tmp_path / "logs")
     # Bump the parser version so every transcript is read again, blocked one included,
     # even though its size and mtime haven't changed since the last update.
-    monkeypatch.setattr(ccdrift.history, "PARSER_VERSION", 3)
+    monkeypatch.setattr(ccdrift.history, "PARSER_VERSION", 4)
     with History(tmp_path / "history.sqlite") as history:
         os.chmod(blocked, 0)
         try:
             assert history.update(tmp_path / "logs") == 1  # the subagent transcript is still readable
-            assert history.meta["parser_version"] == "3"
+            assert history.meta["parser_version"] == "4"
             size = history.db.execute(
                 "SELECT size FROM files WHERE path = ?", ("p/s1.jsonl",)).fetchone()[0]
             assert size is None

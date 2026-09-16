@@ -16,14 +16,15 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from ccdrift.logs import (SETTING_FIELDS, TOKEN_FIELDS, ParsedFile, Tables, compaction_frame, duration_frame,
-                          frame, hook_frame, jsonl_files, parse_all, parse_file)
+from ccdrift.logs import (MAX_TIME, MIN_TIME, SETTING_FIELDS, TOKEN_FIELDS, ParsedFile, Tables, compaction_frame,
+                          duration_frame, frame, hook_frame, jsonl_files, parse_all, parse_file)
 
 HISTORY_FILE = "history.sqlite"
 SCHEMA_VERSION = 2
 # Bump whenever parse_file's output changes, so every transcript still on disk is
 # read again. Rows of transcripts Claude Code already deleted keep their values.
-PARSER_VERSION = 2
+# 3: counts, times and ids out of range or of the wrong type read as missing.
+PARSER_VERSION = 3
 
 TEXT_COLUMNS = ("model",) + SETTING_FIELDS
 FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction")
@@ -100,8 +101,14 @@ def _upsert(table: str, columns: tuple[str, ...]) -> str:
             f"< (SELECT path FROM files WHERE id = {table}.file_id)")
 
 
+# The microsecond times a row can hold. ccdrift 0.3.0 stored times pandas can't, and
+# kept them after their transcript was deleted, so they read as missing.
+TS_RANGE = (_micros(MIN_TIME), _micros(MAX_TIME))
+
+
 def _decode(rows: pd.DataFrame, flags: tuple[str, ...]) -> pd.DataFrame:
-    rows["timestamp"] = pd.to_datetime(rows.pop("ts").astype(float), unit="us", utc=True)
+    ts = rows.pop("ts").astype(float)
+    rows["timestamp"] = pd.to_datetime(ts.where(ts.between(*TS_RANGE)), unit="us", utc=True)
     for col in flags:
         rows[col] = rows[col].astype(bool)
     return rows

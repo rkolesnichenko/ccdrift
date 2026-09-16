@@ -256,7 +256,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                 continue
             if role == "system":
                 subtype = field_get(obj, "subtype")
-                key = field_get(obj, "uuid") or f"{rel}:{line_no}"
+                key = str(field_get(obj, "uuid") or f"{rel}:{line_no}")
                 if subtype == "compact_boundary":
                     compact_pending = True
                     pre_tokens = field_get(obj, "compact_pre_tokens")
@@ -288,11 +288,11 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
             if role != "assistant":
                 continue
             parsed.assistant_lines += 1
-            model = field_get(obj, "model") or "unknown"
+            model = _text(field_get(obj, "model")) or "unknown"
             if model == "<synthetic>":  # Claude Code placeholder, no API call
                 continue
-            key = (field_get(obj, "message_id") or field_get(obj, "request_id")
-                   or f"{rel}:{line_no}")
+            key = str(field_get(obj, "message_id") or field_get(obj, "request_id")
+                      or f"{rel}:{line_no}")
             row = parsed.responses.get(key)
             if row is None:
                 row = parsed.responses[key] = {
