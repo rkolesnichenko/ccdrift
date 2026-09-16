@@ -41,7 +41,7 @@ def _state(args: argparse.Namespace) -> Path:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ccdrift",
-        description="A daily check for silent changes in Claude Code's prompt caching and Haiku use, "
+        description="A daily check for silent changes in Claude Code's prompt caching, Haiku use and settings, "
                     "read from your local session logs.")
     parser.add_argument("--version", action="version", version=f"ccdrift {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")

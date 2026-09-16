@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ccdrift"
 dynamic = ["version"]
-description = "A daily check for silent changes in Claude Code's prompt caching and Haiku use, read from your local session logs"
+description = "A daily check for silent changes in Claude Code's prompt caching, Haiku use and settings, read from your local session logs"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
