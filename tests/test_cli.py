@@ -72,8 +72,8 @@ def test_help_says_what_the_check_does(capsys, monkeypatch):
     monkeypatch.setenv("COLUMNS", "200")
     with pytest.raises(SystemExit):
         main(["--help"])
-    assert "    check     follow incidents, setting changes and a cache metric that can't be computed, " \
-           "and alert on each change (what the schedule runs)" in capsys.readouterr().out.splitlines()
+    assert "    check     follow incidents and changes, and alert on each " \
+           "(what the schedule runs)" in capsys.readouterr().out.splitlines()
 
 
 def test_version_prints_the_package_version(capsys):

@@ -53,13 +53,13 @@ def _days(text: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ccdrift",
-        description="A daily check for silent changes in Claude Code's prompt caching, Haiku use and settings, "
-                    "read from your local session logs.")
+        description="A check for silent changes in Claude Code's prompt caching, Haiku use, settings, context "
+                    "and hooks, read from your local session logs.")
     parser.add_argument("--version", action="version", version=f"ccdrift {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
-    check = commands.add_parser("check", help="follow incidents, setting changes and a cache metric that can't be "
-                                "computed, and alert on each change (what the schedule runs)")
+    check = commands.add_parser("check", help="follow incidents and changes, and alert on each "
+                                "(what the schedule runs)")
     check.add_argument("--notify", action="store_true", help="also show a desktop notification for each alert")
     check.add_argument("--exec", metavar="CMD", help="also run CMD through the shell for each alert, with "
                        "CCDRIFT_ALERT, CCDRIFT_TITLE and CCDRIFT_MESSAGE set")
