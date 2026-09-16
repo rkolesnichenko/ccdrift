@@ -131,6 +131,34 @@ def test_check_refreshes_the_cost_of_an_incident_closed_by_hand(tmp_path, sent):
     assert sent == []
 
 
+def test_check_leaves_the_cost_of_an_incident_closed_by_hand_once_status_no_longer_lists_it(tmp_path, sent):
+    # `ccdrift status` lists closed incidents for 30 days; the check reads only recent
+    # history, which no longer holds an older incident's days.
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"misses": 6, "version": "2.1.233"}] * 3)
+    state = new_state()
+    incident = add_incident(state["incidents"], "cache_ratio", "2026-09-15", "2026-09-17", date(2026, 9, 18))
+    incident["cost"] = 1_234
+    save_state(tmp_path / "state.json", state)
+    check_logs(tmp_path, today=date(2026, 10, 19))
+    assert load_state(tmp_path / "state.json")["incidents"][0]["cost"] == 1_234
+
+
+def test_check_names_the_day_a_version_first_ran_from_before_the_history_it_reads(tmp_path, sent, capsys):
+    # 107 days of the same version: more than the 90 days a check reads.
+    main_thread_days(tmp_path / "logs", [{}] * 105 + [{"tier": "5m"}] * 2)
+    check_logs(tmp_path, today=date(2026, 12, 17))
+    assert sent == ["ccdrift: setting changed"]
+    assert ("ccdrift: setting changed: Cache writes for claude-opus-5 moved from the 1-hour to the 5-minute "
+            "cache from 2026-12-15, on Claude Code 2.1.226 (since 09-01).") in capsys.readouterr().out
+
+
+def test_check_doesnt_alert_again_about_a_blank_cache_stretch_longer_than_the_history_it_reads(tmp_path, sent):
+    busy_days(tmp_path / "logs", days=105, per_day=60)
+    check_logs(tmp_path, today=date(2026, 12, 15))
+    check_logs(tmp_path, today=date(2026, 12, 16))
+    assert sent == ["ccdrift can't compute the cache metric"]
+
+
 def test_check_says_so_when_there_is_nothing_to_report(tmp_path, sent, capsys):
     main_thread_days(tmp_path / "logs", [{}] * 3)
     check_logs(tmp_path)

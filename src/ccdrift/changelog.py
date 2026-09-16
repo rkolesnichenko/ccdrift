@@ -11,6 +11,7 @@ from typing import Sequence, Union
 
 import pandas as pd
 
+from ccdrift.logs import first_days_by_version
 from ccdrift.texts import version_key
 
 # Checked against Claude Code's own changelog: "model", "tool", "agent" and "context"
@@ -62,8 +63,7 @@ def new_versions(turns: pd.DataFrame, first_day: str, last_day: str) -> list[str
     """Versions whose first day among `turns` lies in [first_day, last_day], oldest first."""
     if turns.empty or "version" not in turns:
         return []
-    known = turns.dropna(subset=["version"])
-    first_seen = known.groupby("version")["day"].min().astype(str)
+    first_seen = first_days_by_version(turns)
     return sorted((str(v) for v, day in first_seen.items() if first_day <= day <= last_day), key=version_key)
 
 

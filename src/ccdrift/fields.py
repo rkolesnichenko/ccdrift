@@ -9,6 +9,8 @@ from typing import Any
 
 import pandas as pd
 
+from ccdrift.logs import first_days_by_version
+
 FIELDS = ("version", "entrypoint", "effort", "speed", "service_tier", "thinking_logged", "cache_split")
 FIELD_NAMES = {"version": "its version", "entrypoint": "the entrypoint", "effort": "effort",
                "speed": "the speed", "service_tier": "the service tier", "thinking_logged": "thinking token counts",
@@ -55,7 +57,9 @@ def field_gaps(turns: pd.DataFrame, state: dict[str, Any], today: date) -> list[
     days = turns["day"].astype(str)
     since = (today - timedelta(days=RECENT_DAYS)).isoformat()
     new = []
-    for version, first in sorted(days.groupby(versions).min().items(), key=lambda item: item[1]):
+    # A version's first day over the whole history, not just the recent history a check reads.
+    firsts = {**days.groupby(versions).min(), **first_days_by_version(turns)}
+    for version, first in sorted(firsts.items(), key=lambda item: item[1]):
         if first < since:
             continue
         before = (days < first) & (days >= (date.fromisoformat(first) - timedelta(days=BEFORE_DAYS)).isoformat())

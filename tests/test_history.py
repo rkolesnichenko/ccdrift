@@ -13,7 +13,7 @@ from ccdrift.incidents import add_incident, run_list
 from ccdrift.logs import parse_all, parse_durations, parse_source
 from ccdrift.report import run_report
 from ccdrift.state import new_state, save_state
-from tests.helpers import (at, compact_boundary, damage_responses_table, line, prompt, response,
+from tests.helpers import (DAY, at, compact_boundary, damage_responses_table, line, nth_day, prompt, response,
                            stop_hook_summary, text, thinking, tool_result, turn_duration, write)
 
 
@@ -52,6 +52,21 @@ def test_counts_and_times_out_of_range_dont_fail_the_history(tmp_path):
     assert tables.responses[["input_tokens"]].values.tolist() == [[10.0], [0.0], [10.0], [10.0]]
     assert tables.responses["timestamp"].isna().tolist() == [False, False, True, True]
     assert tables.hook_runs["hook_count"].tolist() == [0]
+
+
+def test_history_since_a_day_holds_whole_transcripts_active_since_then_and_each_versions_first_day(tmp_path):
+    # Whole transcripts, so idle gaps and session starts read as in the full history.
+    write(tmp_path / "logs" / "old.jsonl", [prompt(at(0)), line("o1", text(40), ts=at(0), version="2.1.99")])
+    write(tmp_path / "logs" / "long.jsonl", [prompt(at(2 * DAY)), line("l1", text(40), ts=at(2 * DAY), version="2.1.99"),
+                                             prompt(at(6 * DAY)), line("l2", text(40), ts=at(6 * DAY), version="2.1.99")])
+    write(tmp_path / "logs" / "new.jsonl", [prompt(at(7 * DAY)), line("n1", text(40), ts=at(7 * DAY), version="2.1.233")])
+    with History(tmp_path / "history.sqlite") as history:
+        history.update(tmp_path / "logs")
+        recent = history.responses(since=nth_day(5))
+    assert recent[["source_file", "day", "version", "version_first_day"]].values.tolist() == [
+        ["long.jsonl", nth_day(2), "2.1.99", nth_day(0)],
+        ["long.jsonl", nth_day(6), "2.1.99", nth_day(0)],
+        ["new.jsonl", nth_day(7), "2.1.233", nth_day(7)]]
 
 
 def test_history_holds_the_same_turn_durations_as_the_transcripts(tmp_path):

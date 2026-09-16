@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -241,13 +242,31 @@ class History:
                  int(row["is_sidechain"]), row["trigger"], _count(row["pre_tokens"]))
                 for row in parsed.compactions.values()])
 
-    def responses(self) -> pd.DataFrame:
-        """Every stored response, as the table parse_source returns."""
-        rows = pd.read_sql_query(
-            "SELECT f.path AS source_file, f.session_id, r.ts, "
-            + ", ".join(f"r.{c}" for c in RESPONSE_COLUMNS)
-            + " FROM responses r JOIN files f ON f.id = r.file_id ORDER BY f.path, r.ts", self.db)
-        return frame(_decode(rows, FLAG_COLUMNS))
+    def responses(self, since: Optional[str] = None) -> pd.DataFrame:
+        """Every stored response, as the table parse_source returns. With `since` (a UTC
+        day), only the responses of transcripts with one on that day or later, whole, so
+        idle gaps and session starts read as they do in the full table; `version_first_day`
+        then holds the day each version first ran over the whole store."""
+        query = ("SELECT f.path AS source_file, f.session_id, r.ts, " + ", ".join(f"r.{c}" for c in RESPONSE_COLUMNS)
+                 + " FROM responses r JOIN files f ON f.id = r.file_id")
+        params: tuple = ()
+        if since is not None:
+            query += " WHERE r.file_id IN (SELECT file_id FROM responses WHERE ts >= ?)"
+            params = (_micros(datetime.fromisoformat(since).replace(tzinfo=timezone.utc)),)
+        df = frame(_decode(pd.read_sql_query(query + " ORDER BY f.path, r.ts", self.db, params=params),
+                           FLAG_COLUMNS))
+        if since is not None and not df.empty:
+            df["version_first_day"] = df["version"].map(self.version_first_days())
+        return df
+
+    def version_first_days(self) -> dict[str, str]:
+        """The UTC day each Claude Code version first answered on the main thread outside
+        Agent SDK sessions, over the whole store."""
+        rows = self.db.execute(
+            "SELECT version, MIN(ts) FROM responses WHERE version IS NOT NULL AND ts IS NOT NULL "
+            "AND is_sidechain = 0 AND (entrypoint IS NULL OR entrypoint NOT LIKE 'sdk-%') GROUP BY version")
+        return {version: datetime.fromtimestamp(ts / 1_000_000, timezone.utc).date().isoformat()
+                for version, ts in rows}
 
     def durations(self) -> pd.DataFrame:
         """Every stored turn duration, as the table parse_durations returns."""
@@ -272,11 +291,13 @@ class History:
         return compaction_frame(_decode(rows, ("is_sidechain",)))
 
 
-def load_history(source: Path, state_path: Path, claim: bool) -> Tables:
+def load_history(source: Path, state_path: Path, claim: bool, since: Optional[str] = None) -> Tables:
     """Everything ccdrift knows of for `source`: the history store next to the state
     file, first brought up to date. Only the daily check claims a store (`claim`):
     other commands read the transcripts directly while no check has tied the store to
-    a folder, and so does anything run on a folder other than the store's."""
+    a folder, and so does anything run on a folder other than the store's. With
+    `since`, the store's responses are only those of transcripts active since that
+    UTC day (see History.responses)."""
     path = history_path(state_path)
     if not claim and not path.exists():
         return parse_all(source)
@@ -289,7 +310,7 @@ def load_history(source: Path, state_path: Path, claim: bool) -> Tables:
             if built_from is None and not claim:
                 return parse_all(source)
             history.update(source, claim=claim)
-            return Tables(history.responses(), history.durations(), history.hook_runs(), history.compactions())
+            return Tables(history.responses(since), history.durations(), history.hook_runs(), history.compactions())
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc
     except pd.errors.DatabaseError as exc:

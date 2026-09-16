@@ -483,6 +483,17 @@ def judged_turns(df: pd.DataFrame, today: date) -> pd.DataFrame:
     return df[keep]
 
 
+def first_days_by_version(turns: pd.DataFrame) -> pd.Series:
+    """The UTC day each Claude Code version first appears among `turns`, or in the
+    whole history store when the table carries `version_first_day`: the check reads
+    only recent transcripts."""
+    known = turns.dropna(subset=["version"])
+    days = known["day"].astype(str)
+    if "version_first_day" in known:
+        days = known["version_first_day"].fillna(days).astype(str)
+    return days.groupby(known["version"]).min()
+
+
 def judged_subagent_turns(df: pd.DataFrame, today: date) -> pd.DataFrame:
     """Subagent turns of complete UTC days whose agent type Claude Code logged,
     without Agent SDK sessions."""

@@ -19,7 +19,7 @@ import pandas as pd
 
 from ccdrift.detector import DetectorConfig, baseline_bins, bin_metrics, detect, flag_onsets, pooled_z
 from ccdrift.history import HistoryError, load_history
-from ccdrift.logs import judged_turns
+from ccdrift.logs import first_days_by_version, judged_turns
 from ccdrift.state import load_state
 from ccdrift.texts import (INCIDENT_METRICS, METRIC_ARGS, MOVES, PERSISTENT_DAYS, SHORT_NAMES, approx, cost_text,
                            incident_line)
@@ -165,7 +165,7 @@ def versions_text(turns: pd.DataFrame, days: Sequence[str]) -> list[str]:
     on_days = known.loc[known["day"].astype(str).isin(list(days)), "version"]
     if on_days.empty:
         return []
-    first_seen = known.groupby("version")["day"].min()
+    first_seen = first_days_by_version(turns)
     shares = on_days.value_counts(normalize=True)
     return [f"{version} (since {str(first_seen[version])[5:]})"
             for version, share in shares.items() if share >= 0.2][:3]
