@@ -11,6 +11,7 @@ from typing import Any, Sequence
 
 import pandas as pd
 
+from ccdrift.logs import outside_sdk
 from ccdrift.texts import approx
 
 WINDOW = 3          # the latest sessions judged together
@@ -27,13 +28,13 @@ def session_starts(responses: pd.DataFrame) -> pd.DataFrame:
     """One row per main-thread CLI transcript, in time order: its first response's
     time, UTC day, Claude Code version and prompt size (input, cache creation and
     cache read tokens together). A first response with no tokens logged isn't a start:
-    every request sends context, so Claude Code has stopped logging usage."""
+    every request sends context, so Claude Code has stopped logging usage. Neither is
+    a resumed session's: its transcript opens with copies of the responses before it,
+    and the first one it owns carries the whole resumed context."""
     if responses.empty:
         return pd.DataFrame(columns=START_COLUMNS)
-    keep = responses["main_thread"].astype(bool)
-    if "entrypoint" in responses:
-        keep &= ~responses["entrypoint"].fillna("").astype(str).str.startswith("sdk-")
-    main = responses[keep]
+    main = responses[responses["main_thread"].astype(bool) & responses["opens_transcript"].astype(bool)
+                     & outside_sdk(responses)]
     if main.empty:
         return pd.DataFrame(columns=START_COLUMNS)
     first = main.sort_values("timestamp", kind="stable").groupby("source_file", sort=False).head(1)

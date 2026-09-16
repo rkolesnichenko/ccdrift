@@ -18,7 +18,7 @@ from ccdrift.detector import DetectorConfig, bin_metrics, detect
 from ccdrift.history import HistoryError, load_history
 from ccdrift.hooks import hooks_lines, hooks_summary, judged_hook_runs
 from ccdrift.incidents import exclusions, incident_cost
-from ccdrift.logs import judged_subagent_turns, judged_turns, no_transcripts_message
+from ccdrift.logs import judged_subagent_turns, judged_turns, no_transcripts_message, outside_sdk
 from ccdrift.sessions import MIN_SESSIONS, session_starts
 from ccdrift.settings import settings_lines, settings_summary, subagent_lines, subagent_summary
 from ccdrift.state import load_state
@@ -209,8 +209,8 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
     starts = starts[starts["day"].astype(str) < today.isoformat()]
     compactions = tables.compactions
     if not compactions.empty:
-        cli = ~compactions["entrypoint"].fillna("").astype(str).str.startswith("sdk-")
-        compactions = compactions[cli & ~compactions["is_sidechain"] & (compactions["trigger"] == "auto")
+        compactions = compactions[outside_sdk(compactions) & ~compactions["is_sidechain"]
+                                  & (compactions["trigger"] == "auto")
                                   & (compactions["day"].astype(str) < today.isoformat())]
     incidents = state["incidents"]
     entries = [(incident, incident_cost(turns, incident, incidents, cfg))

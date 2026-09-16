@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from ccdrift.detector import bin_metrics
-from ccdrift.logs import frame, judged_turns, parse_all, parse_durations, parse_source
+from ccdrift.logs import frame, judged_turns, outside_sdk, parse_all, parse_durations, parse_source
 from tests.helpers import (DAY, at, compact_boundary, line, prompt, response, stop_hook_summary, text,
                            thinking, tool_result, turn_duration, write)
 
@@ -284,3 +284,10 @@ def test_parse_all_reads_what_the_single_readers_read(tmp_path):
     tables = parse_all(tmp_path)
     pd.testing.assert_frame_equal(tables.responses, parse_source(tmp_path))
     pd.testing.assert_frame_equal(tables.durations, parse_durations(tmp_path))
+
+
+def test_agent_sdk_sessions_are_told_apart_by_their_entrypoint():
+    # Transcripts from before Claude Code logged an entrypoint count as the CLI.
+    rows = pd.DataFrame({"entrypoint": ["cli", "sdk-py", None, "SDK-ts"]})
+    assert outside_sdk(rows).tolist() == [True, False, True, True]
+    assert outside_sdk(pd.DataFrame({"day": ["2026-09-01"]})).tolist() == [True]

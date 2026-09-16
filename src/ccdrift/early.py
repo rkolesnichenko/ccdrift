@@ -16,6 +16,7 @@ from typing import Any, Optional, Sequence
 import pandas as pd
 
 from ccdrift.incidents import versions_text
+from ccdrift.logs import outside_sdk
 from ccdrift.texts import clock_text
 
 P1 = 0.05
@@ -57,9 +58,7 @@ def prompt_turns(df: pd.DataFrame) -> pd.DataFrame:
     response reads or writes the prompt cache, so a turn without them means the parser
     lost track of it (the blank-cache alert's case), not a miss."""
     keep = (df["main_thread"].astype(bool) & df["prompt_within_ttl"].astype(bool)
-            & ((df["cache_read"] + df["cache_creation"]) > 0))
-    if "entrypoint" in df:
-        keep &= ~df["entrypoint"].fillna("").astype(str).str.startswith("sdk-")
+            & ((df["cache_read"] + df["cache_creation"]) > 0) & outside_sdk(df))
     turns = df.loc[keep, ["timestamp", "day", "is_miss"]].copy()
     turns["day"] = turns["day"].astype(str)
     turns["is_miss"] = turns["is_miss"].astype(bool)
@@ -125,9 +124,7 @@ def early_warning(responses: pd.DataFrame, incidents: Sequence[dict], state: dic
     if now - at > timedelta(hours=RECENT_HOURS):
         return None
     run = stretch.iloc[_rise_first(runs):alarm + 1]
-    main = responses[responses["main_thread"].astype(bool)]
-    if "entrypoint" in main:
-        main = main[~main["entrypoint"].fillna("").astype(str).str.startswith("sdk-")]
+    main = responses[responses["main_thread"].astype(bool) & outside_sdk(responses)]
     warning = {"at": at.isoformat(timespec="seconds"),
                "since": run["timestamp"].iloc[0].to_pydatetime().isoformat(timespec="seconds"),
                "misses": int(run["is_miss"].sum()), "turns": len(run), "base_rate": round(base_rate, 4),

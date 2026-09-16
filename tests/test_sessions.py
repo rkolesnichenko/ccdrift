@@ -3,6 +3,7 @@
 from datetime import date
 
 import pandas as pd
+import pytest
 
 from ccdrift.logs import parse_source
 from ccdrift.sessions import (ContextChange, context_alerts, context_changes_in, context_message, first_of_each,
@@ -31,6 +32,24 @@ def test_a_first_response_without_token_counts_is_not_a_session_start(tmp_path):
     write(tmp_path / "a.jsonl", [prompt(at(0)), line("a1", text(40), ts=at(0), cache_creation=90_000)])
     write(tmp_path / "b.jsonl", [prompt(at(DAY)), unlogged])
     assert session_starts(parse_source(tmp_path))["source_file"].tolist() == ["a.jsonl"]
+
+
+def resumed(folder, original, copy):
+    """A session of two prompts, resumed a day later into a second transcript that
+    begins with copies of both responses."""
+    session = [prompt(at(0)), line("m1", text(40), ts=at(0), cache_creation=20_000),
+               prompt(at(60)), line("m2", text(40), ts=at(60), cache_read=20_000, cache_creation=500)]
+    write(folder / original, session)
+    write(folder / copy, session + [prompt(at(DAY)), line("m3", text(40), ts=at(DAY), cache_read=170_000,
+                                                        cache_creation=500)])
+
+
+@pytest.mark.parametrize("original, copy", [("a.jsonl", "z.jsonl"), ("z.jsonl", "a.jsonl")])
+def test_a_resumed_session_is_not_a_new_session_start(tmp_path, original, copy):
+    # When the original transcript owns the copied responses, the resumed one's first
+    # own response carries the whole resumed context: 170k tokens here.
+    resumed(tmp_path, original, copy)
+    assert session_starts(parse_source(tmp_path))["prompt_tokens"].tolist() == [20_010.0]
 
 
 def starts_of(tokens, versions=None):

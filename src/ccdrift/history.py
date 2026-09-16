@@ -10,24 +10,27 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
 
-from ccdrift.logs import (MAX_TIME, MIN_TIME, SETTING_FIELDS, TOKEN_FIELDS, ParsedFile, Tables, compaction_frame,
-                          duration_frame, frame, hook_frame, jsonl_files, parse_all, parse_file)
+from ccdrift.logs import (MAX_TIME, MIN_TIME, SDK_ENTRYPOINT_PREFIX, SETTING_FIELDS, TOKEN_FIELDS, ParsedFile, Tables,
+                          compaction_frame, duration_frame, frame, hook_frame, jsonl_files, parse_all, parse_file)
 
 HISTORY_FILE = "history.sqlite"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 # Bump whenever parse_file's output changes, so every transcript still on disk is
 # read again. Rows of transcripts Claude Code already deleted keep their values.
 # 3: counts, times and ids out of range or of the wrong type read as missing.
-PARSER_VERSION = 3
+# 4: each transcript's first main-thread response is marked, and text SQLite can't
+#    store is cleaned.
+PARSER_VERSION = 4
 
 TEXT_COLUMNS = ("model",) + SETTING_FIELDS
-FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction")
+FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction", "opens_transcript")
 COUNT_COLUMNS = TOKEN_FIELDS + ("thinking_logged", "signature_chars", "visible_chars", "n_mcp_calls")
 RESPONSE_COLUMNS = TEXT_COLUMNS + FLAG_COLUMNS + COUNT_COLUMNS
 DURATION_COLUMNS = ("version", "entrypoint", "is_sidechain", "duration_ms", "message_count")
@@ -36,17 +39,21 @@ COMPACTION_COLUMNS = ("version", "entrypoint", "is_sidechain", "trigger", "pre_t
 
 # Integer keys, microsecond timestamps and file ids keep a year of responses near
 # 65 MB; text keys, text timestamps and a path per row made it four times larger.
+# files.last_ts is the latest time among a transcript's responses, so the check finds
+# recent transcripts without reading every response.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS files (
-    id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, size INTEGER, mtime_ns INTEGER, session_id TEXT);
+    id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, size INTEGER, mtime_ns INTEGER, session_id TEXT,
+    last_ts INTEGER);
 CREATE TABLE IF NOT EXISTS responses (
     key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
     model TEXT, version TEXT, entrypoint TEXT, effort TEXT, speed TEXT, service_tier TEXT, agent_type TEXT,
     is_sidechain INTEGER, new_prompt INTEGER, after_compaction INTEGER,
     input_tokens INTEGER, output_tokens INTEGER, cache_creation INTEGER, cache_read INTEGER,
     cache_1h INTEGER, cache_5m INTEGER, thinking_logged INTEGER,
-    signature_chars INTEGER, visible_chars INTEGER, n_mcp_calls INTEGER);
+    signature_chars INTEGER, visible_chars INTEGER, n_mcp_calls INTEGER,
+    opens_transcript INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS responses_file ON responses (file_id);
 CREATE TABLE IF NOT EXISTS durations (
     key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
@@ -78,8 +85,10 @@ def _unusable(path: Path, exc: Exception) -> HistoryError:
 
 
 def row_key(text: str) -> int:
-    """A response's text key as a signed 64-bit integer, so SQLite keeps it as the row id."""
-    return int.from_bytes(hashlib.blake2b(text.encode(), digest_size=8).digest(), "big", signed=True)
+    """A response's text key as a signed 64-bit integer, so SQLite keeps it as the row id.
+    A lone surrogate in it (JSON "\\ud800") is hashed as it is."""
+    return int.from_bytes(hashlib.blake2b(text.encode("utf-8", "surrogatepass"), digest_size=8).digest(), "big",
+                          signed=True)
 
 
 def _micros(ts: Any) -> Optional[int]:
@@ -108,12 +117,18 @@ TS_RANGE = (_micros(MIN_TIME), _micros(MAX_TIME))
 
 # Responses on the main thread outside Agent SDK sessions with a usable time, as the
 # check judges them (GLOB, like str.startswith, tells case apart); takes TS_RANGE.
-MAIN_CLI = "ts BETWEEN ? AND ? AND is_sidechain = 0 AND (entrypoint IS NULL OR entrypoint NOT GLOB 'sdk-*')"
+MAIN_CLI = ("ts BETWEEN ? AND ? AND is_sidechain = 0 "
+            f"AND (entrypoint IS NULL OR entrypoint NOT GLOB '{SDK_ENTRYPOINT_PREFIX}*')")
 MICROS_PER_DAY = 86_400_000_000
 
 
 def _day(ts: int) -> str:
     return datetime.fromtimestamp(ts / 1_000_000, timezone.utc).date().isoformat()
+
+
+def _day_start(day: str) -> int:
+    """The first microsecond of a UTC day."""
+    return _micros(datetime.fromisoformat(day).replace(tzinfo=timezone.utc))
 
 
 def _decode(rows: pd.DataFrame, flags: tuple[str, ...]) -> pd.DataFrame:
@@ -128,6 +143,7 @@ class History:
     """The store in `path`, created when missing."""
 
     def __init__(self, path: Path):
+        self._days: Optional[list[tuple[int, Optional[str], int, int]]] = None
         if sqlite3.sqlite_version_info < (3, 24, 0):
             raise HistoryError(f"ccdrift needs SQLite 3.24 or newer for its history store; this Python has "
                                f"SQLite {sqlite3.sqlite_version}.")
@@ -174,11 +190,27 @@ class History:
 
     def _migrate(self, from_version: int) -> None:
         """Bring a store from an older ccdrift up to date; SCHEMA then adds missing tables."""
-        if from_version < 2:
-            columns = {row[1] for row in self.db.execute("PRAGMA table_info(responses)")}
-            if columns and "agent_type" not in columns:
-                with self.db:
-                    self.db.execute("ALTER TABLE responses ADD COLUMN agent_type TEXT")
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(responses)")}
+        if from_version < 2 and columns and "agent_type" not in columns:
+            with self.db:
+                self.db.execute("ALTER TABLE responses ADD COLUMN agent_type TEXT")
+        if from_version < 3 and columns and "opens_transcript" not in columns:
+            with self.db:
+                self.db.execute("ALTER TABLE responses ADD COLUMN opens_transcript INTEGER NOT NULL DEFAULT 0")
+                # Transcripts Claude Code has deleted can't be read again: their earliest
+                # main-thread response stays their session start, as before.
+                self.db.execute(
+                    "UPDATE responses SET opens_transcript = 1 WHERE key IN (SELECT r.key FROM responses r JOIN "
+                    "(SELECT file_id, MIN(ts) AS ts FROM responses WHERE is_sidechain = 0 AND ts BETWEEN ? AND ? "
+                    "GROUP BY file_id) first ON r.file_id = first.file_id AND r.ts = first.ts "
+                    "WHERE r.is_sidechain = 0)", TS_RANGE)
+        file_columns = {row[1] for row in self.db.execute("PRAGMA table_info(files)")}
+        if from_version < 3 and file_columns and "last_ts" not in file_columns:
+            with self.db:
+                self.db.execute("ALTER TABLE files ADD COLUMN last_ts INTEGER")
+                if columns:
+                    self.db.execute(
+                        "UPDATE files SET last_ts = (SELECT MAX(ts) FROM responses WHERE file_id = files.id)")
 
     def __enter__(self) -> "History":
         return self
@@ -225,6 +257,7 @@ class History:
         if claim and read and self.built_from() is None:
             self._set_meta("source", str(source.expanduser().resolve()))
         self._set_meta("parser_version", str(PARSER_VERSION))
+        self._days = None
         return read
 
     def _replace(self, rel: str, size: int, mtime_ns: int, parsed: ParsedFile) -> None:
@@ -258,6 +291,8 @@ class History:
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]), row["version"], row["entrypoint"],
                  int(row["is_sidechain"]), row["trigger"], _count(row["pre_tokens"]))
                 for row in parsed.compactions.values()])
+            self.db.execute("UPDATE files SET last_ts = (SELECT MAX(ts) FROM responses WHERE file_id = ?) WHERE id = ?",
+                            (file_id, file_id))
 
     def responses(self, since: Optional[str] = None) -> pd.DataFrame:
         """Every stored response, as the table parse_source returns. With `since` (a UTC
@@ -268,52 +303,64 @@ class History:
                  + " FROM responses r JOIN files f ON f.id = r.file_id")
         params: tuple = ()
         if since is not None:
-            query += " WHERE r.file_id IN (SELECT file_id FROM responses WHERE ts >= ?)"
-            params = (_micros(datetime.fromisoformat(since).replace(tzinfo=timezone.utc)),)
+            query += " WHERE r.file_id IN (SELECT id FROM files WHERE last_ts >= ?)"
+            params = (_day_start(since),)
         df = frame(_decode(pd.read_sql_query(query + " ORDER BY f.path, r.ts", self.db, params=params),
                            FLAG_COLUMNS))
         if since is not None and not df.empty:
             df["version_first_day"] = df["version"].map(self.version_first_days())
         return df
 
+    def _main_cli_days(self) -> list[tuple[int, Optional[str], int, int]]:
+        """Per UTC day (days since 1970) and Claude Code version: the responses on the
+        main thread outside Agent SDK sessions, and the earliest one's time. One pass
+        over the whole store, kept until the next update."""
+        if self._days is None:
+            self._days = self.db.execute(
+                f"SELECT ts / {MICROS_PER_DAY}, version, COUNT(*), MIN(ts) FROM responses WHERE {MAIN_CLI} "
+                "GROUP BY 1, 2", TS_RANGE).fetchall()
+        return self._days
+
     def version_first_days(self) -> dict[str, str]:
         """The UTC day each Claude Code version first answered on the main thread outside
         Agent SDK sessions, over the whole store."""
-        rows = self.db.execute(
-            f"SELECT version, MIN(ts) FROM responses WHERE version IS NOT NULL AND {MAIN_CLI} GROUP BY version",
-            TS_RANGE)
-        return {version: _day(ts) for version, ts in rows}
+        first: dict[str, int] = {}
+        for _, version, _, ts in self._main_cli_days():
+            if version is not None:
+                first[version] = min(ts, first.get(version, ts))
+        return {version: _day(ts) for version, ts in first.items()}
 
     def active_day_start(self, active_days: int, responses: int) -> Optional[str]:
         """The UTC day `active_days` active days back, counting days with at least
         `responses` responses on the main thread outside Agent SDK sessions; None when
         the store holds fewer such days."""
-        row = self.db.execute(
-            f"SELECT MIN(ts) FROM responses WHERE {MAIN_CLI} GROUP BY ts / {MICROS_PER_DAY} "
-            "HAVING COUNT(*) >= ? ORDER BY 1 DESC LIMIT 1 OFFSET ?", (*TS_RANGE, responses, active_days - 1)).fetchone()
-        return None if row is None else _day(row[0])
+        counts: Counter[int] = Counter()
+        for day, _, count, _ in self._main_cli_days():
+            counts[day] += count
+        active = sorted((day for day, count in counts.items() if count >= responses), reverse=True)
+        return _day(active[active_days - 1] * MICROS_PER_DAY) if len(active) >= active_days else None
 
-    def durations(self) -> pd.DataFrame:
-        """Every stored turn duration, as the table parse_durations returns."""
-        rows = pd.read_sql_query(
-            "SELECT f.path AS source_file, f.session_id, d.ts, "
-            + ", ".join(f"d.{c}" for c in DURATION_COLUMNS)
-            + " FROM durations d JOIN files f ON f.id = d.file_id ORDER BY f.path, d.ts", self.db)
-        return duration_frame(_decode(rows, ("is_sidechain",)))
+    def _records(self, table: str, columns: tuple[str, ...], since: Optional[str]) -> pd.DataFrame:
+        """A record table's stored rows, from `since` (a UTC day) when given."""
+        query = (f"SELECT f.path AS source_file, f.session_id, t.ts, {', '.join(f't.{c}' for c in columns)} "
+                 f"FROM {table} t JOIN files f ON f.id = t.file_id")
+        params: tuple = ()
+        if since is not None:
+            query += " WHERE t.ts >= ?"
+            params = (_day_start(since),)
+        return pd.read_sql_query(query + " ORDER BY f.path, t.ts", self.db, params=params)
 
-    def hook_runs(self) -> pd.DataFrame:
-        """Every stored stop-hook run, as parse_all's `hook_runs` table."""
-        rows = pd.read_sql_query(
-            "SELECT f.path AS source_file, f.session_id, h.ts, " + ", ".join(f"h.{c}" for c in HOOK_COLUMNS)
-            + " FROM hook_runs h JOIN files f ON f.id = h.file_id ORDER BY f.path, h.ts", self.db)
-        return hook_frame(_decode(rows, ("is_sidechain", "prevented")))
+    def durations(self, since: Optional[str] = None) -> pd.DataFrame:
+        """Every stored turn duration, or those from `since`, as the table parse_durations returns."""
+        return duration_frame(_decode(self._records("durations", DURATION_COLUMNS, since), ("is_sidechain",)))
 
-    def compactions(self) -> pd.DataFrame:
-        """Every stored compaction, as parse_all's `compactions` table."""
-        rows = pd.read_sql_query(
-            "SELECT f.path AS source_file, f.session_id, c.ts, " + ", ".join(f"c.{col}" for col in COMPACTION_COLUMNS)
-            + " FROM compactions c JOIN files f ON f.id = c.file_id ORDER BY f.path, c.ts", self.db)
-        return compaction_frame(_decode(rows, ("is_sidechain",)))
+    def hook_runs(self, since: Optional[str] = None) -> pd.DataFrame:
+        """Every stored stop-hook run, or those from `since`, as parse_all's `hook_runs` table."""
+        return hook_frame(_decode(self._records("hook_runs", HOOK_COLUMNS, since), ("is_sidechain", "prevented")))
+
+    def compactions(self, since: Optional[str] = None) -> pd.DataFrame:
+        """Every stored compaction, or those from `since`, as parse_all's `compactions` table."""
+        return compaction_frame(_decode(self._records("compactions", COMPACTION_COLUMNS, since), ("is_sidechain",)))
 
 
 def load_history(source: Path, state_path: Path, claim: bool, since: Optional[str] = None,
@@ -325,7 +372,7 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
     `since`, the store's responses are only those of transcripts active since that UTC
     day or since `active_days` days with `active_responses` responses back, whichever
     is earlier (see History.responses), and all of them while the store holds fewer
-    such days."""
+    such days; its other records are only those since the same day."""
     path = history_path(state_path)
     if not claim and not path.exists():
         return parse_all(source)
@@ -341,7 +388,8 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
             if since is not None and active_days:
                 active_start = history.active_day_start(active_days, active_responses)
                 since = None if active_start is None else min(since, active_start)
-            return Tables(history.responses(since), history.durations(), history.hook_runs(), history.compactions())
+            return Tables(history.responses(since), history.durations(since), history.hook_runs(since),
+                          history.compactions(since))
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc
     except pd.errors.DatabaseError as exc:

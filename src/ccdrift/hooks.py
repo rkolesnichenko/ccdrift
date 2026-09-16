@@ -9,6 +9,8 @@ from typing import Any, Optional, Sequence
 
 import pandas as pd
 
+from ccdrift.logs import outside_sdk
+
 HOOK_DAY_COLUMNS = ["day", "runs", "failed", "median_ms"]
 
 ACTIVE_RUNS = 10     # runs for a day to count
@@ -22,9 +24,8 @@ def judged_hook_runs(hook_runs: pd.DataFrame, today: date) -> pd.DataFrame:
     """Main-thread hook runs of complete UTC days, without Agent SDK sessions."""
     if hook_runs.empty:
         return hook_runs
-    keep = (hook_runs["day"].astype(str) < today.isoformat()) & ~hook_runs["is_sidechain"].astype(bool)
-    if "entrypoint" in hook_runs:
-        keep &= ~hook_runs["entrypoint"].fillna("").astype(str).str.startswith("sdk-")
+    keep = ((hook_runs["day"].astype(str) < today.isoformat()) & ~hook_runs["is_sidechain"].astype(bool)
+            & outside_sdk(hook_runs))
     return hook_runs[keep]
 
 

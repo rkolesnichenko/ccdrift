@@ -216,7 +216,11 @@ def no_transcripts_message(source: Path) -> str:
 
 
 def _text(value: Any) -> Optional[str]:
-    return value if isinstance(value, str) and value else None
+    """`value` when it is text, without what SQLite, notifications or --exec can't
+    take: a lone surrogate (JSON "\\ud800") reads as "?", and a NUL is dropped."""
+    if not isinstance(value, str):
+        return None
+    return value.replace("\0", "").encode("utf-8", "replace").decode("utf-8") or None
 
 
 def _record(obj: dict, key: str, rel: str) -> dict:
@@ -234,6 +238,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
     # Set by lines between two responses: a prompt typed by the user opens
     # a new turn, and a compaction rewrites the conversation.
     prompt_pending = compact_pending = False
+    main_thread_seen = False
     with fp.open("r", encoding="utf-8", errors="replace") as fh:
         for line_no, line in enumerate(fh):
             line = line.strip()
@@ -295,6 +300,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                       or f"{rel}:{line_no}")
             row = parsed.responses.get(key)
             if row is None:
+                is_sidechain = bool(field_get(obj, "is_sidechain", default=False))
                 row = parsed.responses[key] = {
                     "key":              key,
                     "timestamp":        parse_ts(field_get(obj, "timestamp")),
@@ -305,11 +311,16 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                     "signature_chars":  0,
                     "visible_chars":    0,
                     "n_mcp_calls":      0,
-                    "is_sidechain":     bool(field_get(obj, "is_sidechain", default=False)),
+                    "is_sidechain":     is_sidechain,
                     "new_prompt":       prompt_pending,
                     "after_compaction": compact_pending,
+                    # The transcript's first main-thread response, a copy or not: a
+                    # resumed session's transcript opens with copies of the responses
+                    # before it, which the transcript they came from owns.
+                    "opens_transcript": not is_sidechain and not main_thread_seen,
                     "source_file":      rel,
                 }
+                main_thread_seen = main_thread_seen or not is_sidechain
             prompt_pending = compact_pending = False
             for name in SETTING_FIELDS:
                 if row[name] is None:
@@ -471,15 +482,24 @@ def parse_durations(source: Path) -> pd.DataFrame:
     return parse_all(source).durations
 
 
+# Agent SDK sessions log an entrypoint starting with this: "sdk-py", "sdk-ts".
+SDK_ENTRYPOINT_PREFIX = "sdk-"
+
+
+def outside_sdk(df: pd.DataFrame) -> pd.Series:
+    """Whether each row comes from outside Agent SDK sessions, which are the user's own
+    scripts. Transcripts from before Claude Code logged an entrypoint count as the CLI."""
+    if "entrypoint" not in df:
+        return pd.Series(True, index=df.index)
+    return ~df["entrypoint"].fillna("").astype(str).str.startswith(SDK_ENTRYPOINT_PREFIX)
+
+
 def judged_turns(df: pd.DataFrame, today: date) -> pd.DataFrame:
     """The turns the daily check, the report and setting changes judge: main-thread
     turns of complete UTC days, without Agent SDK sessions. Subagent Haiku comes in
     bursts that flag on their own, a day still in progress holds only part of its
-    turns, and SDK sessions are the user's own scripts, on the 5-minute cache.
-    Transcripts from before Claude Code logged an entrypoint count as the CLI."""
-    keep = (df["day"].astype(str) < today.isoformat()) & df["main_thread"].astype(bool)
-    if "entrypoint" in df:
-        keep &= ~df["entrypoint"].fillna("").astype(str).str.startswith("sdk-")
+    turns, and SDK sessions are the user's own scripts, on the 5-minute cache."""
+    keep = (df["day"].astype(str) < today.isoformat()) & df["main_thread"].astype(bool) & outside_sdk(df)
     return df[keep]
 
 
@@ -499,9 +519,8 @@ def judged_subagent_turns(df: pd.DataFrame, today: date) -> pd.DataFrame:
     without Agent SDK sessions."""
     if df.empty or "agent_type" not in df:
         return df.iloc[0:0]
-    keep = (df["day"].astype(str) < today.isoformat()) & df["is_sidechain"].astype(bool) & df["agent_type"].notna()
-    if "entrypoint" in df:
-        keep &= ~df["entrypoint"].fillna("").astype(str).str.startswith("sdk-")
+    keep = ((df["day"].astype(str) < today.isoformat()) & df["is_sidechain"].astype(bool) & df["agent_type"].notna()
+            & outside_sdk(df))
     return df[keep]
 
 

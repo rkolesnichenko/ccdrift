@@ -12,6 +12,7 @@ from ccdrift.history import History, HistoryError, load_history, load_turns
 from ccdrift.incidents import add_incident, run_list
 from ccdrift.logs import parse_all, parse_durations, parse_source
 from ccdrift.report import run_report
+from ccdrift.sessions import session_starts
 from ccdrift.state import new_state, save_state
 from tests.helpers import (DAY, at, compact_boundary, damage_responses_table, line, nth_day, prompt, response,
                            stop_hook_summary, text, thinking, tool_result, turn_duration, write)
@@ -81,6 +82,15 @@ def test_odd_value_types_dont_fail_the_history(tmp_path):
     assert len(tables.hook_runs) == 1
 
 
+def test_text_that_isnt_valid_unicode_doesnt_fail_the_history(tmp_path):
+    # SQLite can't store a lone surrogate (JSON "\\ud800"), so every check failed while
+    # such a transcript was on disk; a NUL can't go into a notification or --exec.
+    odd = line("m1\ud800", text(40), ts=at(0), version="2.1.\ud800", effort="hi\x00gh")
+    write(tmp_path / "logs" / "s1.jsonl", [prompt(at(0), sid="s\ud800"), odd])
+    tables = load_history(tmp_path / "logs", tmp_path / "state.json", claim=True)
+    assert tables.responses[["version", "effort", "session_id"]].values.tolist() == [["2.1.?", "high", "s?"]]
+
+
 def test_history_since_a_day_holds_whole_transcripts_active_since_then_and_each_versions_first_day(tmp_path):
     # Whole transcripts, so idle gaps and session starts read as in the full history.
     write(tmp_path / "logs" / "old.jsonl", [prompt(at(0)), line("o1", text(40), ts=at(0), version="2.1.99")])
@@ -145,6 +155,34 @@ def test_a_response_in_two_transcripts_belongs_to_the_path_that_sorts_first(tmp_
     assert load_turns(tmp_path / "logs", tmp_path / "state.json")["source_file"].tolist() == ["a.jsonl"]
 
 
+@pytest.mark.parametrize("read_first", ["a.jsonl", "z.jsonl"])
+def test_a_resumed_session_read_into_the_store_in_either_order_is_one_session_start(tmp_path, read_first):
+    session = [prompt(at(0)), line("m1", text(40), ts=at(0), cache_creation=20_000)]
+    records = {"a.jsonl": session,
+               "z.jsonl": session + [prompt(at(DAY)), line("m2", text(40), ts=at(DAY), cache_read=170_000)]}
+    write(tmp_path / "logs" / read_first, records[read_first])
+    load_turns(tmp_path / "logs", tmp_path / "state.json")
+    for name, lines in records.items():
+        write(tmp_path / "logs" / name, lines)
+    starts = session_starts(load_turns(tmp_path / "logs", tmp_path / "state.json"))
+    assert starts[["source_file", "prompt_tokens"]].values.tolist() == [["a.jsonl", 20_010.0]]
+
+
+def test_history_since_a_day_holds_only_the_hook_runs_turn_durations_and_compactions_since_then(tmp_path):
+    # The check reads hook runs of recent weeks only, and no durations or compactions.
+    write(tmp_path / "logs" / "s1.jsonl", [
+        prompt(at(0)), line("m1", text(40), ts=at(0)),
+        stop_hook_summary(at(10), 1, uuid="h1"), turn_duration(at(20), 1000, 2, uuid="d1"),
+        compact_boundary(at(30), trigger="auto", pre_tokens=900_000),
+        prompt(at(10 * DAY)), line("m2", text(40), ts=at(10 * DAY)),
+        stop_hook_summary(at(10 * DAY + 10), 1, uuid="h2"), turn_duration(at(10 * DAY + 20), 1000, 2, uuid="d2"),
+        compact_boundary(at(10 * DAY + 30), trigger="auto", pre_tokens=900_000)])
+    tables = load_history(tmp_path / "logs", tmp_path / "state.json", claim=True, since=nth_day(5))
+    assert len(tables.responses) == 2
+    assert [frame["day"].tolist() for frame in (tables.hook_runs, tables.durations, tables.compactions)] == \
+        [[nth_day(10)]] * 3
+
+
 def test_history_built_from_another_folder_is_left_alone(tmp_path, capsys):
     transcripts(tmp_path / "logs")
     write(tmp_path / "other" / "s9.jsonl", [line("m9", text(40), ts=at(0))])
@@ -168,7 +206,7 @@ def test_a_new_parser_version_reads_every_transcript_again(tmp_path, monkeypatch
     transcripts(tmp_path / "logs")
     with History(tmp_path / "history.sqlite") as history:
         history.update(tmp_path / "logs")
-    monkeypatch.setattr(ccdrift.history, "PARSER_VERSION", 4)
+    monkeypatch.setattr(ccdrift.history, "PARSER_VERSION", ccdrift.history.PARSER_VERSION + 1)
     with History(tmp_path / "history.sqlite") as history:
         assert history.update(tmp_path / "logs") == 2
         assert history.update(tmp_path / "logs") == 0
@@ -190,7 +228,7 @@ def test_a_store_from_a_newer_ccdrift_with_an_incompatible_schema_is_refused_unt
     path = tmp_path / "history.sqlite"
     db = sqlite3.connect(path)
     db.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-    db.execute("INSERT INTO meta VALUES ('schema_version', '3')")
+    db.execute("INSERT INTO meta VALUES ('schema_version', ?)", (str(ccdrift.history.SCHEMA_VERSION + 1),))
     db.execute("CREATE TABLE responses (key INTEGER PRIMARY KEY, payload BLOB)")
     db.commit()
     db.close()
@@ -272,12 +310,17 @@ def test_a_store_from_ccdrift_0_2_is_upgraded_in_place_and_keeps_its_rows(tmp_pa
     db.executescript(V1_SCHEMA)
     db.close()
     with History(tmp_path / "history.sqlite") as history:
-        assert history.meta["schema_version"] == "2"
+        assert history.meta["schema_version"] == "3"
         columns = {row[1] for row in history.db.execute("PRAGMA table_info(responses)")}
         tables = {row[0] for row in history.db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert "agent_type" in columns
         assert {"hook_runs", "compactions"} <= tables
         assert history.responses()["model"].tolist() == ["claude-opus-5"]
+        # Its transcript is gone, so its first response stays a session start, and the
+        # check still finds it among recent transcripts.
+        assert session_starts(history.responses())["source_file"].tolist() == ["old.jsonl"]
+        assert len(history.responses(since="2026-08-29")) == 1
+        assert history.responses(since="2026-08-30").empty
 
 
 def test_history_holds_the_same_hook_runs_compactions_and_agent_types_as_the_transcripts(tmp_path):
@@ -310,12 +353,12 @@ def test_a_known_transcript_that_becomes_unreadable_is_marked_for_retry_and_the_
         history.update(tmp_path / "logs")
     # Bump the parser version so every transcript is read again, blocked one included,
     # even though its size and mtime haven't changed since the last update.
-    monkeypatch.setattr(ccdrift.history, "PARSER_VERSION", 4)
+    monkeypatch.setattr(ccdrift.history, "PARSER_VERSION", ccdrift.history.PARSER_VERSION + 1)
     with History(tmp_path / "history.sqlite") as history:
         os.chmod(blocked, 0)
         try:
             assert history.update(tmp_path / "logs") == 1  # the subagent transcript is still readable
-            assert history.meta["parser_version"] == "4"
+            assert history.meta["parser_version"] == str(ccdrift.history.PARSER_VERSION)
             size = history.db.execute(
                 "SELECT size FROM files WHERE path = ?", ("p/s1.jsonl",)).fetchone()[0]
             assert size is None
