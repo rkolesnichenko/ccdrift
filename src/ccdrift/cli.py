@@ -63,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--notify", action="store_true", help="also show a desktop notification for each alert")
     check.add_argument("--exec", metavar="CMD", help="also run CMD through the shell for each alert, with "
                        "CCDRIFT_ALERT, CCDRIFT_TITLE and CCDRIFT_MESSAGE set")
+    check.add_argument("--no-digest", action="store_true", help="skip the weekly summary on Mondays")
     _add_source(check)
     _add_state(check)
 
@@ -111,6 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
                                 help="write alerts to the log without desktop notifications")
     install_action.add_argument("--exec", metavar="CMD", help="also run CMD through the shell for each alert "
                                 "(see `ccdrift check --help`)")
+    install_action.add_argument("--no-digest", action="store_true", help="the job skips the weekly summary")
     _add_source(install_action)
     actions.add_parser("remove", help="remove the job")
     actions.add_parser("status", help="show whether the job is installed and how its last run went")
@@ -123,7 +125,8 @@ def _schedule(args: argparse.Namespace) -> int:
         job = make_job(args.at if args.action == "install" else None,
                        notify=not getattr(args, "no_notify", False),
                        source=getattr(args, "source", None),
-                       exec_command=getattr(args, "exec", None))
+                       exec_command=getattr(args, "exec", None),
+                       no_digest=getattr(args, "no_digest", False))
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -199,7 +202,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "check":
         from ccdrift.check import run_check
-        return run_check(_source(args), _state(args), notify_user=args.notify, exec_command=args.exec)
+        return run_check(_source(args), _state(args), notify_user=args.notify, exec_command=args.exec,
+                         digest=not args.no_digest)
     if args.command == "peek":
         from ccdrift.logs import peek
         return 0 if peek(_source(args)) else 2

@@ -448,3 +448,8 @@ def test_schedule_install_without_a_time_sets_up_an_hourly_job(tmp_path, monkeyp
     assert main(["schedule", "install", "--no-notify"]) == 0
     assert capsys.readouterr().out.splitlines()[0] == "Installed a launchd job: `ccdrift check` runs every hour."
     assert plistlib.loads(backend.plist.read_bytes())["StartInterval"] == 3600
+
+
+def test_job_carries_no_digest_given_to_install():
+    job = make_job("09:00", notify=True, no_digest=True, python="/venv/bin/python", environ={})
+    assert job.argv() == ["/venv/bin/python", "-m", "ccdrift", "check", "--notify", "--no-digest"]

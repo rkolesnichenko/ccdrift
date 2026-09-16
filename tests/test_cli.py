@@ -88,3 +88,9 @@ def test_python_m_ccdrift_runs_the_command_line():
     result = subprocess.run([sys.executable, "-m", "ccdrift", "--version"], capture_output=True, text=True,
                             cwd=root, env={**os.environ, "PYTHONPATH": str(root / "src")})
     assert result.stdout == f"ccdrift {__version__}\n"
+
+
+def test_check_and_schedule_install_take_no_digest():
+    from ccdrift.cli import build_parser
+    assert build_parser().parse_args(["check", "--no-digest"]).no_digest is True
+    assert build_parser().parse_args(["schedule", "install", "--no-digest"]).no_digest is True

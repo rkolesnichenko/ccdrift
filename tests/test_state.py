@@ -65,3 +65,13 @@ def test_each_run_is_recorded_with_its_start_and_outcome():
     assert state["last_run"] == {"started": "2026-09-17T09:00:02+03:00", "ok": False,
                                  "error": "RuntimeError: no transcripts"}
     assert state["last_ok"] == "2026-09-16T09:00:02+03:00"
+
+
+def test_successful_runs_keep_their_local_dates_the_newest_14():
+    state = new_state()
+    started = datetime(2026, 9, 1, 23, 30, tzinfo=timezone(timedelta(hours=3)))
+    for day in range(16):
+        record_run(state, started + timedelta(days=day), None)
+        record_run(state, started + timedelta(days=day, minutes=10), None)
+    record_run(state, started + timedelta(days=16), "RuntimeError: no transcripts")
+    assert state["runs"] == [f"2026-09-{day:02d}" for day in range(3, 17)]

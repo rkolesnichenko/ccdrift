@@ -53,9 +53,18 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+RUN_DAYS = 14
+
+
 def record_run(state: dict[str, Any], started: datetime, error: Optional[str]) -> None:
-    """Note when a run started and whether it worked; `error` is None when it did."""
+    """Note when a run started and whether it worked; `error` is None when it did.
+    Successful runs also keep their local date in state["runs"], the newest RUN_DAYS."""
     stamp = started.isoformat(timespec="seconds")
     state["last_run"] = {"started": stamp, "ok": error is None, "error": error}
     if error is None:
         state["last_ok"] = stamp
+        runs = state.setdefault("runs", [])
+        day = started.date().isoformat()
+        if day not in runs:
+            runs.append(day)
+        del runs[:-RUN_DAYS]

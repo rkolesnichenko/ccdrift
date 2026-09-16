@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import copy
 import traceback
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -13,6 +13,7 @@ import pandas as pd
 
 from ccdrift.changelog import changelog_path, days_before, load_changelog, new_versions, note_lines, release_notes
 from ccdrift.detector import DetectorConfig
+from ccdrift.digest import digest_due, digest_week, weekly_digest
 from ccdrift.early import early_message, early_warning
 from ccdrift.fields import field_gaps, gap_message
 from ccdrift.history import load_history
@@ -69,7 +70,7 @@ def blank_cache_stretch(turns: pd.DataFrame, state: dict[str, Any],
 
 
 def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: DetectorConfig,
-            today: date, now: datetime) -> list[Alert]:
+            today: date, now: datetime, digest: bool) -> list[Alert]:
     """Everything that changed since the last run, in the order alerts go out;
     `state` is updated to match."""
     tables = load_history(source, state_path, claim=True)
@@ -128,22 +129,33 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
                        f"no usable cache values on {blank['days']} active days from {blank['first']} "
                        f"({blank['responses']} responses, {blank['prompts']} prompts recognised). "
                        "Claude Code's log format may have changed; run `ccdrift peek`.", []))
+    week_start = digest_due(state, now) if digest else None
+    if week_start is not None:
+        state["digest_week"] = digest_week(now)
+        alerts.append(("digest", "ccdrift: weekly summary", weekly_digest(turns, state, week_start), []))
     return alerts
+
+
+FAILURE_NOTICE_HOURS = 20
 
 
 def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = None,
               notify_user: bool = False, today: Optional[date] = None,
-              exec_command: Optional[str] = None, now: Optional[datetime] = None) -> int:
+              exec_command: Optional[str] = None, now: Optional[datetime] = None,
+              digest: bool = True) -> int:
     """Run the daily check and print a line per alert; with notify_user, also show a
     notification for each; with exec_command, also run it for each (see
     notify.run_exec). The state file is read once and written once, with how the
     run went, so `ccdrift status` can tell a broken check from a quiet week. A
-    state file that can't be read is left as it is."""
+    state file that can't be read is left as it is. Without `digest`, no weekly
+    summary."""
     started = now or datetime.now().astimezone()
     stamp = started.strftime("%Y-%m-%d %H:%M")
 
-    def alert(kind: str, title: str, message: str) -> None:
+    def alert(kind: str, title: str, message: str, send: bool = True) -> None:
         print(f"[check {stamp}] {title}: {message}")
+        if not send:
+            return
         if notify_user:
             notify(title, message)
         if exec_command:
@@ -155,6 +167,17 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
             if failure:
                 print(f'[check {stamp}] --exec failed for "{title}": {failure}')
 
+    def failure_notice_due(state: Optional[dict[str, Any]]) -> bool:
+        """A failure notifies and runs --exec at most once per FAILURE_NOTICE_HOURS;
+        `state` notes when it last did."""
+        if state is None:
+            return True
+        last = state.get("last_failure_notice")
+        if last and started - datetime.fromisoformat(last) < timedelta(hours=FAILURE_NOTICE_HOURS):
+            return False
+        state["last_failure_notice"] = started.isoformat(timespec="seconds")
+        return True
+
     try:
         state = load_state(state_path)
     except (OSError, ValueError) as exc:
@@ -164,17 +187,18 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
     updated = copy.deepcopy(state)
     try:
         alerts = _alerts(source, state_path, updated, cfg or DetectorConfig(),
-                         today or datetime.now(timezone.utc).date(), started)
+                         today or datetime.now(timezone.utc).date(), started, digest)
         record_run(updated, started, None)
         save_state(state_path, updated)
     except Exception as exc:
         traceback.print_exc()
+        send = failure_notice_due(state)
         record_run(state, started, f"{type(exc).__name__}: {exc}")
         try:
             save_state(state_path, state)
         except OSError:
             pass
-        alert("failed", "ccdrift check failed", f"{type(exc).__name__}: {exc}")
+        alert("failed", "ccdrift check failed", f"{type(exc).__name__}: {exc}", send)
         return 1
     for kind, title, message, details in alerts:
         alert(kind, title, message)

@@ -62,11 +62,14 @@ class Job:
     source: Optional[Path] = None
     state: Optional[Path] = None
     exec_command: Optional[str] = None
+    no_digest: bool = False
 
     def argv(self) -> list[str]:
         args = [self.python, "-m", "ccdrift", "check"]
         if self.notify:
             args.append("--notify")
+        if self.no_digest:
+            args.append("--no-digest")
         if self.source is not None:
             args += ["--source", str(self.source)]
         if self.state is not None:
@@ -92,7 +95,8 @@ def parse_at(text: str) -> tuple[int, int]:
 
 
 def make_job(at: Optional[str], notify: bool, source: Optional[str] = None, exec_command: Optional[str] = None,
-             environ: Mapping[str, str] = os.environ, python: str = sys.executable) -> Job:
+             no_digest: bool = False, environ: Mapping[str, str] = os.environ,
+             python: str = sys.executable) -> Job:
     hour, minute = parse_at(at) if at is not None else (None, None)
     if source:
         source_path: Optional[Path] = Path(source).expanduser().absolute()
@@ -103,7 +107,7 @@ def make_job(at: Optional[str], notify: bool, source: Optional[str] = None, exec
     home = ccdrift_home(environ).absolute()
     state = home / "check-state.json" if environ.get("CCDRIFT_HOME") else None
     return Job(python=python, hour=hour, minute=minute, notify=notify, log=home / "check.log",
-               source=source_path, state=state, exec_command=exec_command)
+               source=source_path, state=state, exec_command=exec_command, no_digest=no_digest)
 
 
 def last_log_line(log: Path) -> str:

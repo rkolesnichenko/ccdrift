@@ -22,8 +22,9 @@ def sent(monkeypatch):
 
 
 def check_logs(tmp_path, today=date(2026, 9, 4), **options):
-    """Run the check as the schedule would at 09:00 UTC on `today`."""
+    """Run the check as the schedule would at 09:00 UTC on `today`, without the weekly digest."""
     options.setdefault("now", datetime.combine(today, time(9, 0), tzinfo=timezone.utc))
+    options.setdefault("digest", False)
     return run_check(tmp_path / "logs", tmp_path / "state.json", notify_user=True, today=today, **options)
 
 
@@ -268,3 +269,33 @@ def test_check_warns_within_a_day_when_new_prompts_start_missing_the_cache(tmp_p
     assert ("ccdrift: cache misses rising: 10 of the last 10 new-prompt turns missed the cache (usually 0.0%), "
             "since 09-21 10:50, on Claude Code 2.1.226 (since 09-01). The daily check confirms or clears it "
             "within a few days.") in capsys.readouterr().out
+
+
+LOCAL = timezone(timedelta(hours=3))
+
+
+def test_check_sends_the_weekly_summary_on_the_first_run_after_monday_9(tmp_path, sent, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 20)
+    for today, hour, minute in ((19, 9, 0), (21, 8, 0), (21, 9, 5), (21, 10, 5)):
+        check_logs(tmp_path, today=date(2026, 9, today), now=datetime(2026, 9, today, hour, minute, tzinfo=LOCAL),
+                   digest=True)
+    assert sent == ["ccdrift: weekly summary"]
+    assert ("ccdrift: weekly summary: Week of 09-14: 420 responses on 2.1.226; cache ratio 0.900 (0.0% misses); "
+            "no Haiku; no open incidents; no setting changes; check ran on 1 of 7 days.") in capsys.readouterr().out
+
+
+def test_check_without_the_digest_leaves_the_week_unsent(tmp_path, sent):
+    main_thread_days(tmp_path / "logs", [{}] * 20)
+    check_logs(tmp_path, today=date(2026, 9, 19), now=datetime(2026, 9, 19, 9, 0, tzinfo=LOCAL))
+    check_logs(tmp_path, today=date(2026, 9, 21), now=datetime(2026, 9, 21, 9, 5, tzinfo=LOCAL))
+    assert sent == []
+    assert "digest_week" not in load_state(tmp_path / "state.json")
+
+
+def test_a_failing_check_notifies_at_most_once_in_20_hours(tmp_path, sent, capsys):
+    (tmp_path / "logs").mkdir()
+    first = datetime(2026, 9, 4, 9, 0, tzinfo=timezone.utc)
+    for hours in (0, 1, 20):
+        check_logs(tmp_path, now=first + timedelta(hours=hours))
+    assert sent == ["ccdrift check failed", "ccdrift check failed"]
+    assert capsys.readouterr().out.count("ccdrift check failed: ") == 3
