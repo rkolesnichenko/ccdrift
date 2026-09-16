@@ -1,5 +1,6 @@
 """Incidents: a flag followed from its first deviant day until the metric recovers."""
 
+import random
 from datetime import date
 
 import pandas as pd
@@ -10,7 +11,7 @@ from ccdrift.incidents import (Event, approx, describe, exclusions, incident_cos
                                versions_text)
 from ccdrift.logs import judged_turns
 from ccdrift.state import new_state
-from tests.helpers import HAIKU, QUIET, daily_turns, nth_day
+from tests.helpers import HAIKU, MOSTLY_CLEAN_CACHE, QUIET, daily_turns, nth_day, prompt_turn_days
 
 
 def run(state, days, today):
@@ -79,6 +80,20 @@ def test_an_incident_recovers_once_three_pooled_windows_in_a_row_are_normal():
         ("recovered", "2026-09-22", "2026-09-23", "check")
 
 
+def test_a_cache_incident_is_flagged_and_recovers_like_a_haiku_incident():
+    # The cache ratio's harmful direction is "down", the opposite of Haiku share's
+    # "up": this exercises that branch of recovery, and the cache metric's own
+    # z-threshold (3.0, not the 3.5 default). 14 mostly-clean baseline days (an
+    # occasional cold turn, as real logs run), then 6 days at a 20% miss rate,
+    # then 6 clean days again.
+    state = new_state()
+    days = prompt_turn_days(MOSTLY_CLEAN_CACHE + [8] * 6 + [0] * 6, random.Random(0))
+    assert run(state, days, date(2026, 9, 27)) == [("flag", "2026-09-15"), ("recovered", "2026-09-15")]
+    incident = state["incidents"][0]
+    assert (incident["status"], incident["end"], incident["recovered_from"], incident["closed_by"]) == \
+        ("recovered", "2026-09-22", "2026-09-23", "check")
+
+
 def test_an_incident_is_followed_from_run_to_run():
     state = new_state()
     days = [QUIET] * 14 + [HAIKU] * 6 + [QUIET] * 6
@@ -95,6 +110,16 @@ def test_an_incident_open_for_30_days_becomes_the_new_normal():
     assert run(state, [QUIET] * 14 + [HAIKU] * 30, date(2026, 10, 15)) == [("persistent", "2026-09-15")]
     assert (state["incidents"][0]["status"], state["incidents"][0]["end"]) == ("persistent", "2026-10-14")
     assert run(state, [QUIET] * 14 + [HAIKU] * 31, date(2026, 10, 16)) == []
+
+
+def test_a_persistent_incident_ends_on_the_last_complete_day_even_without_turns():
+    # Data stops at Oct 14 but today is Oct 16, so the last complete day (Oct 15)
+    # has no turns of its own; the incident still ends there, not on the last day
+    # that happens to have data.
+    state = new_state()
+    run(state, [QUIET] * 14 + [HAIKU] * 3, date(2026, 9, 18))
+    assert run(state, [QUIET] * 14 + [HAIKU] * 30, date(2026, 10, 16)) == [("persistent", "2026-09-15")]
+    assert state["incidents"][0]["end"] == "2026-10-15"
 
 
 def test_a_dismissed_incident_opens_nothing_again():

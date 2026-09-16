@@ -146,7 +146,8 @@ def _settle(incident: dict, metrics: pd.DataFrame, bins: list[str], incidents: S
                                 end=bins[first - 1], closed_on=today.isoformat())
                 return Event("recovered", incident, days=[bins[i] for i in normal_ends])
     if (today - date.fromisoformat(incident["start"])).days >= PERSISTENT_DAYS:
-        incident.update(status="persistent", closed_by="check", end=bins[-1], closed_on=today.isoformat())
+        incident.update(status="persistent", closed_by="check",
+                        end=(today - timedelta(days=1)).isoformat(), closed_on=today.isoformat())
         return Event("persistent", incident, days=bins[-RECOVERY_BINS:])
     return None
 
