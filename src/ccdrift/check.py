@@ -16,7 +16,7 @@ from ccdrift.detector import DetectorConfig
 from ccdrift.history import load_turns
 from ccdrift.incidents import describe, incident_cost, update_incidents, versions_text
 from ccdrift.logs import judged_turns, no_transcripts_message
-from ccdrift.notify import notify
+from ccdrift.notify import notify, run_exec
 from ccdrift.settings import change_message, setting_changes
 from ccdrift.state import load_state, record_run, save_state
 
@@ -94,10 +94,11 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
 
 def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = None,
               notify_user: bool = False, today: Optional[date] = None,
-              now: Optional[datetime] = None) -> int:
+              exec_command: Optional[str] = None, now: Optional[datetime] = None) -> int:
     """Run the daily check and print a line per alert; with notify_user, also show a
-    notification for each. The state file is read once and written once, with how
-    the run went, so `ccdrift status` can tell a broken check from a quiet week. A
+    notification for each; with exec_command, also run it for each (see
+    notify.run_exec). The state file is read once and written once, with how the
+    run went, so `ccdrift status` can tell a broken check from a quiet week. A
     state file that can't be read is left as it is."""
     started = now or datetime.now().astimezone()
     stamp = started.strftime("%Y-%m-%d %H:%M")
@@ -106,6 +107,10 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
         print(f"[check {stamp}] {title}: {message}")
         if notify_user:
             notify(title, message)
+        if exec_command:
+            failure = run_exec(exec_command, kind, title, message)
+            if failure:
+                print(f'[check {stamp}] --exec failed for "{title}": {failure}')
 
     try:
         state = load_state(state_path)

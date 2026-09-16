@@ -2,7 +2,7 @@
 
 import subprocess
 
-from ccdrift.notify import notify
+from ccdrift.notify import notify, run_exec
 
 
 def recorder():
@@ -52,3 +52,25 @@ def test_notify_ignores_a_notifier_that_times_out():
     notify("ccdrift flag", "message", platform="linux", run=run, which=lambda name: "/usr/bin/notify-send")
     assert [argv for argv, kwargs in calls] == [["notify-send", "ccdrift flag", "message"]]
     assert calls[0][1]["timeout"] == 10
+
+
+def test_exec_runs_the_command_through_the_shell_with_the_alert_in_its_environment(tmp_path):
+    out = tmp_path / "alert.txt"
+    command = f'printf "%s|%s|%s" "$CCDRIFT_ALERT" "$CCDRIFT_TITLE" "$CCDRIFT_MESSAGE" > "{out}"'
+    assert run_exec(command, "flag", "ccdrift flag", "Haiku share 'up' from 2026-09-15") is None
+    assert out.read_text() == "flag|ccdrift flag|Haiku share 'up' from 2026-09-15"
+
+
+def test_exec_says_why_a_command_failed():
+    assert run_exec("echo no route >&2; exit 3", "flag", "ccdrift flag", "message") == "exit 3: no route"
+
+
+def test_exec_gives_up_on_a_command_after_30_seconds():
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(kwargs["timeout"])
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    assert run_exec("sleep 100", "flag", "ccdrift flag", "message", run=run) == "timed out after 30 s"
+    assert calls == [30]

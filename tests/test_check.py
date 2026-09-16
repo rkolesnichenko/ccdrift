@@ -138,3 +138,18 @@ def test_check_alerts_when_the_main_thread_moves_to_the_5_minute_cache(tmp_path,
     assert sent == ["ccdrift: setting changed"]
     assert ("ccdrift: setting changed: Cache writes for claude-opus-5 moved from the 1-hour to the 5-minute "
             "cache from 2026-09-15, on Claude Code 2.1.280 (since 09-15).") in capsys.readouterr().out
+
+
+def test_check_runs_the_exec_command_for_each_alert(tmp_path, sent, capsys):
+    (tmp_path / "logs").mkdir()
+    out = tmp_path / "alerts.txt"
+    run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4),
+              exec_command=f'echo "$CCDRIFT_ALERT" >> "{out}"')
+    assert out.read_text() == "failed\n"
+
+
+def test_a_failing_exec_command_is_logged_and_the_check_goes_on(tmp_path, sent, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12}] * 3)
+    assert run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 18),
+                     exec_command="exit 7") == 0
+    assert '--exec failed for "ccdrift flag": exit 7' in capsys.readouterr().out

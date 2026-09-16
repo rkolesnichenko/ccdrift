@@ -43,6 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = commands.add_parser("check", help="report new flags once (what the schedule runs)")
     check.add_argument("--notify", action="store_true", help="also show a desktop notification for each alert")
+    check.add_argument("--exec", metavar="CMD", help="also run CMD through the shell for each alert, with "
+                       "CCDRIFT_ALERT, CCDRIFT_TITLE and CCDRIFT_MESSAGE set")
     _add_source(check)
     _add_state(check)
 
@@ -60,6 +62,8 @@ def build_parser() -> argparse.ArgumentParser:
     install_action.add_argument("--at", default="09:00", help="local time to run, 24-hour HH:MM (default: 09:00)")
     install_action.add_argument("--no-notify", action="store_true",
                                 help="write alerts to the log without desktop notifications")
+    install_action.add_argument("--exec", metavar="CMD", help="also run CMD through the shell for each alert "
+                                "(see `ccdrift check --help`)")
     _add_source(install_action)
     actions.add_parser("remove", help="remove the daily job")
     actions.add_parser("status", help="show whether the job is installed and how its last run went")
@@ -70,7 +74,8 @@ def _schedule(args: argparse.Namespace) -> int:
     try:
         job = make_job(args.at if args.action == "install" else "09:00",
                        notify=not getattr(args, "no_notify", False),
-                       source=getattr(args, "source", None))
+                       source=getattr(args, "source", None),
+                       exec_command=getattr(args, "exec", None))
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -112,7 +117,7 @@ def _schedule(args: argparse.Namespace) -> int:
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "check":
-        return run_check(_source(args), _state(args), notify_user=args.notify)
+        return run_check(_source(args), _state(args), notify_user=args.notify, exec_command=args.exec)
     if args.command == "peek":
         return 0 if peek(_source(args)) else 2
     if args.command == "report":

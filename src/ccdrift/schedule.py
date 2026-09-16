@@ -61,6 +61,7 @@ class Job:
     log: Path
     source: Optional[Path] = None
     state: Optional[Path] = None
+    exec_command: Optional[str] = None
 
     def argv(self) -> list[str]:
         args = [self.python, "-m", "ccdrift", "check"]
@@ -70,6 +71,8 @@ class Job:
             args += ["--source", str(self.source)]
         if self.state is not None:
             args += ["--state", str(self.state)]
+        if self.exec_command:
+            args += ["--exec", self.exec_command]
         return args
 
 
@@ -81,7 +84,7 @@ def parse_at(text: str) -> tuple[int, int]:
     return int(match.group(1)), int(match.group(2))
 
 
-def make_job(at: str, notify: bool, source: Optional[str] = None,
+def make_job(at: str, notify: bool, source: Optional[str] = None, exec_command: Optional[str] = None,
              environ: Mapping[str, str] = os.environ, python: str = sys.executable) -> Job:
     hour, minute = parse_at(at)
     if source:
@@ -93,7 +96,7 @@ def make_job(at: str, notify: bool, source: Optional[str] = None,
     home = ccdrift_home(environ).absolute()
     state = home / "check-state.json" if environ.get("CCDRIFT_HOME") else None
     return Job(python=python, hour=hour, minute=minute, notify=notify, log=home / "check.log",
-               source=source_path, state=state)
+               source=source_path, state=state, exec_command=exec_command)
 
 
 def last_log_line(log: Path) -> str:

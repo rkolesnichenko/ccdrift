@@ -394,3 +394,28 @@ def test_linux_without_systemd_or_cron_gets_no_scheduler():
     # Passes before this task's change too; it guards against a fallback that
     # picks a scheduler the system doesn't have.
     assert choose_backend(platform="linux", run=FakeRun(), which=lambda name: None) is None
+
+
+NTFY = 'curl -d "$CCDRIFT_MESSAGE" ntfy.sh/topic 100%'
+
+
+def test_job_carries_the_exec_command_given_to_install():
+    job = make_job("09:00", notify=False, exec_command=NTFY, python="/venv/bin/python", environ={})
+    assert job.argv()[-2:] == ["--exec", NTFY]
+
+
+def test_exec_command_survives_launchd_systemd_and_cron_quoting():
+    job = make_job("06:05", notify=False, exec_command=NTFY, python="/venv/bin/python",
+                   environ={"CCDRIFT_HOME": "/data"})
+    assert plistlib.loads(launchd_plist(job).encode())["ProgramArguments"][-2:] == ["--exec", NTFY]
+    assert systemd_units(job)["ccdrift-check.service"].splitlines()[5].endswith(
+        '"--exec" "curl -d \\"$$CCDRIFT_MESSAGE\\" ntfy.sh/topic 100%%"')
+    assert "--exec 'curl -d \"$CCDRIFT_MESSAGE\" ntfy.sh/topic 100\\%'" in cron_line(job)
+
+
+def test_schedule_install_passes_exec_to_the_job(tmp_path, monkeypatch):
+    monkeypatch.setenv("CCDRIFT_HOME", str(tmp_path / "data"))
+    run, backend = launchd(tmp_path)
+    monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: backend)
+    assert main(["schedule", "install", "--no-notify", "--exec", NTFY]) == 0
+    assert plistlib.loads(backend.plist.read_bytes())["ProgramArguments"][-2:] == ["--exec", NTFY]
