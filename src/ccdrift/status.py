@@ -24,22 +24,23 @@ def _when(stamp: str) -> datetime:
 
 def short_status(state_path: Path, now: datetime) -> str:
     """One line for a status line, or "" when nothing needs attention. First match
-    wins: an unreadable state, no check yet, a failed check, no successful check for
-    more than STALE_DAYS days, open incidents."""
+    wins: an unreadable or malformed state, no check yet, a failed check, no successful
+    check for more than STALE_DAYS days, open incidents."""
     try:
         state = load_state(state_path)
-    except (OSError, ValueError):
+        last = state.get("last_run")
+        if last is None:
+            return "ccdrift: no check yet"
+        if not last["ok"]:
+            return f"ccdrift: check failed {_when(last['started']).strftime('%m-%d %H:%M')}"
+        since_ok = now - _when(state["last_ok"])
+        if since_ok > timedelta(days=STALE_DAYS):
+            return f"ccdrift: no check for {since_ok.days} days"
+        live = [f"{LIVE_NAMES[i['metric']]} since {i['start'][5:]}"
+                for i in state["incidents"] if i["status"] == "open"]
+        return f"ccdrift: {'; '.join(live)}" if live else ""
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return "ccdrift: can't read state"
-    last = state.get("last_run")
-    if last is None:
-        return "ccdrift: no check yet"
-    if not last["ok"]:
-        return f"ccdrift: check failed {_when(last['started']).strftime('%m-%d %H:%M')}"
-    since_ok = now - _when(state["last_ok"])
-    if since_ok > timedelta(days=STALE_DAYS):
-        return f"ccdrift: no check for {since_ok.days} days"
-    live = [f"{LIVE_NAMES[i['metric']]} since {i['start'][5:]}" for i in state["incidents"] if i["status"] == "open"]
-    return f"ccdrift: {'; '.join(live)}" if live else ""
 
 
 def _section(title: str, items: list[str]) -> list[str]:

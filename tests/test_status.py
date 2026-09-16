@@ -49,6 +49,22 @@ def test_short_status_never_fails_a_status_line(tmp_path, capsys):
     assert capsys.readouterr().out == "ccdrift: can't read state\n"
 
 
+@pytest.mark.parametrize("state", [
+    ran(),  # ok, but no top-level "last_ok" at all
+    {**ran(), "last_ok": "2026-09-20T09:00:02"},  # last_ok has no UTC offset
+    {**ran(), "last_ok": "2026-09-20T09:00:02+03:00",
+     "incidents": [{"metric": "cache_ratio", "start": "2026-09-14"}]},  # incident missing "status"
+])
+def test_short_status_treats_a_malformed_state_as_unreadable(tmp_path, state):
+    assert short_status(state_file(tmp_path, **state), NOW) == "ccdrift: can't read state"
+
+
+def test_run_status_short_never_fails_on_a_malformed_state(tmp_path, capsys):
+    path = state_file(tmp_path, **ran())  # ok, but no top-level "last_ok"
+    assert run_status(path, short=True, now=NOW) == 0
+    assert capsys.readouterr().out == "ccdrift: can't read state\n"
+
+
 def test_short_status_prints_nothing_when_all_is_well(tmp_path, capsys):
     path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00")
     assert run_status(path, short=True, now=NOW) == 0
