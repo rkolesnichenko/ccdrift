@@ -162,3 +162,18 @@ def test_a_failing_exec_command_is_logged_and_the_check_goes_on(tmp_path, sent, 
     assert run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 18),
                      exec_command="exit 7") == 0
     assert '--exec failed for "ccdrift flag": exit 7' in capsys.readouterr().out
+
+
+def test_an_exec_command_that_raises_is_logged_and_every_alert_still_goes_out(tmp_path, sent, capsys, monkeypatch):
+    # The state already marks these alerts as sent, so none may be lost.
+    def broken(command, kind, title, message):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ccdrift.check, "run_exec", broken)
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12, "tier": "5m"}] * 3)
+    assert run_check(tmp_path / "logs", tmp_path / "state.json", notify_user=True, today=date(2026, 9, 18),
+                     exec_command="notify-me") == 0
+    assert sent == ["ccdrift flag", "ccdrift: setting changed"]
+    out = capsys.readouterr().out
+    assert '--exec failed for "ccdrift flag": RuntimeError: boom' in out
+    assert '--exec failed for "ccdrift: setting changed": RuntimeError: boom' in out

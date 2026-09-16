@@ -65,6 +65,10 @@ def test_exec_says_why_a_command_failed():
     assert run_exec("echo no route >&2; exit 3", "flag", "ccdrift flag", "message") == "exit 3: no route"
 
 
+def test_exec_says_why_a_command_failed_when_its_output_isnt_utf8():
+    assert run_exec(r"printf '\377\376' >&2; exit 1", "flag", "ccdrift flag", "message") == "exit 1: ��"
+
+
 def test_exec_gives_up_on_a_command_after_30_seconds():
     calls = []
 

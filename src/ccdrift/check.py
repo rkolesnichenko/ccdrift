@@ -108,7 +108,11 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
         if notify_user:
             notify(title, message)
         if exec_command:
-            failure = run_exec(exec_command, kind, title, message)
+            # The state already records the alerts as sent, so nothing may stop the rest.
+            try:
+                failure = run_exec(exec_command, kind, title, message)
+            except Exception as exc:
+                failure = f"{type(exc).__name__}: {exc}"
             if failure:
                 print(f'[check {stamp}] --exec failed for "{title}": {failure}')
 

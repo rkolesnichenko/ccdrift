@@ -41,7 +41,9 @@ def run_exec(command: str, kind: str, title: str, message: str,
     worked, otherwise why it didn't; a failing command never stops the check."""
     env = {**environ, "CCDRIFT_ALERT": kind, "CCDRIFT_TITLE": title, "CCDRIFT_MESSAGE": message}
     try:
-        result = run(command, shell=True, env=env, capture_output=True, text=True, timeout=EXEC_TIMEOUT_SECONDS)
+        # errors="replace": output that isn't UTF-8 still says why the command failed.
+        result = run(command, shell=True, env=env, capture_output=True, text=True, encoding="utf-8",
+                     errors="replace", timeout=EXEC_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         return f"timed out after {EXEC_TIMEOUT_SECONDS} s"
     except OSError as exc:
