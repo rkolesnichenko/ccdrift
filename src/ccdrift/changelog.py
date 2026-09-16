@@ -14,19 +14,24 @@ import pandas as pd
 from ccdrift.logs import first_days_by_version
 from ccdrift.texts import version_key
 
-# Checked against Claude Code's own changelog: "model", "tool", "agent" and "context"
-# matched about half of each version's notes, "mcp" mostly sign-in and menu fixes,
-# "thinking" and "transcript" mostly display fixes. A line matching more of a topic's
-# words is quoted first.
-TOPICS: dict[str, tuple[str, ...]] = {
-    "cache": ("cache", "prompt-cache", "prompt cache", "cache miss", "cache reuse"),
-    "haiku": ("haiku", "small model", "small-model", "fallback model", "default model"),
-    "effort": ("effort level", "default effort", "reasoning effort", "effortlevel", "thinking budget"),
-    "context": ("system prompt", "tool definition", "tool list", "deferred"),
-    "hooks": ("hook", "stop hook", "hook input"),
-    "subagents": ("subagent model", "subagent_model"),
-    "fields": ("session transcript", "transcript file", "transcript writes", "saved transcript", "session file"),
+# Words per topic and their weight. A line is quoted once its words weigh QUOTE_WEIGHT,
+# heaviest first. Checked against Claude Code's own changelog: "model", "tool", "agent"
+# and "context" matched about half of each version's notes, and "mcp" mostly sign-in and
+# menu fixes, so they aren't used; "effort", "transcript" and "usage" alone matched
+# mostly display fixes, so they count only together with another word ("Now defaults
+# to high effort", "reporting as 0 in transcript and result usage").
+TOPICS: dict[str, dict[str, int]] = {
+    "cache": {"cache": 2, "prompt-cache": 1, "prompt cache": 1, "cache miss": 1, "cache reuse": 1},
+    "haiku": {"haiku": 2, "small model": 2, "small-model": 2, "fallback model": 2, "default model": 2},
+    "effort": {"effort level": 2, "default effort": 2, "default-effort": 2, "reasoning effort": 2,
+               "effortlevel": 2, "thinking budget": 2, "effort": 1, "defaults to": 1},
+    "context": {"system prompt": 2, "tool definition": 2, "tool list": 2, "deferred": 2},
+    "hooks": {"hook": 2, "stop hook": 1, "hook input": 1},
+    "subagents": {"subagent model": 2, "subagent_model": 2},
+    "fields": {"session transcript": 2, "transcript file": 2, "transcript writes": 2, "saved transcript": 2,
+               "session file": 2, "transcript": 1, "usage": 1},
 }
+QUOTE_WEIGHT = 2
 NOTES_PER_VERSION = 2
 NOTE_CHARS = 160
 
@@ -70,15 +75,19 @@ def new_versions(turns: pd.DataFrame, first_day: str, last_day: str) -> list[str
 def release_notes(changelog: dict[str, list[str]], versions: Sequence[str],
                   topics: Union[str, Sequence[str]], limit: int = 5) -> list[tuple[str, str]]:
     """Up to `limit` (version, line) pairs from `versions`, in that order, whose text
-    mentions any keyword of `topics`: at most NOTES_PER_VERSION from each version, those
-    mentioning the most keywords first, then in changelog order. Long lines are cut at
+    mentions words of `topics` weighing QUOTE_WEIGHT or more: at most NOTES_PER_VERSION
+    from each version, heaviest first, then in changelog order. Long lines are cut at
     NOTE_CHARS."""
     names = (topics,) if isinstance(topics, str) else tuple(topics)
-    words = tuple(dict.fromkeys(word for name in names for word in TOPICS[name]))
+    weights: dict[str, int] = {}
+    for name in names:
+        for word, weight in TOPICS[name].items():
+            weights[word] = max(weight, weights.get(word, 0))
     found = []
     for version in versions:
-        scored = [(sum(word in text.lower() for word in words), text) for text in changelog.get(version, [])]
-        lines = [text for score, text in sorted(scored, key=lambda item: -item[0]) if score]
+        scored = [(sum(weight for word, weight in weights.items() if word in text.lower()), text)
+                  for text in changelog.get(version, [])]
+        lines = [text for score, text in sorted(scored, key=lambda item: -item[0]) if score >= QUOTE_WEIGHT]
         for text in lines[:NOTES_PER_VERSION]:
             found.append((version, text if len(text) <= NOTE_CHARS else text[:NOTE_CHARS - 1] + "…"))
             if len(found) == limit:

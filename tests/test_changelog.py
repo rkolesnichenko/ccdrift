@@ -106,6 +106,17 @@ def test_release_notes_skip_lines_that_only_mention_thinking_or_the_transcript_v
         ("2.1.251", "Changed session transcripts to record the reasoning effort level on each assistant message")]
 
 
+def test_release_notes_quote_a_changed_default_effort_or_logged_usage_with_the_broader_words():
+    # Real 2.1.154 and 2.1.152 notes an effort or field alert should quote.
+    notes = {"2.1.154": ["Improved /effort so changing effort mid-session keeps the prompt cache",
+                         "Opus 4.8 is here! Now defaults to high effort"],
+             "2.1.152": ["Improved memory usage in long sessions",
+                         "Fixed `cache_creation_input_tokens` reporting as 0 in transcript and result usage"]}
+    assert release_notes(notes, ["2.1.154"], "effort") == [("2.1.154", "Opus 4.8 is here! Now defaults to high effort")]
+    assert release_notes(notes, ["2.1.152"], "fields") == [
+        ("2.1.152", "Fixed `cache_creation_input_tokens` reporting as 0 in transcript and result usage")]
+
+
 def test_long_release_notes_are_cut_at_160_characters():
     notes = release_notes({"2.1.1": ["cache " + "x" * 300]}, ["2.1.1"], "cache")
     assert len(notes[0][1]) == 160 and notes[0][1].endswith("…")

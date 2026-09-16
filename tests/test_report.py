@@ -182,6 +182,7 @@ def test_report_by_version_quotes_release_notes_under_each_version(tmp_path, cap
     run_report(logs, tmp_path / "state.json", by="version", today=date(2026, 9, 5))
     lines = capsys.readouterr().out.splitlines()
     row = next(i for i, text in enumerate(lines) if text.startswith("2.1.233"))
-    assert lines[row + 1:row + 4] == ["    release notes: Fixed prompt cache misses at turn boundaries",
-                                      "    release notes: Hooks now receive the session's effort level",
+    # Heaviest first: the hooks note also names the effort level.
+    assert lines[row + 1:row + 4] == ["    release notes: Hooks now receive the session's effort level",
+                                      "    release notes: Fixed prompt cache misses at turn boundaries",
                                       ""]
