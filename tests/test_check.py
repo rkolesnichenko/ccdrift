@@ -130,3 +130,11 @@ def test_check_names_an_unusable_history_store(tmp_path, sent, capsys):
     (tmp_path / "history.sqlite").write_text("not a database")
     assert check_logs(tmp_path) == 1
     assert "Can't use the history store" in capsys.readouterr().out
+
+
+def test_check_alerts_when_the_main_thread_moves_to_the_5_minute_cache(tmp_path, sent, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"tier": "5m", "version": "2.1.280"}] * 2)
+    check_logs(tmp_path, today=date(2026, 9, 17))
+    assert sent == ["ccdrift: setting changed"]
+    assert ("ccdrift: setting changed: Cache writes for claude-opus-5 moved from the 1-hour to the 5-minute "
+            "cache from 2026-09-15, on Claude Code 2.1.280 (since 09-15).") in capsys.readouterr().out

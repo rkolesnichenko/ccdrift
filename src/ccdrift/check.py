@@ -14,9 +14,10 @@ import pandas as pd
 
 from ccdrift.detector import DetectorConfig
 from ccdrift.history import load_turns
-from ccdrift.incidents import describe, incident_cost, update_incidents
+from ccdrift.incidents import describe, incident_cost, update_incidents, versions_text
 from ccdrift.logs import judged_turns, no_transcripts_message
 from ccdrift.notify import notify
+from ccdrift.settings import change_message, setting_changes
 from ccdrift.state import load_state, record_run, save_state
 
 # kind, title, message, and lines for the log only
@@ -80,6 +81,8 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     for incident in incidents:
         if incident["status"] == "open":
             incident["cost"] = round(incident_cost(turns, incident, incidents, cfg))
+    alerts += [("setting", "ccdrift: setting changed", change_message(change, versions_text(turns, change["days"])), [])
+               for change in setting_changes(turns, state, today)]
     blank = blank_cache_stretch(turns, state)
     if blank:
         alerts.append(("blank_cache", "ccdrift can't compute the cache metric",
