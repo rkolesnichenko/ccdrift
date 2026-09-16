@@ -21,11 +21,9 @@ from ccdrift.detector import DetectorConfig, baseline_bins, bin_metrics, detect,
 from ccdrift.history import HistoryError, load_turns
 from ccdrift.logs import judged_turns
 from ccdrift.state import load_state
+from ccdrift.texts import (INCIDENT_METRICS, METRIC_ARGS, MOVES, PERSISTENT_DAYS, SHORT_NAMES, approx, cost_text,
+                           incident_line)
 
-INCIDENT_METRICS = {"cache_ratio": "Cache read ratio on new prompts",
-                    "haiku_fraction": "Haiku share on the main thread"}
-SHORT_NAMES = {"cache_ratio": "cache", "haiku_fraction": "haiku"}
-MOVES = {"cache_ratio": "down", "haiku_fraction": "up"}
 # A first run stays quiet about flags from weeks ago but covers a week or so
 # without a run.
 RECENT_DAYS = 14
@@ -34,7 +32,6 @@ RECENT_DAYS = 14
 # Sep 4 "from Sep 2" although Sep 3 still missed; pooling 3 days closed it at
 # Sep 6, "from Sep 4", when the fixed versions were in use.
 RECOVERY_BINS = 3
-PERSISTENT_DAYS = 30
 EXCLUDING = ("open", "recovered")
 OPEN_END = "9999-12-31"
 
@@ -204,24 +201,6 @@ def incident_cost(turns: pd.DataFrame, incident: dict, incidents: Sequence[dict]
                      for _, group in haiku[during].groupby(days[during])))
 
 
-def approx(value: float) -> str:
-    """Two significant figures with a k, M or B suffix: 17_556_103 -> "18M"."""
-    if value <= 0:
-        return "0"
-    rounded = float(f"{value:.2g}")
-    for size, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
-        if rounded >= size:
-            return f"{rounded / size:g}{suffix}"
-    return f"{rounded:g}"
-
-
-def cost_text(metric: str, cost: float) -> str:
-    """"~18M tokens re-cached" or "~120 extra Haiku responses"."""
-    if metric == "cache_ratio":
-        return f"~{approx(cost)} tokens re-cached" if cost > 0 else "no tokens re-cached"
-    return f"~{approx(cost)} extra Haiku responses" if cost > 0 else "no extra Haiku responses"
-
-
 def describe(event: Event, turns: pd.DataFrame, incidents: Sequence[dict],
              cfg: DetectorConfig) -> tuple[str, str, str, list[str]]:
     """The alert for an event as (kind, title, message, log lines). Refreshes the
@@ -245,9 +224,6 @@ def describe(event: Event, turns: pd.DataFrame, incidents: Sequence[dict],
     return ("persistent", "ccdrift: change persists",
             f"{label} still {MOVES[metric]} {PERSISTENT_DAYS} days after {start}. ccdrift now treats it as the "
             "new normal; `ccdrift incident list` has the details.", [])
-
-
-METRIC_ARGS = {"cache": "cache_ratio", "haiku": "haiku_fraction"}
 
 
 def parse_days(text: str) -> tuple[str, str]:
@@ -300,24 +276,6 @@ def dismiss_incident(incidents: list[dict], metric: str, start: str, today: date
                     end=incident["end"] or max(incident["start"], _yesterday(today)),
                     closed_on=incident["closed_on"] or today.isoformat())
     return incident
-
-
-def incident_line(incident: dict, cost: Optional[float] = None) -> str:
-    """One line about an incident, as `incident list`, `report` and `status` show it."""
-    status = {"open": "open", "persistent": f"still changed after {PERSISTENT_DAYS} days",
-              "dismissed": "dismissed"}.get(incident["status"])
-    if incident["status"] == "recovered":
-        if incident["source"] == "user":
-            status = "added by hand"
-        elif incident["closed_by"] == "user":
-            status = f"closed by hand on {incident['closed_on']}"
-        else:
-            status = f"back to normal from {incident['recovered_from']}"
-    parts = [status, cost_text(incident["metric"], incident["cost"] if cost is None else cost)]
-    if incident["versions"]:
-        parts.append("on " + ", ".join(incident["versions"]))
-    span = f"{incident['start']}..{incident['end'] or 'now'}"
-    return f"{SHORT_NAMES[incident['metric']]:<5}  {span:<24}  {'; '.join(parts)}"
 
 
 def run_list(source: Path, state_path: Path, today: Optional[date] = None,

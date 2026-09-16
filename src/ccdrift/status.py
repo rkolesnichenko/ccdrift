@@ -9,9 +9,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-from ccdrift.incidents import incident_line
-from ccdrift.settings import change_line
 from ccdrift.state import load_state
+from ccdrift.texts import change_line, incident_line
 
 STALE_DAYS = 3
 RECENT_DAYS = 30

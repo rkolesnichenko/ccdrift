@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
-from ccdrift.check import ccdrift_home
 from ccdrift.logs import default_source
 from ccdrift.notify import notify as send_notification
+from ccdrift.state import ccdrift_home
 
 LAUNCHD_LABEL = "io.github.rkolesnichenko.ccdrift"
 SYSTEMD_UNIT = "ccdrift-check"

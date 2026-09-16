@@ -7,9 +7,16 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 STATE_VERSION = 2
+
+
+def ccdrift_home(environ: Mapping[str, str] = os.environ) -> Path:
+    """Where the daily check keeps its state file, history and log: $CCDRIFT_HOME
+    when set, otherwise ~/.ccdrift."""
+    home = environ.get("CCDRIFT_HOME")
+    return Path(home).expanduser() if home else Path.home() / ".ccdrift"
 
 
 def new_state() -> dict[str, Any]:

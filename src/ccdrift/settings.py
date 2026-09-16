@@ -10,10 +10,10 @@ from typing import Any, Sequence
 
 import pandas as pd
 
+from ccdrift.texts import SETTING_NAMES, TIER_NAMES, change_line
+
 ALERT_SETTINGS = ("cache_tier", "effort")
 REPORT_SETTINGS = ("cache_tier", "effort", "speed", "service_tier")
-SETTING_NAMES = {"cache_tier": "cache tier", "effort": "effort", "speed": "speed", "service_tier": "service tier"}
-TIER_NAMES = {"1h": "1-hour", "5m": "5-minute"}
 ACTIVE_RESPONSES = 20  # a model's responses with a value, for a day to count
 BASELINE_DAYS = 14
 MIN_BASELINE_DAYS = 5
@@ -72,11 +72,6 @@ def change_message(change: dict[str, Any], versions: list[str]) -> str:
         return f"Cache writes for {change['model']} moved from the {old} to the {new} cache from {change['since']}{on}."
     return (f"Effort for {change['model']} changed from {change['from']} to {change['to']} from "
             f"{change['since']}{on}. If you didn't change it, Claude Code's default did.")
-
-
-def change_line(change: dict[str, Any]) -> str:
-    return (f"{SETTING_NAMES[change['setting']]} for {change['model']}: {change['from']} -> {change['to']} "
-            f"from {change['since']}")
 
 
 def settings_summary(turns: pd.DataFrame, days: Sequence[str]) -> list[dict[str, Any]]:

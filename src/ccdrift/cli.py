@@ -10,14 +10,15 @@ from pathlib import Path
 from typing import Optional
 
 from ccdrift import __version__
-from ccdrift.check import ccdrift_home, run_check
-from ccdrift.incidents import (METRIC_ARGS, add_incident, close_incident, dismiss_incident, incident_line,
-                               parse_days, run_list)
-from ccdrift.logs import default_source, peek
-from ccdrift.report import run_report
-from ccdrift.schedule import ScheduleError, choose_backend, install as install_job, make_job
-from ccdrift.state import load_state, save_state
-from ccdrift.status import run_status
+from ccdrift.state import ccdrift_home
+from ccdrift.texts import METRIC_ARGS
+
+
+def choose_backend():
+    """The scheduler for this system (see ccdrift.schedule.choose_backend); a name
+    here so tests can replace it."""
+    from ccdrift.schedule import choose_backend as choose
+    return choose()
 
 
 def _add_source(parser: argparse.ArgumentParser) -> None:
@@ -31,6 +32,7 @@ def _add_state(parser: argparse.ArgumentParser) -> None:
 
 
 def _source(args: argparse.Namespace) -> Path:
+    from ccdrift.logs import default_source
     return Path(args.source).expanduser() if args.source else default_source()
 
 
@@ -115,6 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _schedule(args: argparse.Namespace) -> int:
+    from ccdrift.schedule import ScheduleError, install as install_job, make_job
     try:
         job = make_job(args.at if args.action == "install" else "09:00",
                        notify=not getattr(args, "no_notify", False),
@@ -159,6 +162,8 @@ def _schedule(args: argparse.Namespace) -> int:
 
 
 def _incident(args: argparse.Namespace) -> int:
+    from ccdrift.incidents import add_incident, close_incident, dismiss_incident, incident_line, parse_days, run_list
+    from ccdrift.state import load_state, save_state
     state_path = _state(args)
     if args.action == "list":
         return run_list(_source(args), state_path)
@@ -192,12 +197,16 @@ def _incident(args: argparse.Namespace) -> int:
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "check":
+        from ccdrift.check import run_check
         return run_check(_source(args), _state(args), notify_user=args.notify, exec_command=args.exec)
     if args.command == "peek":
+        from ccdrift.logs import peek
         return 0 if peek(_source(args)) else 2
     if args.command == "report":
+        from ccdrift.report import run_report
         return run_report(_source(args), _state(args), days=args.days, by=args.by, as_json=args.json)
     if args.command == "status":
+        from ccdrift.status import run_status
         return run_status(_state(args), short=args.short)
     if args.command == "incident":
         return _incident(args)

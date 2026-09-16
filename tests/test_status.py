@@ -1,7 +1,11 @@
 """ccdrift status: how the last check went and what it follows, from the state file alone."""
 
 import json
+import os
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -111,3 +115,15 @@ def test_status_command_reads_the_state_option(tmp_path, capsys):
     path = state_file(tmp_path)
     assert main(["status", "--short", "--state", str(path)]) == 0
     assert capsys.readouterr().out == "ccdrift: no check yet\n"
+
+
+def test_status_short_loads_neither_pandas_nor_numpy(tmp_path):
+    # It runs on every status line refresh; importing pandas took ~0.3 s of it.
+    root = Path(__file__).resolve().parents[1]
+    code = ("import sys\n"
+            "from ccdrift.cli import main\n"
+            f"main(['status', '--short', '--state', {str(tmp_path / 'state.json')!r}])\n"
+            "print(sorted(m for m in sys.modules if m.split('.')[0] in ('pandas', 'numpy')))\n")
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                            env={**os.environ, "PYTHONPATH": str(root / "src")})
+    assert result.stdout.splitlines() == ["ccdrift: no check yet", "[]"], result.stderr

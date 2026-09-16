@@ -4,11 +4,10 @@ recover, and alert when the check fails or can't compute the cache metric."""
 from __future__ import annotations
 
 import copy
-import os
 import traceback
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -18,17 +17,10 @@ from ccdrift.incidents import describe, incident_cost, update_incidents, version
 from ccdrift.logs import judged_turns, no_transcripts_message
 from ccdrift.notify import notify, run_exec
 from ccdrift.settings import change_message, setting_changes
-from ccdrift.state import load_state, record_run, save_state
+from ccdrift.state import ccdrift_home, load_state, record_run, save_state
 
 # kind, title, message, and lines for the log only
 Alert = tuple[str, str, str, list[str]]
-
-
-def ccdrift_home(environ: Mapping[str, str] = os.environ) -> Path:
-    """Where the daily check keeps its state file, history and log: $CCDRIFT_HOME
-    when set, otherwise ~/.ccdrift."""
-    home = environ.get("CCDRIFT_HOME")
-    return Path(home).expanduser() if home else Path.home() / ".ccdrift"
 
 
 # A stretch of active days without usable cache values means the cache metric

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -16,10 +15,11 @@ import pandas as pd
 
 from ccdrift.detector import DetectorConfig, bin_metrics, detect
 from ccdrift.history import HistoryError, load_turns
-from ccdrift.incidents import INCIDENT_METRICS, SHORT_NAMES, exclusions, incident_cost, incident_line
+from ccdrift.incidents import exclusions, incident_cost
 from ccdrift.logs import judged_turns, no_transcripts_message
 from ccdrift.settings import settings_lines, settings_summary
 from ccdrift.state import load_state
+from ccdrift.texts import INCIDENT_METRICS, SHORT_NAMES, incident_line, version_key
 
 COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", "flagged"]
 VERSION_COLUMNS = ["version", "first_day", "last_day", "responses", "prompt_turns", "cache_ratio",
@@ -49,13 +49,6 @@ def daily_rows(turns: pd.DataFrame, days: int = DEFAULT_DAYS, cfg: Optional[Dete
         "haiku_z": detected["haiku_fraction__z"].to_numpy(),
         "flagged": flagged,
     }, columns=COLUMNS)
-
-
-def version_key(version: str) -> tuple:
-    """Sorts 2.1.99 before 2.1.233, and "unknown" last."""
-    if version == "unknown":
-        return (1,)
-    return (0, *((0, int(part), "") if part.isdigit() else (1, 0, part) for part in re.split(r"[.+-]", version)))
 
 
 def version_rows(turns: pd.DataFrame) -> pd.DataFrame:
