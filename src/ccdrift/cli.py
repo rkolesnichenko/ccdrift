@@ -56,7 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"ccdrift {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
-    check = commands.add_parser("check", help="report new flags once (what the schedule runs)")
+    check = commands.add_parser("check", help="follow incidents, setting changes and a cache metric that can't be "
+                                "computed, and alert on each change (what the schedule runs)")
     check.add_argument("--notify", action="store_true", help="also show a desktop notification for each alert")
     check.add_argument("--exec", metavar="CMD", help="also run CMD through the shell for each alert, with "
                        "CCDRIFT_ALERT, CCDRIFT_TITLE and CCDRIFT_MESSAGE set")

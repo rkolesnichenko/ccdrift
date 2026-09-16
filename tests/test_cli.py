@@ -68,6 +68,14 @@ def test_peek_exits_2_and_names_the_folder_without_transcripts(tmp_path, capsys)
     assert str(tmp_path / "empty") in capsys.readouterr().err
 
 
+def test_help_says_what_the_check_does(capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "200")
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    assert "    check     follow incidents, setting changes and a cache metric that can't be computed, " \
+           "and alert on each change (what the schedule runs)" in capsys.readouterr().out.splitlines()
+
+
 def test_version_prints_the_package_version(capsys):
     with pytest.raises(SystemExit) as exited:
         main(["--version"])
