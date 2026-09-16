@@ -2,13 +2,17 @@
 
 import os
 import sqlite3
+from datetime import date
 
 import pandas as pd
 import pytest
 
 import ccdrift.history
 from ccdrift.history import History, HistoryError, load_history, load_turns
+from ccdrift.incidents import add_incident, run_list
 from ccdrift.logs import parse_all, parse_durations, parse_source
+from ccdrift.report import run_report
+from ccdrift.state import new_state, save_state
 from tests.helpers import (at, compact_boundary, damage_responses_table, line, prompt, response,
                            stop_hook_summary, text, thinking, tool_result, turn_duration, write)
 
@@ -234,21 +238,28 @@ def test_history_holds_the_same_hook_runs_compactions_and_agent_types_as_the_tra
     assert pd.isna(agent_types[0]) and agent_types[1] == "Plan"
 
 
-def test_a_transcript_that_cant_be_read_is_tried_again_and_the_parser_version_still_recorded(tmp_path):
+def test_a_known_transcript_that_becomes_unreadable_is_marked_for_retry_and_the_parser_version_is_still_recorded(
+        tmp_path, monkeypatch):
     if os.geteuid() == 0:
         pytest.skip("root can read unreadable files")
     transcripts(tmp_path / "logs")
     blocked = tmp_path / "logs" / "p" / "s1.jsonl"
     with History(tmp_path / "history.sqlite") as history:
         history.update(tmp_path / "logs")
-        with blocked.open("a") as fh:
-            fh.write('{"type": "user"}\n')
+    # Bump the parser version so every transcript is read again, blocked one included,
+    # even though its size and mtime haven't changed since the last update.
+    monkeypatch.setattr(ccdrift.history, "PARSER_VERSION", 3)
+    with History(tmp_path / "history.sqlite") as history:
         os.chmod(blocked, 0)
         try:
-            assert history.update(tmp_path / "logs") == 0
-            assert history.meta["parser_version"] == "2"
+            assert history.update(tmp_path / "logs") == 1  # the subagent transcript is still readable
+            assert history.meta["parser_version"] == "3"
+            size = history.db.execute(
+                "SELECT size FROM files WHERE path = ?", ("p/s1.jsonl",)).fetchone()[0]
+            assert size is None
         finally:
             os.chmod(blocked, 0o644)
+        # Its size was cleared, so it no longer looks unchanged and is retried.
         assert history.update(tmp_path / "logs") == 1
 
 
@@ -260,6 +271,19 @@ def test_report_and_incident_list_leave_an_unclaimed_store_alone(tmp_path):
     assert len(load_history(tmp_path / "logs", tmp_path / "state.json", claim=False).responses) == 4
     with History(tmp_path / "history.sqlite") as history:
         assert history.built_from() is None
+        # An unclaimed store must come back empty too: reading it must not have
+        # filled it in behind the scenes.
+        assert history.db.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 0
+
+
+def test_report_and_incident_list_never_create_a_store(tmp_path):
+    transcripts(tmp_path / "logs")
+    state = new_state()
+    add_incident(state["incidents"], "cache_ratio", "2026-08-01", "2026-08-02", date(2026, 9, 4))
+    save_state(tmp_path / "state.json", state)
+    assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4)) == 0
+    assert run_list(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4)) == 0
+    assert not (tmp_path / "history.sqlite").exists()
 
 
 def test_a_sqlite_too_old_for_the_store_is_named(tmp_path, monkeypatch):
