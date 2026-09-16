@@ -108,3 +108,13 @@ def test_check_alerts_when_it_cannot_run(tmp_path, sent):
     (tmp_path / "logs").mkdir()
     assert check_logs(tmp_path) != 0
     assert sent == ["ccdrift check failed"]
+
+
+def test_cache_metric_alert_points_to_ccdrift_peek(tmp_path, sent, capsys):
+    # The alert suggested --schema-peek, the lab harness's option, which the
+    # installed command doesn't have.
+    busy_days(tmp_path / "logs", days=3, per_day=60)
+    check_logs(tmp_path)
+    out = capsys.readouterr().out
+    assert "run `ccdrift peek`" in out
+    assert "--schema-peek" not in out

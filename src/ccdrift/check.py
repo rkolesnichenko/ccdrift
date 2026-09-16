@@ -156,7 +156,7 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
         alert("ccdrift can't compute the cache metric",
               f"no usable cache values on {blank['days']} active days from {blank['first']} "
               f"({blank['responses']} responses, {blank['prompts']} prompts recognised). "
-              "Claude Code's log format may have changed; try --schema-peek.")
+              "Claude Code's log format may have changed; run `ccdrift peek`.")
     if not flags and not blank:
         print(f"[check {stamp}] no new flags")
     return 0
