@@ -162,14 +162,14 @@ def busy_days(path, days, per_day, prompts=True, cache_read=0, cache_creation=0)
         write(path / f"s{d}.jsonl", records)
 
 
-def main_thread_days(path, days, per_day=60):
-    """One CLI main-thread session a day from Sep 1: `per_day` responses a minute
-    apart, each after a prompt and read 90% from the 1-hour cache. Each entry of
-    `days` can set that day's `version` (default "2.1.226"), `haiku` (how many
-    responses come from Haiku, default 0), `misses` (how many of the day's last
-    responses miss the cache, writing 1000 tokens, default 0), `tier` ("1h" or "5m"
-    cache writes, default "1h") and `effort` (default "xhigh")."""
-    for d, spec in enumerate(days):
+def main_thread_days(path, days, per_day=60, first_day=0):
+    """One CLI main-thread session a day from Sep 1, or `first_day` days after it:
+    `per_day` responses a minute apart, each after a prompt and read 90% from the
+    1-hour cache. Each entry of `days` can set that day's `version` (default
+    "2.1.226"), `haiku` (how many responses come from Haiku, default 0), `misses` (how
+    many of the day's last responses miss the cache, writing 1000 tokens, default 0),
+    `tier` ("1h" or "5m" cache writes, default "1h") and `effort` (default "xhigh")."""
+    for d, spec in enumerate(days, start=first_day):
         tier = spec.get("tier", "1h")
         records = []
         for k in range(per_day):

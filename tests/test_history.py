@@ -87,6 +87,10 @@ def test_history_since_a_day_holds_whole_transcripts_active_since_then_and_each_
     write(tmp_path / "logs" / "long.jsonl", [prompt(at(2 * DAY)), line("l1", text(40), ts=at(2 * DAY), version="2.1.99"),
                                              prompt(at(6 * DAY)), line("l2", text(40), ts=at(6 * DAY), version="2.1.99")])
     write(tmp_path / "logs" / "new.jsonl", [prompt(at(7 * DAY)), line("n1", text(40), ts=at(7 * DAY), version="2.1.233")])
+    # A version often runs in subagents or Agent SDK sessions a few days before the CLI main thread.
+    write(tmp_path / "logs" / "sdk.jsonl", [line("k1", text(40), ts=at(DAY), version="2.1.233", entrypoint="sdk-py")])
+    write(tmp_path / "logs" / "new" / "subagents" / "agent-a.jsonl",
+          [line("a1", text(40), ts=at(3 * DAY), version="2.1.233", sidechain=True)])
     with History(tmp_path / "history.sqlite") as history:
         history.update(tmp_path / "logs")
         recent = history.responses(since=nth_day(5))

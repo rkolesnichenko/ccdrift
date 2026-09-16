@@ -106,6 +106,16 @@ def _upsert(table: str, columns: tuple[str, ...]) -> str:
 TS_RANGE = (_micros(MIN_TIME), _micros(MAX_TIME))
 
 
+# Responses on the main thread outside Agent SDK sessions with a usable time, as the
+# check judges them (GLOB, like str.startswith, tells case apart); takes TS_RANGE.
+MAIN_CLI = "ts BETWEEN ? AND ? AND is_sidechain = 0 AND (entrypoint IS NULL OR entrypoint NOT GLOB 'sdk-*')"
+MICROS_PER_DAY = 86_400_000_000
+
+
+def _day(ts: int) -> str:
+    return datetime.fromtimestamp(ts / 1_000_000, timezone.utc).date().isoformat()
+
+
 def _decode(rows: pd.DataFrame, flags: tuple[str, ...]) -> pd.DataFrame:
     ts = rows.pop("ts").astype(float)
     rows["timestamp"] = pd.to_datetime(ts.where(ts.between(*TS_RANGE)), unit="us", utc=True)
@@ -270,10 +280,18 @@ class History:
         """The UTC day each Claude Code version first answered on the main thread outside
         Agent SDK sessions, over the whole store."""
         rows = self.db.execute(
-            "SELECT version, MIN(ts) FROM responses WHERE version IS NOT NULL AND ts IS NOT NULL "
-            "AND is_sidechain = 0 AND (entrypoint IS NULL OR entrypoint NOT LIKE 'sdk-%') GROUP BY version")
-        return {version: datetime.fromtimestamp(ts / 1_000_000, timezone.utc).date().isoformat()
-                for version, ts in rows}
+            f"SELECT version, MIN(ts) FROM responses WHERE version IS NOT NULL AND {MAIN_CLI} GROUP BY version",
+            TS_RANGE)
+        return {version: _day(ts) for version, ts in rows}
+
+    def active_day_start(self, active_days: int, responses: int) -> Optional[str]:
+        """The UTC day `active_days` active days back, counting days with at least
+        `responses` responses on the main thread outside Agent SDK sessions; None when
+        the store holds fewer such days."""
+        row = self.db.execute(
+            f"SELECT MIN(ts) FROM responses WHERE {MAIN_CLI} GROUP BY ts / {MICROS_PER_DAY} "
+            "HAVING COUNT(*) >= ? ORDER BY 1 DESC LIMIT 1 OFFSET ?", (*TS_RANGE, responses, active_days - 1)).fetchone()
+        return None if row is None else _day(row[0])
 
     def durations(self) -> pd.DataFrame:
         """Every stored turn duration, as the table parse_durations returns."""
@@ -298,13 +316,16 @@ class History:
         return compaction_frame(_decode(rows, ("is_sidechain",)))
 
 
-def load_history(source: Path, state_path: Path, claim: bool, since: Optional[str] = None) -> Tables:
+def load_history(source: Path, state_path: Path, claim: bool, since: Optional[str] = None,
+                 active_days: int = 0, active_responses: int = 0) -> Tables:
     """Everything ccdrift knows of for `source`: the history store next to the state
     file, first brought up to date. Only the daily check claims a store (`claim`):
     other commands read the transcripts directly while no check has tied the store to
     a folder, and so does anything run on a folder other than the store's. With
-    `since`, the store's responses are only those of transcripts active since that
-    UTC day (see History.responses)."""
+    `since`, the store's responses are only those of transcripts active since that UTC
+    day or since `active_days` days with `active_responses` responses back, whichever
+    is earlier (see History.responses), and all of them while the store holds fewer
+    such days."""
     path = history_path(state_path)
     if not claim and not path.exists():
         return parse_all(source)
@@ -317,6 +338,9 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
             if built_from is None and not claim:
                 return parse_all(source)
             history.update(source, claim=claim)
+            if since is not None and active_days:
+                active_start = history.active_day_start(active_days, active_responses)
+                since = None if active_start is None else min(since, active_start)
             return Tables(history.responses(since), history.durations(), history.hook_runs(), history.compactions())
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc

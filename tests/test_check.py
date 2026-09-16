@@ -3,15 +3,16 @@ cache metric."""
 
 from datetime import date, datetime, time, timedelta, timezone
 
+import pandas as pd
 import pytest
 
 import ccdrift.check
-from ccdrift.check import run_check
+from ccdrift.check import blank_cache_stretch, run_check
 from ccdrift.incidents import add_incident, close_incident
 from ccdrift.state import load_state, new_state, save_state
 from ccdrift.status import status_report
 from tests.helpers import (DAY, at, busy_days, damage_responses_table, hook_days_logs, line, main_thread_days,
-                           prompt, text, write)
+                           nth_day, prompt, text, write)
 
 
 @pytest.fixture
@@ -131,16 +132,38 @@ def test_check_refreshes_the_cost_of_an_incident_closed_by_hand(tmp_path, sent):
     assert sent == []
 
 
-def test_check_leaves_the_cost_of_an_incident_closed_by_hand_once_status_no_longer_lists_it(tmp_path, sent):
-    # `ccdrift status` lists closed incidents for 30 days; the check reads only recent
-    # history, which no longer holds an older incident's days.
+def test_check_works_out_the_cost_of_an_incident_added_by_hand_once(tmp_path, sent):
+    # Its days don't change once it's closed, and reading back to an old incident's
+    # start on every hourly run would read the whole history.
     main_thread_days(tmp_path / "logs", [{}] * 14 + [{"misses": 6, "version": "2.1.233"}] * 3)
     state = new_state()
-    incident = add_incident(state["incidents"], "cache_ratio", "2026-09-15", "2026-09-17", date(2026, 9, 18))
-    incident["cost"] = 1_234
+    add_incident(state["incidents"], "cache_ratio", "2026-09-15", "2026-09-17", date(2026, 9, 18))
     save_state(tmp_path / "state.json", state)
-    check_logs(tmp_path, today=date(2026, 10, 19))
+    check_logs(tmp_path, today=date(2026, 9, 18))
+    saved = load_state(tmp_path / "state.json")
+    assert saved["incidents"][0]["cost"] == 18_000
+    saved["incidents"][0]["cost"] = 1_234
+    save_state(tmp_path / "state.json", saved)
+    check_logs(tmp_path, today=date(2026, 9, 19))
     assert load_state(tmp_path / "state.json")["incidents"][0]["cost"] == 1_234
+
+
+def test_check_reads_back_to_an_incident_added_by_hand_from_months_ago(tmp_path, sent):
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"misses": 6}] * 3 + [{}] * 113)
+    state = new_state()
+    add_incident(state["incidents"], "cache_ratio", "2026-09-15", "2026-09-17", date(2027, 1, 9))
+    save_state(tmp_path / "state.json", state)
+    check_logs(tmp_path, today=date(2027, 1, 9))
+    assert load_state(tmp_path / "state.json")["incidents"][0]["cost"] == 18_000
+
+
+def test_check_flags_a_regression_right_after_a_long_break(tmp_path, sent):
+    # 60 active days, 100 days away, then 4 days on a new version missing the cache:
+    # the baseline comes from before the break.
+    main_thread_days(tmp_path / "logs", [{}] * 60)
+    main_thread_days(tmp_path / "logs", [{"misses": 8, "version": "2.1.300"}] * 4, first_day=160)
+    check_logs(tmp_path, today=date(2027, 2, 12))
+    assert sent == ["ccdrift flag"]
 
 
 def test_check_names_the_day_a_version_first_ran_from_before_the_history_it_reads(tmp_path, sent, capsys):
@@ -157,6 +180,23 @@ def test_check_doesnt_alert_again_about_a_blank_cache_stretch_longer_than_the_hi
     check_logs(tmp_path, today=date(2026, 12, 15))
     check_logs(tmp_path, today=date(2026, 12, 16))
     assert sent == ["ccdrift can't compute the cache metric"]
+
+
+def blank_turns(days):
+    """60 new-prompt turns a day with no cache token counts."""
+    return pd.DataFrame([{"day": nth_day(d), "prompt_within_ttl": True, "new_prompt": True,
+                          "cache_read": 0.0, "cache_creation": 0.0} for d in days for _ in range(60)])
+
+
+def test_a_new_blank_stretch_after_a_break_is_reported_even_when_it_starts_the_history_read():
+    state = {**new_state(), "blank_cache": [nth_day(0)], "blank_cache_seen": nth_day(9)}
+    stretch = blank_cache_stretch(blank_turns(range(160, 163)), state)
+    assert (stretch["first"], stretch["days"]) == (nth_day(160), 3)
+
+
+def test_a_blank_stretch_seen_on_the_last_run_isnt_reported_again_when_the_history_read_moves_on():
+    state = {**new_state(), "blank_cache": [nth_day(15)], "blank_cache_seen": nth_day(104)}
+    assert blank_cache_stretch(blank_turns(range(16, 105)), state) is None
 
 
 def test_check_says_so_when_there_is_nothing_to_report(tmp_path, sent, capsys):
@@ -227,7 +267,7 @@ def test_check_says_how_to_rebuild_a_history_store_whose_rows_cant_be_read(tmp_p
     assert sent == ["ccdrift check failed"]
     assert capsys.readouterr().out.endswith(
         f"ccdrift check failed: HistoryError: Can't use the history store {tmp_path / 'history.sqlite'}: "
-        "no such column: r.ts. Move it aside to rebuild it from the transcripts still on disk.\n")
+        "no such column: ts. Move it aside to rebuild it from the transcripts still on disk.\n")
 
 
 def test_check_alerts_when_the_main_thread_moves_to_the_5_minute_cache(tmp_path, sent, capsys):

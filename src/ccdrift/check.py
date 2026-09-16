@@ -24,7 +24,6 @@ from ccdrift.notify import notify, run_exec
 from ccdrift.sessions import context_alerts, context_message, session_starts
 from ccdrift.settings import change_message, setting_changes
 from ccdrift.state import ccdrift_home, load_state, record_run, save_state
-from ccdrift.status import RECENT_DAYS as STATUS_DAYS
 
 # kind, title, message, and lines for the log only
 Alert = tuple[str, str, str, list[str]]
@@ -47,9 +46,9 @@ def blank_cache_stretch(turns: pd.DataFrame, state: dict[str, Any],
                         active: int = CHECK_ACTIVE_RESPONSES) -> Optional[dict[str, Any]]:
     """The latest run of active days (at least `active` judged responses) on which no
     new-prompt turn has cache token counts, once it is `days` long and wasn't
-    reported before; it is recorded in state["blank_cache"]. Every Claude Code
-    response reads or writes the prompt cache, so such days mean the parser has
-    lost track of it."""
+    reported before; it is recorded in state["blank_cache"], and its last day in
+    state["blank_cache_seen"]. Every Claude Code response reads or writes the prompt
+    cache, so such days mean the parser has lost track of it."""
     usable = turns["prompt_within_ttl"].astype(bool) & ((turns["cache_read"] + turns["cache_creation"]) > 0)
     per_day = pd.DataFrame({"responses": turns.groupby("day").size(),
                             "usable": usable.groupby(turns["day"]).sum()})
@@ -62,9 +61,11 @@ def blank_cache_stretch(turns: pd.DataFrame, state: dict[str, Any],
         start -= 1
     stretch = per_day.iloc[start:]
     first = str(stretch.index[0])
-    # A stretch that reaches back to the earliest day read may have begun before it,
-    # when the check read only recent history.
-    if first in state["blank_cache"] or (start == 0 and any(day < first for day in state["blank_cache"])):
+    # A stretch reaching back to the earliest day the check read may have begun before
+    # it: it is the one already reported when an earlier run saw it go on to that day.
+    continues = start == 0 and (state.get("blank_cache_seen") or "") >= first
+    state["blank_cache_seen"] = str(stretch.index[-1])
+    if first in state["blank_cache"] or continues:
         return None
     state["blank_cache"].append(first)
     prompts = int(turns.loc[turns["day"].isin(stretch.index), "new_prompt"].sum())
@@ -72,26 +73,31 @@ def blank_cache_stretch(turns: pd.DataFrame, state: dict[str, Any],
             "prompts": prompts}
 
 
-# Days of history a check reads before today, or before the start of an incident it
-# still follows. The longest look back is a flag found within the last 14 days, judged
-# against 14 baseline days that skip an incident of up to 30 days; reading more only
-# slows every hourly run as the history grows.
+# How much history a check reads, so hourly runs don't slow down as the history grows:
+# the last HISTORY_DAYS days, or the last HISTORY_ACTIVE_DAYS days with at least
+# ACTIVE_DAY_RESPONSES main-thread responses when those reach further back (after a
+# break, or for occasional use), reaching back HISTORY_DAYS before any incident whose
+# cost it works out too. The longest look back is a flag within the last 14 days,
+# judged against 14 active days that skip an incident of up to 30 days.
 HISTORY_DAYS = 90
+HISTORY_ACTIVE_DAYS = 60
+ACTIVE_DAY_RESPONSES = 20
 
 
-def _refreshed(incident: dict[str, Any], today: date) -> bool:
-    """Whether the check keeps an incident's cost and versions current for `ccdrift
-    status`: while it is open, and while status lists one added or closed by hand."""
+def _needs_cost(incident: dict[str, Any]) -> bool:
+    """Whether the check works out an incident's cost and versions for `ccdrift status`:
+    on every run while it is open, and once after it is added, closed or dismissed by
+    hand, since its days don't change after that."""
     if incident["status"] == "open":
         return True
     by_hand = incident["source"] == "user" or incident["closed_by"] == "user"
-    return by_hand and (incident["closed_on"] or "") >= (today - timedelta(days=STATUS_DAYS)).isoformat()
+    return by_hand and (incident.get("costed_on") or "") < (incident["closed_on"] or "")
 
 
 def history_start(incidents: list[dict[str, Any]], today: date) -> str:
-    """The first UTC day of history a check reads: HISTORY_DAYS before today, or before
-    the start of the earliest incident whose cost it keeps current."""
-    starts = [incident["start"] for incident in incidents if _refreshed(incident, today)]
+    """The UTC day HISTORY_DAYS before today, or before the start of the earliest
+    incident whose cost the check works out."""
+    starts = [incident["start"] for incident in incidents if _needs_cost(incident)]
     return days_before(min([today.isoformat(), *starts]), HISTORY_DAYS)
 
 
@@ -107,7 +113,8 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
             today: date, now: datetime, digest: bool) -> list[Alert]:
     """Everything that changed since the last run, in the order alerts go out;
     `state` is updated to match."""
-    tables = load_history(source, state_path, claim=True, since=history_start(state["incidents"], today))
+    tables = load_history(source, state_path, claim=True, since=history_start(state["incidents"], today),
+                          active_days=HISTORY_ACTIVE_DAYS, active_responses=ACTIVE_DAY_RESPONSES)
     df = tables.responses
     if df.empty:
         raise RuntimeError(no_transcripts_message(source))
@@ -133,9 +140,11 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     # has just refreshed the incidents it alerted about.
     described = {id(event.incident) for event in events}
     for incident in incidents:
-        if id(incident) in described or not _refreshed(incident, today):
+        if id(incident) in described or not _needs_cost(incident):
             continue
         incident["cost"] = round(incident_cost(turns, incident, incidents, cfg))
+        if incident["status"] != "open":
+            incident["costed_on"] = today.isoformat()
         if incident["source"] == "user" and not incident["versions"]:
             days = turns["day"].astype(str)
             first_days = sorted(days[days.between(incident["start"], incident["end"])].unique())[:3]
