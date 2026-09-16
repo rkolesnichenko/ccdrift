@@ -134,18 +134,20 @@ def main_thread_days(path, days, per_day=60):
     """One CLI main-thread session a day from Sep 1: `per_day` responses a minute
     apart, each after a prompt and read 90% from the 1-hour cache. Each entry of
     `days` can set that day's `version` (default "2.1.226"), `haiku` (how many
-    responses come from Haiku, default 0), `tier` ("1h" or "5m" cache writes,
-    default "1h") and `effort` (default "xhigh")."""
+    responses come from Haiku, default 0), `misses` (how many of the day's last
+    responses miss the cache, writing 1000 tokens, default 0), `tier` ("1h" or "5m"
+    cache writes, default "1h") and `effort` (default "xhigh")."""
     for d, spec in enumerate(days):
         tier = spec.get("tier", "1h")
         records = []
         for k in range(per_day):
             ts = at(d * DAY + 60 * k)
             model = "claude-haiku-4-5" if k < spec.get("haiku", 0) else "claude-opus-5"
+            read, written = (0, 1000) if k >= per_day - spec.get("misses", 0) else (900, 100)
             records += [prompt(ts, sid=f"s{d}"),
                         line(f"m{d}-{k}", text(40), ts=ts, sid=f"s{d}", model=model,
-                             cache_read=900, cache_creation=100,
-                             cache_1h=100 if tier == "1h" else 0, cache_5m=100 if tier == "5m" else 0,
+                             cache_read=read, cache_creation=written,
+                             cache_1h=written if tier == "1h" else 0, cache_5m=written if tier == "5m" else 0,
                              version=spec.get("version", "2.1.226"), entrypoint="cli",
                              effort=spec.get("effort", "xhigh"))]
         write(path / f"s{d}.jsonl", records)

@@ -76,11 +76,20 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
         raise RuntimeError(no_transcripts_message(source))
     turns = judged_turns(df, today)
     incidents = state["incidents"]
-    alerts: list[Alert] = [describe(event, turns, incidents, cfg)
-                           for event in update_incidents(turns, state, today, cfg)]
+    events = update_incidents(turns, state, today, cfg)
+    alerts: list[Alert] = [describe(event, turns, incidents, cfg) for event in events]
+    # `ccdrift status` reads only the state file, so it shows the cost and versions
+    # saved here: for open incidents, and for incidents added by hand, which start
+    # without either. describe() has just refreshed the incidents it alerted about.
+    described = {id(event.incident) for event in events}
     for incident in incidents:
-        if incident["status"] == "open":
-            incident["cost"] = round(incident_cost(turns, incident, incidents, cfg))
+        if id(incident) in described or (incident["status"] != "open" and incident["source"] != "user"):
+            continue
+        incident["cost"] = round(incident_cost(turns, incident, incidents, cfg))
+        if incident["source"] == "user" and not incident["versions"]:
+            days = turns["day"].astype(str)
+            first_days = sorted(days[days.between(incident["start"], incident["end"])].unique())[:3]
+            incident["versions"] = versions_text(turns, first_days)
     alerts += [("setting", "ccdrift: setting changed", change_message(change, versions_text(turns, change["days"])), [])
                for change in setting_changes(turns, state, today)]
     blank = blank_cache_stretch(turns, state)

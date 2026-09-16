@@ -7,7 +7,9 @@ import pytest
 
 import ccdrift.check
 from ccdrift.check import run_check
-from ccdrift.state import load_state
+from ccdrift.incidents import add_incident
+from ccdrift.state import load_state, new_state, save_state
+from ccdrift.status import status_report
 from tests.helpers import busy_days, main_thread_days
 
 
@@ -91,6 +93,24 @@ def test_check_alerts_when_an_incident_is_back_to_normal(tmp_path, sent, capsys)
     assert ("ccdrift: back to normal: Haiku share on the main thread back to normal from 2026-09-20, on Claude "
             "Code 2.1.259 (since 09-18). The incident from 2026-09-15: ~36 extra Haiku responses.") \
         in capsys.readouterr().out
+
+
+def test_check_works_out_the_cost_and_versions_of_an_incident_added_by_hand(tmp_path, sent):
+    # `ccdrift status` reads only the state file, so the check keeps both there.
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"misses": 6, "version": "2.1.233"}] * 3)
+    state = new_state()
+    add_incident(state["incidents"], "cache_ratio", "2026-09-15", "2026-09-17", date(2026, 9, 18))
+    save_state(tmp_path / "state.json", state)
+    now = datetime(2026, 9, 18, 9, 0, tzinfo=timezone.utc)
+    assert run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 18), now=now) == 0
+    saved = load_state(tmp_path / "state.json")
+    assert (saved["incidents"][0]["cost"], saved["incidents"][0]["versions"]) == (18_000, ["2.1.233 (since 09-15)"])
+    assert status_report(saved, now).splitlines()[1:4] == [
+        "Open incidents: none",
+        "Closed in the last 30 days:",
+        "  cache  2026-09-15..2026-09-17    added by hand; ~18k tokens re-cached; on 2.1.233 (since 09-15)",
+    ]
+    assert sent == []
 
 
 def test_check_says_so_when_there_is_nothing_to_report(tmp_path, sent, capsys):

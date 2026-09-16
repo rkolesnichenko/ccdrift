@@ -73,7 +73,9 @@ def test_incident_add_through_cli_saves_the_state(tmp_path, capsys):
     state = tmp_path / "state.json"
     assert main(["incident", "add", "cache", "2026-08-16..2026-09-04", "--state", str(state)]) == 0
     assert load_state(state)["incidents"][0]["start"] == "2026-08-16"
-    assert capsys.readouterr().out == "cache  2026-08-16..2026-09-04    added by hand; no tokens re-cached\n"
+    # Its cost is worked out from the history, which `incident add` doesn't read.
+    assert capsys.readouterr().out == \
+        "Added cache 2026-08-16..2026-09-04. `ccdrift incident list` shows what it cost.\n"
 
 
 def test_incident_commands_change_nothing_on_bad_input(tmp_path, capsys):

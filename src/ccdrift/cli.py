@@ -169,7 +169,12 @@ def _incident(args: argparse.Namespace) -> int:
         print(f"Nothing changed: {exc}", file=sys.stderr)
         return 2
     save_state(state_path, state)
-    print(incident_line(incident))
+    if args.action == "add":
+        # Its cost comes from the history, which only `incident list` and the check read.
+        print(f"Added {args.metric} {incident['start']}..{incident['end']}. "
+              "`ccdrift incident list` shows what it cost.")
+    else:
+        print(incident_line(incident))
     return 0
 
 
