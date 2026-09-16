@@ -125,6 +125,15 @@ def test_check_leaves_an_unreadable_state_file_as_it_is(tmp_path, sent):
     assert (tmp_path / "state.json").read_text() == "not json"
 
 
+def test_check_leaves_a_state_file_from_a_newer_ccdrift_as_it_is(tmp_path, sent):
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    newer = '{"version": 3, "incidents": [], "settings": [], "blank_cache": [], "reported": {}, "new": 1}\n'
+    (tmp_path / "state.json").write_text(newer)
+    assert check_logs(tmp_path) == 1
+    assert sent == ["ccdrift check failed"]
+    assert (tmp_path / "state.json").read_text() == newer
+
+
 def test_check_names_an_unusable_history_store(tmp_path, sent, capsys):
     main_thread_days(tmp_path / "logs", [{}] * 3)
     (tmp_path / "history.sqlite").write_text("not a database")

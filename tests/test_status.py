@@ -54,6 +54,7 @@ def test_short_status_never_fails_a_status_line(tmp_path, capsys):
     {**ran(), "last_ok": "2026-09-20T09:00:02"},  # last_ok has no UTC offset
     {**ran(), "last_ok": "2026-09-20T09:00:02+03:00",
      "incidents": [{"metric": "cache_ratio", "start": "2026-09-14"}]},  # incident missing "status"
+    {**ran(), "last_ok": "2026-09-20T09:00:02+03:00", "version": 3},  # written by a newer ccdrift
 ])
 def test_short_status_treats_a_malformed_state_as_unreadable(tmp_path, state):
     assert short_status(state_file(tmp_path, **state), NOW) == "ccdrift: can't read state"

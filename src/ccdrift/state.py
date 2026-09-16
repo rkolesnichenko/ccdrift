@@ -19,12 +19,18 @@ def new_state() -> dict[str, Any]:
 def load_state(path: Path) -> dict[str, Any]:
     """The state in `path` as version 2; a fresh state when the file doesn't exist.
     A version 1 file keeps its `reported` flags, so they aren't reported again.
-    Raises OSError or ValueError when the file can't be read."""
+    Raises OSError or ValueError when the file can't be read, including one written
+    by a newer ccdrift, which this version must not overwrite."""
     if not path.exists():
         return new_state()
     state = json.loads(path.read_text())
     if not isinstance(state, dict):
         raise ValueError(f"{path} doesn't hold a JSON object")
+    version = state.get("version", 1)
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise ValueError(f"{path} has an unknown state version: {version!r}")
+    if version > STATE_VERSION:
+        raise ValueError(f"{path} was written by a newer ccdrift (state version {version}); upgrade ccdrift")
     for key, empty in new_state().items():
         state.setdefault(key, empty)
     state["version"] = STATE_VERSION

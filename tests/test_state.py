@@ -29,6 +29,14 @@ def test_a_state_file_that_holds_no_object_is_unreadable(tmp_path):
         load_state(tmp_path / "state.json")
 
 
+@pytest.mark.parametrize("version", [3, "2", 2.0, None, True])
+def test_a_state_file_from_a_newer_ccdrift_or_with_a_bad_version_is_unreadable(tmp_path, version):
+    # Loaded as version 2, it would be overwritten by this ccdrift's next check.
+    (tmp_path / "state.json").write_text(json.dumps({"version": version, "incidents": []}))
+    with pytest.raises(ValueError, match="version"):
+        load_state(tmp_path / "state.json")
+
+
 def test_saving_replaces_the_state_file_in_one_step(tmp_path, monkeypatch):
     # Status lines read the file often and must never see half of it.
     path = tmp_path / "state.json"
