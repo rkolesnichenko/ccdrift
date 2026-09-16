@@ -69,8 +69,13 @@ def tool_result(ts, sid="s1", sidechain=False):
             "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}
 
 
-def compact_boundary(ts, sid="s1"):
-    return {"type": "system", "subtype": "compact_boundary", "timestamp": ts, "sessionId": sid}
+def compact_boundary(ts, sid="s1", trigger=None, pre_tokens=None, version=None):
+    rec = {"type": "system", "subtype": "compact_boundary", "timestamp": ts, "sessionId": sid}
+    if trigger is not None or pre_tokens is not None:
+        rec["compactMetadata"] = {"trigger": trigger, "preTokens": pre_tokens}
+    if version is not None:
+        rec.update(version=version, entrypoint="cli", isSidechain=False)
+    return rec
 
 
 def turn_duration(ts, duration_ms, message_count, sid="s1", uuid=None, version="2.1.226", entrypoint="cli"):
@@ -78,6 +83,21 @@ def turn_duration(ts, duration_ms, message_count, sid="s1", uuid=None, version="
     rec = {"type": "system", "subtype": "turn_duration", "timestamp": ts, "sessionId": sid,
            "isSidechain": False, "isMeta": False, "entrypoint": entrypoint, "version": version,
            "durationMs": duration_ms, "messageCount": message_count}
+    if uuid is not None:
+        rec["uuid"] = uuid
+    return rec
+
+
+def stop_hook_summary(ts, hook_count, errors=(), durations=(), sid="s1", uuid=None, version="2.1.226",
+                      entrypoint="cli"):
+    """The record Claude Code writes after running stop hooks. Each hook's command is
+    logged too; ccdrift must not keep it."""
+    infos = [{"command": "/home/someone/secret-hook.sh", "durationMs": d} for d in durations]
+    infos += [{"command": "/home/someone/secret-hook.sh"}] * max(0, hook_count - len(durations))
+    rec = {"type": "system", "subtype": "stop_hook_summary", "timestamp": ts, "sessionId": sid,
+           "isSidechain": False, "isMeta": False, "entrypoint": entrypoint, "version": version,
+           "hookCount": hook_count, "hookInfos": infos, "hookErrors": list(errors),
+           "preventedContinuation": False, "stopReason": "", "hasOutput": False}
     if uuid is not None:
         rec["uuid"] = uuid
     return rec

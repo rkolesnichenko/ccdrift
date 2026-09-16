@@ -6,9 +6,9 @@ import pandas as pd
 import pytest
 
 from ccdrift.detector import bin_metrics
-from ccdrift.logs import frame, judged_turns, parse_durations, parse_source
-from tests.helpers import (DAY, at, compact_boundary, line, prompt, response, text, thinking,
-                           tool_result, turn_duration, write)
+from ccdrift.logs import frame, judged_turns, parse_all, parse_durations, parse_source
+from tests.helpers import (DAY, at, compact_boundary, line, prompt, response, stop_hook_summary, text,
+                           thinking, tool_result, turn_duration, write)
 
 
 def test_split_lines_of_one_response_become_one_turn(tmp_path):
@@ -240,3 +240,35 @@ def test_judged_turns_leave_out_subagents_sdk_sessions_and_the_current_day(tmp_p
           [line("a1", text(40), ts=at(180), sidechain=True, entrypoint="cli")])
     turns = judged_turns(parse_source(tmp_path), date(2026, 9, 2))
     assert sorted(turns["source_file"]) == ["cli.jsonl", "old.jsonl"]
+
+
+def test_stop_hook_summaries_become_hook_runs_without_their_commands(tmp_path):
+    write(tmp_path / "s1.jsonl", [
+        stop_hook_summary(at(0), 2, durations=(1200, 800), uuid="h1"),
+        stop_hook_summary(at(60), 1, errors=("hook exited with 1",), uuid="h2"),
+    ])
+    runs = parse_all(tmp_path).hook_runs
+    assert runs[["day", "hook_count", "error_count", "prevented"]].values.tolist() == [
+        ["2026-09-01", 2, 0, False], ["2026-09-01", 1, 1, False]]
+    assert runs["duration_ms"].tolist()[0] == 2000.0
+    assert pd.isna(runs["duration_ms"].tolist()[1])
+    assert "secret-hook" not in runs.to_string()
+
+
+def test_compaction_boundaries_become_compactions_and_still_mark_the_next_turn(tmp_path):
+    write(tmp_path / "s1.jsonl", [
+        prompt(at(0)), line("m1", text(40), ts=at(0)),
+        compact_boundary(at(100), trigger="auto", pre_tokens=971_000),
+        prompt(at(120)), line("m2", text(40), ts=at(120)),
+    ])
+    tables = parse_all(tmp_path)
+    assert tables.compactions[["day", "trigger", "pre_tokens"]].values.tolist() == [["2026-09-01", "auto", 971_000.0]]
+    assert tables.responses["after_compaction"].tolist() == [False, True]
+
+
+def test_parse_all_reads_what_the_single_readers_read(tmp_path):
+    write(tmp_path / "s1.jsonl", [prompt(at(0)), line("m1", text(40), ts=at(0)),
+                                  turn_duration(at(30), 30000, 2, uuid="d1")])
+    tables = parse_all(tmp_path)
+    pd.testing.assert_frame_equal(tables.responses, parse_source(tmp_path))
+    pd.testing.assert_frame_equal(tables.durations, parse_durations(tmp_path))

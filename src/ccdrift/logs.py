@@ -52,6 +52,12 @@ CANDIDATES: dict[str, list[str]] = {
     "subtype":           ["subtype"],
     "duration_ms":       ["durationMs"],
     "message_count":     ["messageCount"],
+    "hook_count":        ["hookCount"],
+    "hook_errors":       ["hookErrors"],
+    "hook_infos":        ["hookInfos"],
+    "prevented":         ["preventedContinuation"],
+    "compact_trigger":   ["compactMetadata.trigger"],
+    "compact_pre_tokens": ["compactMetadata.preTokens"],
 }
 
 
@@ -160,10 +166,12 @@ TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_creation", "cache_read",
 
 @dataclass
 class ParsedFile:
-    """One transcript's responses and turn durations by key, the transcript's first
-    session id, and line counts for --verbose."""
+    """One transcript's responses, turn durations, hook runs and compactions by key,
+    the transcript's first session id, and line counts for --verbose."""
     responses: dict[str, dict] = field(default_factory=dict)
     durations: dict[str, dict] = field(default_factory=dict)
+    hook_runs: dict[str, dict] = field(default_factory=dict)
+    compactions: dict[str, dict] = field(default_factory=dict)
     session_id: Optional[str] = None
     lines: int = 0
     bad_json: int = 0
@@ -201,6 +209,13 @@ def _text(value: Any) -> Optional[str]:
     return value if isinstance(value, str) and value else None
 
 
+def _record(obj: dict, key: str, rel: str) -> dict:
+    """The fields a turn duration, hook run or compaction record keeps in common."""
+    return {"key": key, "timestamp": parse_ts(field_get(obj, "timestamp")),
+            "version": _text(field_get(obj, "version")), "entrypoint": _text(field_get(obj, "entrypoint")),
+            "is_sidechain": bool(field_get(obj, "is_sidechain", default=False)), "source_file": rel}
+
+
 def parse_file(fp: Path, rel: str) -> ParsedFile:
     """Parse one transcript. Claude Code writes each content block of a response on
     its own line with the response's usage repeated, so lines that share a
@@ -231,19 +246,33 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                 continue
             if role == "system":
                 subtype = field_get(obj, "subtype")
+                key = field_get(obj, "uuid") or f"{rel}:{line_no}"
                 if subtype == "compact_boundary":
                     compact_pending = True
+                    pre_tokens = field_get(obj, "compact_pre_tokens")
+                    parsed.compactions.setdefault(key, {
+                        **_record(obj, key, rel),
+                        "trigger": _text(field_get(obj, "compact_trigger")),
+                        "pre_tokens": None if pre_tokens is None else _num(pre_tokens),
+                    })
                 elif subtype == "turn_duration":
-                    key = field_get(obj, "uuid") or f"{rel}:{line_no}"
                     parsed.durations.setdefault(key, {
-                        "key":           key,
-                        "timestamp":     parse_ts(field_get(obj, "timestamp")),
-                        "version":       _text(field_get(obj, "version")),
-                        "entrypoint":    _text(field_get(obj, "entrypoint")),
-                        "is_sidechain":  bool(field_get(obj, "is_sidechain", default=False)),
-                        "duration_ms":   _num(field_get(obj, "duration_ms")),
+                        **_record(obj, key, rel),
+                        "duration_ms": _num(field_get(obj, "duration_ms")),
                         "message_count": int(_num(field_get(obj, "message_count"))),
-                        "source_file":   rel,
+                    })
+                elif subtype == "stop_hook_summary":
+                    infos = field_get(obj, "hook_infos")
+                    durations = [_num(i["durationMs"]) for i in infos if isinstance(i, dict)
+                                 and i.get("durationMs") is not None] if isinstance(infos, list) else []
+                    errors = field_get(obj, "hook_errors")
+                    # Each hook's command is logged too; it may name private paths, so it isn't kept.
+                    parsed.hook_runs.setdefault(key, {
+                        **_record(obj, key, rel),
+                        "hook_count": int(_num(field_get(obj, "hook_count"))),
+                        "error_count": len(errors) if isinstance(errors, list) else 0,
+                        "duration_ms": sum(durations) if durations else None,
+                        "prevented": bool(field_get(obj, "prevented", default=False)),
                     })
                 continue
             if role != "assistant":
@@ -291,7 +320,8 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
     # A transcript is one session, even when a resumed session's lines carry
     # another id.
     session = parsed.session_id or fp.stem
-    for row in (*parsed.responses.values(), *parsed.durations.values()):
+    for row in (*parsed.responses.values(), *parsed.durations.values(),
+                *parsed.hook_runs.values(), *parsed.compactions.values()):
         row["session_id"] = session
     return parsed
 
@@ -370,29 +400,65 @@ def frame(rows) -> pd.DataFrame:
     return add_ratios(df)
 
 
-def duration_frame(rows) -> pd.DataFrame:
-    """Turn durations, from raw rows, with their UTC day."""
+def _record_frame(rows, floats: tuple[str, ...], flags: tuple[str, ...]) -> pd.DataFrame:
+    """A table of non-response records (turn durations, hook runs, compactions), from
+    raw rows, sorted by transcript and time, with its UTC day."""
     df = _rows_with_parsed_timestamp(rows)
     if df.empty:
         return df
-    df["duration_ms"] = df["duration_ms"].astype(float)
-    df["is_sidechain"] = df["is_sidechain"].astype(bool)
+    for col in floats:
+        df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
+    for col in flags:
+        df[col] = df[col].fillna(False).astype(bool)
     df = df.sort_values(["source_file", "timestamp"], kind="stable").reset_index(drop=True)
     return _with_day(df)
 
 
-def parse_durations(source: Path) -> pd.DataFrame:
-    """Every `turn_duration` record under `source`: how long each turn took, and over
-    how many messages."""
-    rows: dict[str, dict] = {}
+def duration_frame(rows) -> pd.DataFrame:
+    """Turn durations, from raw rows, with their UTC day."""
+    return _record_frame(rows, ("duration_ms",), ("is_sidechain",))
+
+
+def hook_frame(rows) -> pd.DataFrame:
+    """Stop-hook runs, from raw rows, with their UTC day."""
+    return _record_frame(rows, ("duration_ms",), ("is_sidechain", "prevented"))
+
+
+def compaction_frame(rows) -> pd.DataFrame:
+    """Compactions, from raw rows, with their UTC day."""
+    return _record_frame(rows, ("pre_tokens",), ("is_sidechain",))
+
+
+@dataclass
+class Tables:
+    """Everything ccdrift reads from transcripts, one table per record kind."""
+    responses: pd.DataFrame
+    durations: pd.DataFrame
+    hook_runs: pd.DataFrame
+    compactions: pd.DataFrame
+
+
+def parse_all(source: Path) -> Tables:
+    """Every transcript under `source`, read once. A record copied into a second
+    transcript counts from the one whose path sorts first."""
+    kinds = {"responses": {}, "durations": {}, "hook_runs": {}, "compactions": {}}
     for fp, rel in jsonl_files(source):
         try:
             parsed = parse_file(fp, rel)
         except OSError:
             continue
-        for key, row in parsed.durations.items():
-            rows.setdefault(key, row)
-    return duration_frame(list(rows.values()))
+        for kind, rows in kinds.items():
+            for key, row in getattr(parsed, kind).items():
+                rows.setdefault(key, row)
+    return Tables(frame(list(kinds["responses"].values())), duration_frame(list(kinds["durations"].values())),
+                  hook_frame(list(kinds["hook_runs"].values())),
+                  compaction_frame(list(kinds["compactions"].values())))
+
+
+def parse_durations(source: Path) -> pd.DataFrame:
+    """Every `turn_duration` record under `source`: how long each turn took, and over
+    how many messages."""
+    return parse_all(source).durations
 
 
 def judged_turns(df: pd.DataFrame, today: date) -> pd.DataFrame:
