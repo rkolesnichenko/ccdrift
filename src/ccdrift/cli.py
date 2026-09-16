@@ -5,14 +5,18 @@ from __future__ import annotations
 import argparse
 import shlex
 import sys
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from ccdrift import __version__
 from ccdrift.check import ccdrift_home, run_check
+from ccdrift.incidents import (METRIC_ARGS, add_incident, close_incident, dismiss_incident, incident_line,
+                               parse_days, run_list)
 from ccdrift.logs import default_source, peek
 from ccdrift.report import run_report
 from ccdrift.schedule import ScheduleError, choose_backend, install as install_job, make_job
+from ccdrift.state import load_state, save_state
 
 
 def _add_source(parser: argparse.ArgumentParser) -> None:
@@ -55,6 +59,25 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--days", type=int, default=21, help="how many recent days to list (default: 21)")
     _add_source(report)
     _add_state(report)
+
+    incident = commands.add_parser("incident", help="list incidents, or add, close or dismiss one")
+    incident_actions = incident.add_subparsers(dest="action", required=True, metavar="ACTION")
+    list_action = incident_actions.add_parser("list", help="every incident, newest first, with what it cost")
+    _add_source(list_action)
+    _add_state(list_action)
+    add_action = incident_actions.add_parser(
+        "add", help="record a past incident, so its days stay out of the baseline")
+    add_action.add_argument("metric", choices=list(METRIC_ARGS))
+    add_action.add_argument("days", metavar="START..END", help="UTC dates, inclusive")
+    _add_state(add_action)
+    close_action = incident_actions.add_parser("close", help="end the open incident as of yesterday (UTC)")
+    close_action.add_argument("metric", choices=list(METRIC_ARGS))
+    _add_state(close_action)
+    dismiss_action = incident_actions.add_parser(
+        "dismiss", help="mark an incident as a false alarm, so its days rejoin the baseline")
+    dismiss_action.add_argument("metric", choices=list(METRIC_ARGS))
+    dismiss_action.add_argument("start", help="the incident's first day")
+    _add_state(dismiss_action)
 
     schedule = commands.add_parser("schedule", help="run the check once a day")
     actions = schedule.add_subparsers(dest="action", required=True, metavar="ACTION")
@@ -114,6 +137,32 @@ def _schedule(args: argparse.Namespace) -> int:
     return 0
 
 
+def _incident(args: argparse.Namespace) -> int:
+    state_path = _state(args)
+    if args.action == "list":
+        return run_list(_source(args), state_path)
+    try:
+        state = load_state(state_path)
+    except (OSError, ValueError) as exc:
+        print(f"Can't read the state file {state_path}: {exc}", file=sys.stderr)
+        return 1
+    today = datetime.now(timezone.utc).date()
+    metric = METRIC_ARGS[args.metric]
+    try:
+        if args.action == "add":
+            incident = add_incident(state["incidents"], metric, *parse_days(args.days), today)
+        elif args.action == "close":
+            incident = close_incident(state["incidents"], metric, today)
+        else:
+            incident = dismiss_incident(state["incidents"], metric, date.fromisoformat(args.start).isoformat(), today)
+    except ValueError as exc:
+        print(f"Nothing changed: {exc}", file=sys.stderr)
+        return 2
+    save_state(state_path, state)
+    print(incident_line(incident))
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "check":
@@ -122,6 +171,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0 if peek(_source(args)) else 2
     if args.command == "report":
         return run_report(_source(args), _state(args), days=args.days)
+    if args.command == "incident":
+        return _incident(args)
     if args.command == "schedule":
         return _schedule(args)
     raise AssertionError(f"unhandled command: {args.command}")
