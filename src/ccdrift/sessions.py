@@ -25,7 +25,8 @@ START_COLUMNS = ["source_file", "timestamp", "day", "version", "prompt_tokens"]
 def session_starts(responses: pd.DataFrame) -> pd.DataFrame:
     """One row per main-thread CLI transcript, in time order: its first response's
     time, UTC day, Claude Code version and prompt size (input, cache creation and
-    cache read tokens together)."""
+    cache read tokens together). A first response with no tokens logged isn't a start:
+    every request sends context, so Claude Code has stopped logging usage."""
     if responses.empty:
         return pd.DataFrame(columns=START_COLUMNS)
     keep = responses["main_thread"].astype(bool)
@@ -42,6 +43,7 @@ def session_starts(responses: pd.DataFrame) -> pd.DataFrame:
         "version": first["version"] if "version" in first else None,
         "prompt_tokens": (first["input_tokens"] + first["cache_creation"] + first["cache_read"]).astype(float),
     }, columns=START_COLUMNS)
+    starts = starts[starts["prompt_tokens"] > 0]
     return starts.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
 
@@ -89,13 +91,15 @@ def first_of_each(changes: Sequence[ContextChange], recorded: Sequence[dict] = (
     `to` each within SIDE (relative) of the change's own `before` and `after` -- the
     same step re-detected, which sparse sessions can keep doing for weeks as the
     baseline slowly refills with post-step sessions. `recorded` holds dicts with
-    `since`, `from` and `to`; kept changes are compared by their own `before`/`after`."""
+    `since`, `from` and `to`; kept changes are compared by their own `before`/`after`.
+    One from or to 0 tokens, which a state file may hold, is compared by date only."""
     kept = [(r["since"], r["to"] > r["from"], r["from"], r["to"]) for r in recorded]
     found = []
     for change in changes:
         earliest = (date.fromisoformat(change.since) - timedelta(days=DEDUPE_DAYS)).isoformat()
         if any(up == change.up and (since >= earliest or (
-                abs(change.before / r_from - 1) <= SIDE and abs(change.after / r_to - 1) <= SIDE))
+                r_from > 0 and r_to > 0
+                and abs(change.before / r_from - 1) <= SIDE and abs(change.after / r_to - 1) <= SIDE))
                for since, up, r_from, r_to in kept):
             continue
         kept.append((change.since, change.up, change.before, change.after))

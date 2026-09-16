@@ -24,6 +24,15 @@ def test_a_session_start_is_the_first_main_thread_cli_response_of_each_transcrip
         ["a.jsonl", "2026-09-01", "2.1.261", 90_010.0], ["b.jsonl", "2026-09-02", "2.1.267", 54_010.0]]
 
 
+def test_a_first_response_without_token_counts_is_not_a_session_start(tmp_path):
+    # If Claude Code stops logging usage, every start reads as 0 tokens: not a change in context.
+    unlogged = line("b1", text(40), ts=at(DAY), version="2.1.280")
+    del unlogged["message"]["usage"]
+    write(tmp_path / "a.jsonl", [prompt(at(0)), line("a1", text(40), ts=at(0), cache_creation=90_000)])
+    write(tmp_path / "b.jsonl", [prompt(at(DAY)), unlogged])
+    assert session_starts(parse_source(tmp_path))["source_file"].tolist() == ["a.jsonl"]
+
+
 def starts_of(tokens, versions=None):
     return pd.DataFrame({"day": [nth_day(i) for i in range(len(tokens))],
                          "version": versions or ["2.1.261"] * len(tokens),
@@ -60,6 +69,15 @@ def test_a_later_genuine_step_in_the_same_direction_is_still_found():
     change = ContextChange("2026-09-30", "2026-10-02", 54_000.0, 30_000.0)
     recorded = [{"since": "2026-09-10", "from": 128_000.0, "to": 54_000.0}]
     assert first_of_each([change], recorded) == [change]
+
+
+def test_a_step_recorded_from_or_to_0_tokens_is_compared_by_date_only():
+    # A check that counted 0-token starts could record one; dividing by it failed every later check.
+    down = ContextChange("2026-09-30", "2026-10-02", 54_000.0, 30_000.0)
+    up = ContextChange("2026-09-30", "2026-10-02", 54_000.0, 130_000.0)
+    recorded = [{"since": "2026-09-10", "from": 128_000.0, "to": 0.0},
+                {"since": "2026-09-12", "from": 0.0, "to": 54_000.0}]
+    assert first_of_each([down, up], recorded) == [down, up]
 
 
 def test_a_session_start_step_is_alerted_once_with_its_sizes():
