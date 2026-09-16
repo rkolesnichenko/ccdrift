@@ -26,7 +26,11 @@ import pandas as pd
 from ccdrift.logs import default_source, parse_durations
 from lab.harness import date_range, generate_synthetic, in_date_ranges
 
-LATENCY_COLUMNS = {"duration_s": "median turn duration (s)", "per_message_s": "median seconds per message"}
+LATENCY_COLUMNS = {"duration_s": "median turn duration (s)",
+                   "per_message_s": "median milliseconds per message (messageCount: the session's messages so far)"}
+# Printed values per stored unit. messageCount counts every message of the session up
+# to the turn, not the turn's own: often thousands, so seconds per message print as 0.0.
+PRINT_SCALE = {"duration_s": 1, "per_message_s": 1000}
 BASELINE_DAYS = 14
 MIN_BASELINE = 5
 Z_THRESHOLD = 3.5
@@ -132,9 +136,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     for column, label in LATENCY_COLUMNS.items():
         res = sweep_latency(durations, column, n_starts=args.starts, incidents=args.incident)
         floor = smallest_caught_everywhere(res)
+        scaled = daily[column] * PRINT_SCALE[column]
         print(f"\n=== {label} ===")
-        print(f"daily median {daily[column].median():.1f}, range {daily[column].min():.1f}-"
-              f"{daily[column].max():.1f}, spread (MAD/median) {spread(daily, column):.2f}")
+        print(f"daily median {scaled.median():.1f}, range {scaled.min():.1f}-"
+              f"{scaled.max():.1f}, spread (MAD/median) {spread(daily, column):.2f}")
         print("slowdown caught from each start:")
         for factor, group in res.groupby("factor"):
             print(f"  x{factor:g}: {int(group['caught'].sum())}/{len(group)}")
