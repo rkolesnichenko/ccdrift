@@ -194,6 +194,11 @@ def test_a_new_blank_stretch_after_a_break_is_reported_even_when_it_starts_the_h
     assert (stretch["first"], stretch["days"]) == (nth_day(160), 3)
 
 
+def test_a_blank_stretch_reported_before_ccdrift_kept_its_last_day_isnt_reported_again():
+    state = {**new_state(), "blank_cache": [nth_day(0)]}
+    assert blank_cache_stretch(blank_turns(range(10, 100)), state) is None
+
+
 def test_a_blank_stretch_seen_on_the_last_run_isnt_reported_again_when_the_history_read_moves_on():
     state = {**new_state(), "blank_cache": [nth_day(15)], "blank_cache_seen": nth_day(104)}
     assert blank_cache_stretch(blank_turns(range(16, 105)), state) is None

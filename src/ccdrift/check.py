@@ -62,8 +62,10 @@ def blank_cache_stretch(turns: pd.DataFrame, state: dict[str, Any],
     stretch = per_day.iloc[start:]
     first = str(stretch.index[0])
     # A stretch reaching back to the earliest day the check read may have begun before
-    # it: it is the one already reported when an earlier run saw it go on to that day.
-    continues = start == 0 and (state.get("blank_cache_seen") or "") >= first
+    # it: it is the one already reported when an earlier run saw it go on to that day,
+    # or, in a state from before ccdrift kept that day, when one was reported earlier.
+    seen = state.get("blank_cache_seen")
+    continues = start == 0 and (seen >= first if seen else any(day < first for day in state["blank_cache"]))
     state["blank_cache_seen"] = str(stretch.index[-1])
     if first in state["blank_cache"] or continues:
         return None
