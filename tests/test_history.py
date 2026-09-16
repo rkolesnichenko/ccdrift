@@ -116,6 +116,24 @@ def test_a_store_from_a_newer_ccdrift_is_refused(tmp_path):
         History(tmp_path / "history.sqlite")
 
 
+def test_a_store_from_a_newer_ccdrift_with_an_incompatible_schema_is_refused_untouched(tmp_path):
+    # A future ccdrift may reshape the tables entirely; this version must recognize
+    # the newer schema_version before running its own DDL against them.
+    path = tmp_path / "history.sqlite"
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+    db.execute("INSERT INTO meta VALUES ('schema_version', '2')")
+    db.execute("CREATE TABLE responses (key INTEGER PRIMARY KEY, payload BLOB)")
+    db.commit()
+    db.close()
+    with pytest.raises(HistoryError, match="newer ccdrift"):
+        History(path)
+    db = sqlite3.connect(path)
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    db.close()
+    assert tables == {"meta", "responses"}
+
+
 def test_an_unusable_store_says_how_to_rebuild_it(tmp_path):
     transcripts(tmp_path / "logs")
     (tmp_path / "history.sqlite").write_text("not a database")

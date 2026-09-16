@@ -106,15 +106,25 @@ class History:
         except (OSError, sqlite3.Error) as exc:
             raise _unusable(path, exc) from exc
         try:
+            has_meta = self.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").fetchone()
+            self.meta = dict(self.db.execute("SELECT key, value FROM meta")) if has_meta else {}
+        except sqlite3.Error as exc:
+            self.db.close()
+            raise _unusable(path, exc) from exc
+        # Check the schema version before running any DDL: a newer store's tables may
+        # not match this version's SCHEMA, and applying it could fail with a confusing
+        # error, or silently add tables the newer ccdrift doesn't expect.
+        if int(self.meta.get("schema_version", SCHEMA_VERSION)) > SCHEMA_VERSION:
+            self.db.close()
+            raise HistoryError(f"The history store {path} was written by a newer ccdrift. Upgrade ccdrift, "
+                               "or move the store aside to rebuild it from the transcripts still on disk.")
+        try:
             self.db.executescript(SCHEMA)
             self.meta = dict(self.db.execute("SELECT key, value FROM meta"))
         except sqlite3.Error as exc:
             self.db.close()
             raise _unusable(path, exc) from exc
-        if int(self.meta.get("schema_version", SCHEMA_VERSION)) > SCHEMA_VERSION:
-            self.db.close()
-            raise HistoryError(f"The history store {path} was written by a newer ccdrift. Upgrade ccdrift, "
-                               "or move the store aside to rebuild it from the transcripts still on disk.")
         if "schema_version" not in self.meta:
             self._set_meta("schema_version", str(SCHEMA_VERSION))
 
