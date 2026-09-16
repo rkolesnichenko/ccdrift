@@ -178,22 +178,30 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
             if failure:
                 print(f'[check {stamp}] --exec failed for "{title}": {failure}')
 
-    def failure_notice_due(state: Optional[dict[str, Any]]) -> bool:
-        """A failure notifies and runs --exec at most once per FAILURE_NOTICE_HOURS;
-        `state` notes when it last did."""
-        if state is None:
-            return True
-        last = state.get("last_failure_notice")
-        if last and started - datetime.fromisoformat(last) < timedelta(hours=FAILURE_NOTICE_HOURS):
-            return False
-        state["last_failure_notice"] = started.isoformat(timespec="seconds")
+    def failure_notice_due() -> bool:
+        """A failure notifies and runs --exec at most once per FAILURE_NOTICE_HOURS. A
+        file next to the state file notes when it last did, so a state file that can't
+        be read or saved doesn't notify on every run; when that file can't be read or
+        written either, the failure notifies."""
+        notice = state_path.with_name(state_path.name + ".last-failure-notice")
+        try:
+            if started - datetime.fromisoformat(notice.read_text().strip()) < timedelta(hours=FAILURE_NOTICE_HOURS):
+                return False
+        except (OSError, ValueError, TypeError):
+            pass
+        try:
+            notice.parent.mkdir(parents=True, exist_ok=True)
+            notice.write_text(started.isoformat(timespec="seconds") + "\n")
+        except OSError:
+            pass
         return True
 
     try:
         state = load_state(state_path)
     except (OSError, ValueError) as exc:
         traceback.print_exc()
-        alert("failed", "ccdrift check failed", f"can't read the state file {state_path}: {exc}")
+        alert("failed", "ccdrift check failed", f"can't read the state file {state_path}: {exc}",
+              failure_notice_due())
         return 1
     updated = copy.deepcopy(state)
     try:
@@ -203,7 +211,7 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
         save_state(state_path, updated)
     except Exception as exc:
         traceback.print_exc()
-        send = failure_notice_due(state)
+        send = failure_notice_due()
         record_run(state, started, f"{type(exc).__name__}: {exc}")
         try:
             save_state(state_path, state)

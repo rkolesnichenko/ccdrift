@@ -163,6 +163,17 @@ def test_check_leaves_an_unreadable_state_file_as_it_is(tmp_path, sent):
     assert (tmp_path / "state.json").read_text() == "not json"
 
 
+def test_an_unreadable_state_file_notifies_at_most_once_in_20_hours(tmp_path, sent, capsys):
+    # The check can't note the notice in a state file it can't read, and it runs every hour.
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    (tmp_path / "state.json").write_text("not json")
+    first = datetime(2026, 9, 4, 9, 0, tzinfo=timezone.utc)
+    for hours in (0, 1, 20):
+        assert check_logs(tmp_path, now=first + timedelta(hours=hours)) == 1
+    assert sent == ["ccdrift check failed", "ccdrift check failed"]
+    assert capsys.readouterr().out.count("ccdrift check failed: can't read the state file") == 3
+
+
 def test_check_leaves_a_state_file_from_a_newer_ccdrift_as_it_is(tmp_path, sent):
     main_thread_days(tmp_path / "logs", [{}] * 3)
     newer = '{"version": 3, "incidents": [], "settings": [], "blank_cache": [], "reported": {}, "new": 1}\n'
