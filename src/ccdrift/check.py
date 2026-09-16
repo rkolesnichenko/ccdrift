@@ -14,7 +14,8 @@ import pandas as pd
 from ccdrift.changelog import changelog_path, days_before, load_changelog, new_versions, note_lines, release_notes
 from ccdrift.detector import DetectorConfig
 from ccdrift.fields import field_gaps, gap_message
-from ccdrift.history import load_turns
+from ccdrift.history import load_history
+from ccdrift.hooks import failure_message, hook_failures, judged_hook_runs
 from ccdrift.incidents import describe, incident_cost, update_incidents, versions_text
 from ccdrift.logs import judged_turns, no_transcripts_message
 from ccdrift.notify import notify, run_exec
@@ -69,7 +70,8 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
             today: date) -> list[Alert]:
     """Everything that changed since the last run, in the order alerts go out;
     `state` is updated to match."""
-    df = load_turns(source, state_path)
+    tables = load_history(source, state_path, claim=True)
+    df = tables.responses
     if df.empty:
         raise RuntimeError(no_transcripts_message(source))
     turns = judged_turns(df, today)
@@ -102,6 +104,11 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
                               TOPIC_OF[change["setting"]])
         alerts.append(("setting", "ccdrift: setting changed",
                        change_message(change, versions_text(turns, change["days"])), note_lines(notes)))
+    for failure in hook_failures(judged_hook_runs(tables.hook_runs, today), state, today):
+        notes = release_notes(changelog, new_versions(turns, days_before(failure["since"], 7), failure["days"][-1]),
+                              "hooks")
+        alerts.append(("hooks", "ccdrift: hooks failing",
+                       failure_message(failure, versions_text(turns, failure["days"])), note_lines(notes)))
     for gap in field_gaps(turns, state, today):
         notes = release_notes(changelog, [] if gap["version"] == "unknown" else [gap["version"]], "fields")
         alerts.append(("fields", "ccdrift: Claude Code stopped logging a field", gap_message(gap), note_lines(notes)))

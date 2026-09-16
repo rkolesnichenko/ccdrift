@@ -183,3 +183,12 @@ def main_thread_days(path, days, per_day=60):
                              version=spec.get("version", "2.1.226"), entrypoint="cli",
                              effort=spec.get("effort", "xhigh"))]
         write(path / f"s{d}.jsonl", records)
+
+
+def hook_days_logs(path, failing_days, days, per_day=10):
+    """`per_day` stop-hook summaries a day from Sep 1 in one transcript; on the day
+    indexes in `failing_days` every hook reports an error."""
+    records = [stop_hook_summary(at(d * DAY + 300 + k), 1, durations=(400,), uuid=f"hook-{d}-{k}",
+                                 errors=("exit 1",) if d in failing_days else ())
+               for d in range(days) for k in range(per_day)]
+    write(path / "hooks.jsonl", records)

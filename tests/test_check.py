@@ -10,7 +10,7 @@ from ccdrift.check import run_check
 from ccdrift.incidents import add_incident
 from ccdrift.state import load_state, new_state, save_state
 from ccdrift.status import status_report
-from tests.helpers import busy_days, damage_responses_table, main_thread_days
+from tests.helpers import busy_days, damage_responses_table, hook_days_logs, main_thread_days
 
 
 @pytest.fixture
@@ -232,3 +232,13 @@ def test_check_alerts_when_a_new_version_stops_logging_effort(tmp_path, sent, ca
     assert ("ccdrift: Claude Code stopped logging a field: Claude Code 2.1.280 no longer logs effort "
             "(on 0% of 120 responses, 100% before). Effort change alerts can't work until ccdrift reads it again; "
             "run `ccdrift peek`.") in capsys.readouterr().out
+
+
+def test_check_alerts_when_stop_hooks_start_failing(tmp_path, sent, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 16)
+    hook_days_logs(tmp_path / "logs", {14, 15}, 16)
+    check_logs(tmp_path, today=date(2026, 9, 17))
+    assert sent == ["ccdrift: hooks failing"]
+    assert ("ccdrift: hooks failing: Stop hooks failed on 10 of 10 runs on 2026-09-15 and 10 of 10 on 2026-09-16, "
+            "on Claude Code 2.1.226 (since 09-01). Check your hooks; a Claude Code update may have changed their "
+            "input.") in capsys.readouterr().out

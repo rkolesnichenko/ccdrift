@@ -4,12 +4,18 @@ receive shows up as hooks failing."""
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Optional, Sequence
 
 import pandas as pd
 
 HOOK_DAY_COLUMNS = ["day", "runs", "failed", "median_ms"]
+
+ACTIVE_RUNS = 10     # runs for a day to count
+FAILING = 0.5        # share of runs with an error
+BEFORE_DAYS = 14
+MIN_BEFORE_DAYS = 5
+RECENT_DAYS = 14
 
 
 def judged_hook_runs(hook_runs: pd.DataFrame, today: date) -> pd.DataFrame:
@@ -51,3 +57,41 @@ def hooks_lines(summary: Optional[dict[str, Any]]) -> list[str]:
     errors = "no errors" if days == 0 else f"errors on {days} day{'s' if days != 1 else ''}"
     median = "" if summary["median_duration_ms"] is None else f", median {summary['median_duration_ms'] / 1000:.1f} s"
     return ["", f"Hooks over these days: {summary['runs']:,} stop-hook runs, {errors}{median}"]
+
+
+def hook_failures(runs: pd.DataFrame, state: dict[str, Any], today: date) -> list[dict[str, Any]]:
+    """Stop hooks failing on at least FAILING of their runs two active days in a row,
+    the first within the last RECENT_DAYS days, after at least MIN_BEFORE_DAYS active
+    days without that in the BEFORE_DAYS before; each is recorded in
+    state["hook_failures"], once per episode."""
+    active = hook_days(runs)
+    if active.empty:
+        return []
+    active = active[active["runs"] >= ACTIVE_RUNS].reset_index(drop=True)
+    share = active["failed"] / active["runs"]
+    since = (today - timedelta(days=RECENT_DAYS)).isoformat()
+    new = []
+    for i in range(1, len(active)):
+        first, second = str(active["day"][i - 1]), str(active["day"][i])
+        if first < since or share[i - 1] < FAILING or share[i] < FAILING:
+            continue
+        earliest = (date.fromisoformat(first) - timedelta(days=BEFORE_DAYS)).isoformat()
+        before = (active["day"].astype(str) < first) & (active["day"].astype(str) >= earliest)
+        if before.sum() < MIN_BEFORE_DAYS or bool((share[before] >= FAILING).any()):
+            continue
+        if any(f["since"] >= earliest for f in state["hook_failures"]):
+            continue
+        failure = {"since": first, "days": [first, second],
+                   "runs": [int(active["runs"][i - 1]), int(active["runs"][i])],
+                   "failed": [int(active["failed"][i - 1]), int(active["failed"][i])],
+                   "reported_on": today.isoformat()}
+        state["hook_failures"].append(failure)
+        new.append(failure)
+    return new
+
+
+def failure_message(failure: dict[str, Any], versions: Sequence[str]) -> str:
+    on = f", on Claude Code {', '.join(versions)}" if versions else ""
+    (first, second), (runs1, runs2), (failed1, failed2) = failure["days"], failure["runs"], failure["failed"]
+    return (f"Stop hooks failed on {failed1} of {runs1} runs on {first} and {failed2} of {runs2} on {second}{on}. "
+            "Check your hooks; a Claude Code update may have changed their input.")

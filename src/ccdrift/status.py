@@ -13,6 +13,7 @@ from ccdrift.state import load_state
 from ccdrift.texts import change_line, incident_line
 
 STALE_DAYS = 3
+HOOK_DAYS = 3
 RECENT_DAYS = 30
 LIVE_NAMES = {"cache_ratio": "cache ratio down", "haiku_fraction": "Haiku share up"}
 
@@ -24,7 +25,8 @@ def _when(stamp: str) -> datetime:
 def short_status(state_path: Path, now: datetime) -> str:
     """One line for a status line, or "" when nothing needs attention. First match
     wins: an unreadable or malformed state, no check yet, a failed check, no successful
-    check for more than STALE_DAYS days, open incidents."""
+    check for more than STALE_DAYS days, open incidents, hooks failing since within
+    the last HOOK_DAYS days."""
     try:
         state = load_state(state_path)
         last = state.get("last_run")
@@ -37,7 +39,13 @@ def short_status(state_path: Path, now: datetime) -> str:
             return f"ccdrift: no check for {since_ok.days} days"
         live = [f"{LIVE_NAMES[i['metric']]} since {i['start'][5:]}"
                 for i in state["incidents"] if i["status"] == "open"]
-        return f"ccdrift: {'; '.join(live)}" if live else ""
+        if live:
+            return f"ccdrift: {'; '.join(live)}"
+        recent = (now.date() - timedelta(days=HOOK_DAYS)).isoformat()
+        failing = [f for f in state.get("hook_failures", []) if f["reported_on"] >= recent]
+        if failing:
+            return f"ccdrift: hooks failing since {failing[-1]['since'][5:]}"
+        return ""
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return "ccdrift: can't read state"
 

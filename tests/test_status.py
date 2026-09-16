@@ -117,6 +117,17 @@ def test_status_command_reads_the_state_option(tmp_path, capsys):
     assert capsys.readouterr().out == "ccdrift: no check yet\n"
 
 
+@pytest.mark.parametrize("reported_on, expected", [
+    ("2026-09-17", "ccdrift: hooks failing since 09-16"),
+    ("2026-09-16", ""),
+])
+def test_short_status_shows_failing_hooks_for_three_days(tmp_path, reported_on, expected):
+    failure = {"since": "2026-09-16", "days": ["2026-09-16", "2026-09-17"], "runs": [10, 10], "failed": [9, 10],
+               "reported_on": reported_on}
+    path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00", hook_failures=[failure])
+    assert short_status(path, NOW) == expected
+
+
 def test_status_short_loads_neither_pandas_nor_numpy(tmp_path):
     # It runs on every status line refresh; importing pandas took ~0.3 s of it.
     root = Path(__file__).resolve().parents[1]
