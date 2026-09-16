@@ -24,6 +24,9 @@ uv run --group lab python lab/harness.py --compare-thinking --incident 2026-08-1
 
 # Effort sweep with effort computed from logged thinking token counts
 uv run --group lab python lab/harness.py --sweep effort --thinking logged --incident 2026-08-16..2026-09-04 --out ./out
+
+# Turn latency: day-to-day spread and the smallest slowdown caught
+uv run --group lab python -m lab.latency --incident 2026-08-16..2026-09-04
 ```
 
 `--help` lists every option, including `--main-thread-only`, `--since`, `--until` and
