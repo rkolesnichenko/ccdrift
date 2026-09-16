@@ -109,12 +109,16 @@ def pooled_z(metrics: pd.DataFrame, metric: str, bins: Sequence[int], baseline: 
 
 
 def detect(metrics: pd.DataFrame, cfg: DetectorConfig,
-           excluded: Optional[Mapping[str, Sequence[bool]]] = None) -> pd.DataFrame:
-    """Annotate each bin with robust-z and a sustained-flag per metric. Bins marked
-    in `excluded` for a metric (an incident's days) are still scored but stay out
-    of later bins' baselines, so a long shift is judged against the days before it."""
+           excluded: Optional[Mapping[str, Sequence[bool]]] = None,
+           only: Optional[Sequence[str]] = None) -> pd.DataFrame:
+    """Annotate each bin with robust-z and a sustained-flag per metric, or per metric
+    in `only`. Bins marked in `excluded` for a metric (an incident's days) are still
+    scored but stay out of later bins' baselines, so a long shift is judged against
+    the days before it."""
     m = metrics.copy()
     for name, (_, _, direction) in METRICS.items():
+        if only is not None and name not in only:
+            continue
         zs: list[float] = []
         deviant: list[bool] = []
         threshold = cfg.metric_z_thresholds.get(name, cfg.z_threshold)

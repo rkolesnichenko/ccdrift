@@ -18,12 +18,12 @@ from ccdrift.early import early_message, early_warning
 from ccdrift.fields import field_gaps, gap_message
 from ccdrift.history import load_history
 from ccdrift.hooks import failure_message, hook_failures, judged_hook_runs
-from ccdrift.incidents import describe, incident_cost, update_incidents, versions_text
+from ccdrift.incidents import describe, incident_cost, incident_versions, update_incidents, versions_text
 from ccdrift.logs import judged_turns, no_transcripts_message
 from ccdrift.notify import notify, run_exec
 from ccdrift.sessions import context_alerts, context_message, session_starts
 from ccdrift.settings import change_message, setting_changes
-from ccdrift.state import ccdrift_home, load_state, record_run, save_state
+from ccdrift.state import ccdrift_home, load_state, record_run, save_state, state_lock
 
 # kind, title, message, and lines for the log only
 Alert = tuple[str, str, str, list[str]]
@@ -111,6 +111,16 @@ def _note_versions(turns: pd.DataFrame, named: list[str], first_day: str, last_d
     return list(dict.fromkeys([text.split(" ")[0] for text in named] + new[::-1]))
 
 
+def _change_notes(turns: pd.DataFrame, changelog: dict[str, list[str]], change: dict[str, Any],
+                  topic: str) -> tuple[list[str], list[str]]:
+    """For a change seen on `change["days"]` from `change["since"]`: the versions behind
+    those days, which its message names, and the log lines quoting release notes on
+    `topic` from those and the other versions first seen from a week before it."""
+    versions = versions_text(turns, change["days"])
+    quoted = _note_versions(turns, versions, days_before(change["since"], 7), change["days"][-1])
+    return versions, note_lines(release_notes(changelog, quoted, topic))
+
+
 def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: DetectorConfig,
             today: date, now: datetime, digest: bool) -> list[Alert]:
     """Everything that changed since the last run, in the order alerts go out;
@@ -126,11 +136,11 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     events = update_incidents(turns, state, today, cfg)
     alerts: list[Alert] = []
     for event in events:
-        kind, title, message, details = describe(event, turns, incidents, cfg)
+        kind, title, message, details, named = describe(event, turns, incidents, cfg)
         notes = []
         if event.kind != "persistent" and event.days:
             first = days_before(event.incident["start"], 7) if event.kind == "flag" else event.incident["start"]
-            notes = release_notes(changelog, _note_versions(turns, event.incident["versions"], first, max(event.days)),
+            notes = release_notes(changelog, _note_versions(turns, named, first, max(event.days)),
                                   TOPIC_OF[event.incident["metric"]])
         alerts.append((kind, title, message, details + note_lines(notes)))
     warning = early_warning(df, incidents, state, now)
@@ -148,25 +158,16 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
         if incident["status"] != "open":
             incident["costed_on"] = today.isoformat()
         if incident["source"] == "user" and not incident["versions"]:
-            days = turns["day"].astype(str)
-            first_days = sorted(days[days.between(incident["start"], incident["end"])].unique())[:3]
-            incident["versions"] = versions_text(turns, first_days)
+            incident["versions"] = incident_versions(turns, incident)
     for change in setting_changes(turns, state, today):
-        versions = versions_text(turns, change["days"])
-        notes = release_notes(changelog, _note_versions(turns, versions, days_before(change["since"], 7),
-                                                        change["days"][-1]), TOPIC_OF[change["setting"]])
-        alerts.append(("setting", "ccdrift: setting changed", change_message(change, versions), note_lines(notes)))
+        versions, notes = _change_notes(turns, changelog, change, TOPIC_OF[change["setting"]])
+        alerts.append(("setting", "ccdrift: setting changed", change_message(change, versions), notes))
     for change in context_alerts(session_starts(df), state, today):
-        versions = versions_text(turns, change["days"])
-        notes = release_notes(changelog, _note_versions(turns, versions, days_before(change["since"], 7),
-                                                        change["days"][-1]), "context")
-        alerts.append(("context", "ccdrift: session start changed", context_message(change, versions),
-                       note_lines(notes)))
+        versions, notes = _change_notes(turns, changelog, change, "context")
+        alerts.append(("context", "ccdrift: session start changed", context_message(change, versions), notes))
     for failure in hook_failures(judged_hook_runs(tables.hook_runs, today), state, today):
-        versions = versions_text(turns, failure["days"])
-        notes = release_notes(changelog, _note_versions(turns, versions, days_before(failure["since"], 7),
-                                                        failure["days"][-1]), "hooks")
-        alerts.append(("hooks", "ccdrift: hooks failing", failure_message(failure, versions), note_lines(notes)))
+        versions, notes = _change_notes(turns, changelog, failure, "hooks")
+        alerts.append(("hooks", "ccdrift: hooks failing", failure_message(failure, versions), notes))
     for gap in field_gaps(turns, state, today):
         notes = release_notes(changelog, [] if gap["version"] == "unknown" else [gap["version"]], "fields")
         alerts.append(("fields", "ccdrift: Claude Code stopped logging a field", gap_message(gap), note_lines(notes)))
@@ -183,6 +184,32 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     return alerts
 
 
+def _run_on_state(source: Path, state_path: Path, cfg: DetectorConfig, today: date, started: datetime,
+                  digest: bool) -> tuple[list[Alert], Optional[str]]:
+    """The alerts of a run, or why it failed, with the run saved in the state file. A
+    state file that can't be read is left as it is."""
+    try:
+        state = load_state(state_path)
+    except (OSError, ValueError) as exc:
+        traceback.print_exc()
+        return [], f"can't read the state file {state_path}: {exc}"
+    updated = copy.deepcopy(state)
+    try:
+        alerts = _alerts(source, state_path, updated, cfg, today, started, digest)
+        record_run(updated, started, None)
+        save_state(state_path, updated)
+    except Exception as exc:
+        traceback.print_exc()
+        error = f"{type(exc).__name__}: {exc}"
+        record_run(state, started, error)
+        try:
+            save_state(state_path, state)
+        except OSError:
+            pass
+        return [], error
+    return alerts, None
+
+
 FAILURE_NOTICE_HOURS = 20
 
 
@@ -193,20 +220,24 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
     """Run the daily check and print a line per alert; with notify_user, also show a
     notification for each; with exec_command, also run it for each (see
     notify.run_exec). The state file is read once and written once, with how the
-    run went, so `ccdrift status` can tell a broken check from a quiet week. A
-    state file that can't be read is left as it is. Without `digest`, no weekly
-    summary."""
+    run went, so `ccdrift status` can tell a broken check from a quiet week, and
+    stays locked in between (see state.state_lock). A state file that can't be read
+    is left as it is. Without `digest`, no weekly summary."""
     started = now or datetime.now().astimezone()
     stamp = started.strftime("%Y-%m-%d %H:%M")
+    notice = state_path.with_name(state_path.name + ".last-failure-notice")
 
     def alert(kind: str, title: str, message: str, send: bool = True) -> None:
         print(f"[check {stamp}] {title}: {message}")
         if not send:
             return
+        # The state already records the alerts as sent, so nothing may stop the rest.
         if notify_user:
-            notify(title, message)
+            try:
+                notify(title, message)
+            except Exception as exc:
+                print(f'[check {stamp}] notification failed for "{title}": {type(exc).__name__}: {exc}')
         if exec_command:
-            # The state already records the alerts as sent, so nothing may stop the rest.
             try:
                 failure = run_exec(exec_command, kind, title, message)
             except Exception as exc:
@@ -215,11 +246,10 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
                 print(f'[check {stamp}] --exec failed for "{title}": {failure}')
 
     def failure_notice_due() -> bool:
-        """A failure notifies and runs --exec at most once per FAILURE_NOTICE_HOURS. A
-        file next to the state file notes when it last did, so a state file that can't
-        be read or saved doesn't notify on every run; when that file can't be read or
-        written either, the failure notifies."""
-        notice = state_path.with_name(state_path.name + ".last-failure-notice")
+        """A failure notifies and runs --exec at most once per FAILURE_NOTICE_HOURS
+        until a run succeeds. A file next to the state file notes when it last did, so
+        a state file that can't be read or saved doesn't notify on every run; when that
+        file can't be read or written either, the failure notifies."""
         try:
             if started - datetime.fromisoformat(notice.read_text().strip()) < timedelta(hours=FAILURE_NOTICE_HOURS):
                 return False
@@ -233,28 +263,20 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
         return True
 
     try:
-        state = load_state(state_path)
-    except (OSError, ValueError) as exc:
+        with state_lock(state_path):
+            alerts, failure = _run_on_state(source, state_path, cfg or DetectorConfig(),
+                                            today or datetime.now(timezone.utc).date(), started, digest)
+    except OSError as exc:
         traceback.print_exc()
-        alert("failed", "ccdrift check failed", f"can't read the state file {state_path}: {exc}",
-              failure_notice_due())
+        alerts, failure = [], f"can't read the state file {state_path}: {exc}"
+    # Alerts go out once the lock is released: notifications and --exec take their time.
+    if failure is not None:
+        alert("failed", "ccdrift check failed", failure, failure_notice_due())
         return 1
-    updated = copy.deepcopy(state)
     try:
-        alerts = _alerts(source, state_path, updated, cfg or DetectorConfig(),
-                         today or datetime.now(timezone.utc).date(), started, digest)
-        record_run(updated, started, None)
-        save_state(state_path, updated)
-    except Exception as exc:
-        traceback.print_exc()
-        send = failure_notice_due()
-        record_run(state, started, f"{type(exc).__name__}: {exc}")
-        try:
-            save_state(state_path, state)
-        except OSError:
-            pass
-        alert("failed", "ccdrift check failed", f"{type(exc).__name__}: {exc}", send)
-        return 1
+        notice.unlink(missing_ok=True)
+    except OSError:
+        pass
     for kind, title, message, details in alerts:
         alert(kind, title, message)
         for detail in details:

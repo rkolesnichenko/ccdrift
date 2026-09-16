@@ -1,7 +1,11 @@
 """The daily check: new flags once, and alerts when it fails or can't compute the
 cache metric."""
 
+import os
+import subprocess
+import sys
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -98,6 +102,33 @@ def test_check_alerts_when_an_incident_is_back_to_normal(tmp_path, sent, capsys)
     assert ("ccdrift: back to normal: Haiku share on the main thread back to normal from 2026-09-20, on Claude "
             "Code 2.1.259 (since 09-18). The incident from 2026-09-15: ~36 extra Haiku responses.") \
         in capsys.readouterr().out
+
+
+def test_an_incident_back_to_normal_keeps_the_versions_it_started_on(tmp_path, sent):
+    # `ccdrift status` and `incident list` showed the versions of the recovery days instead.
+    days = [{}] * 14 + [{"haiku": 12, "version": "2.1.233"}] * 3 + [{"version": "2.1.259"}] * 5
+    main_thread_days(tmp_path / "logs", days)
+    check_logs(tmp_path, today=date(2026, 9, 18))
+    check_logs(tmp_path, today=date(2026, 9, 23))
+    assert sent == ["ccdrift flag", "ccdrift: back to normal"]
+    assert load_state(tmp_path / "state.json")["incidents"][0]["versions"] == ["2.1.233 (since 09-15)"]
+
+
+def test_a_back_to_normal_alert_quotes_the_version_it_names_first(tmp_path, sent, capsys):
+    logs = tmp_path / "cfg" / "projects"
+    days = [{}] * 14 + [{"haiku": 12, "version": "2.1.233"}] * 3 + [{"version": "2.1.259"}] * 5
+    main_thread_days(logs, days)
+    (tmp_path / "cfg" / "cache").mkdir(parents=True)
+    (tmp_path / "cfg" / "cache" / "changelog.md").write_text(
+        "## 2.1.259\n\n- Search subagents run on Sonnet again instead of Haiku\n\n"
+        "## 2.1.233\n\n- Search subagents now run on the Haiku model\n")
+    run_check(logs, tmp_path / "state.json", today=date(2026, 9, 18))
+    capsys.readouterr()
+    run_check(logs, tmp_path / "state.json", today=date(2026, 9, 23))
+    assert [text for text in capsys.readouterr().out.splitlines() if "release notes" in text] == [
+        "    release notes 2.1.259: Search subagents run on Sonnet again instead of Haiku",
+        "    release notes 2.1.233: Search subagents now run on the Haiku model",
+    ]
 
 
 def test_check_works_out_the_cost_and_versions_of_an_incident_added_by_hand(tmp_path, sent):
@@ -313,6 +344,30 @@ def test_an_exec_command_that_raises_is_logged_and_every_alert_still_goes_out(tm
     assert '--exec failed for "ccdrift: setting changed": RuntimeError: boom' in out
 
 
+def a_notifier_that_raises_on_the_first_alert(monkeypatch):
+    titles = []
+
+    def notify(title, message):
+        titles.append(title)
+        if len(titles) == 1:
+            raise ValueError("embedded null byte")
+
+    monkeypatch.setattr(ccdrift.check, "notify", notify)
+    return titles
+
+
+def test_a_notification_that_raises_is_logged_and_every_alert_still_goes_out(tmp_path, capsys, monkeypatch):
+    # The state already marks these alerts as sent, so none may be lost.
+    titles = a_notifier_that_raises_on_the_first_alert(monkeypatch)
+    out = tmp_path / "alerts.txt"
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12, "tier": "5m"}] * 3)
+    assert run_check(tmp_path / "logs", tmp_path / "state.json", notify_user=True, today=date(2026, 9, 18),
+                     exec_command=f'echo "$CCDRIFT_ALERT" >> "{out}"') == 0
+    assert titles == ["ccdrift flag", "ccdrift: setting changed"]
+    assert out.read_text() == "flag\nsetting\n"
+    assert 'notification failed for "ccdrift flag": ValueError: embedded null byte' in capsys.readouterr().out
+
+
 def test_alerts_quote_release_notes_on_their_topic_from_new_versions(tmp_path, sent, capsys):
     logs = tmp_path / "cfg" / "projects"
     main_thread_days(logs, [{}] * 14 + [{"haiku": 12, "version": "2.1.233"}] * 3)
@@ -430,3 +485,41 @@ def test_a_failing_check_notifies_at_most_once_in_20_hours(tmp_path, sent, capsy
         check_logs(tmp_path, now=first + timedelta(hours=hours))
     assert sent == ["ccdrift check failed", "ccdrift check failed"]
     assert capsys.readouterr().out.count("ccdrift check failed: ") == 3
+
+
+def test_a_new_failure_after_a_successful_run_notifies_again(tmp_path, sent):
+    # The 20 hours are between notices about one stretch of failures.
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    first = datetime(2026, 9, 4, 9, 0, tzinfo=timezone.utc)
+    (tmp_path / "state.json").write_text("not json")
+    assert check_logs(tmp_path, now=first) == 1
+    (tmp_path / "state.json").unlink()
+    assert check_logs(tmp_path, now=first + timedelta(hours=1)) == 0
+    (tmp_path / "state.json").write_text("not json")
+    assert check_logs(tmp_path, now=first + timedelta(hours=2)) == 1
+    assert sent == ["ccdrift check failed", "ccdrift check failed"]
+
+
+def test_an_incident_dismissed_while_the_check_runs_stays_dismissed(tmp_path, sent, monkeypatch):
+    # The check saved the state it had read before its run, over the dismissal.
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    state_path = tmp_path / "state.json"
+    state = new_state()
+    add_incident(state["incidents"], "cache_ratio", "2026-09-01", "2026-09-02", date(2026, 9, 4))
+    save_state(state_path, state)
+    load_history = ccdrift.check.load_history
+    dismissing = []
+
+    def load_history_while_dismissing(*args, **kwargs):
+        env = {**os.environ, "PYTHONPATH": str(Path(ccdrift.check.__file__).parents[1])}
+        dismissing.append(subprocess.Popen(
+            [sys.executable, "-m", "ccdrift", "incident", "dismiss", "cache", "2026-09-01", "--state", str(state_path)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env))
+        dismissing[0].stderr.readline()  # it waits for the check, or has already saved
+        return load_history(*args, **kwargs)
+
+    monkeypatch.setattr(ccdrift.check, "load_history", load_history_while_dismissing)
+    assert check_logs(tmp_path) == 0
+    assert dismissing[0].wait(timeout=60) == 0
+    saved = load_state(state_path)
+    assert (saved["incidents"][0]["status"], saved["last_run"]["ok"]) == ("dismissed", True)

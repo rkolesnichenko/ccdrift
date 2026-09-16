@@ -82,7 +82,6 @@ def update_incidents(turns: pd.DataFrame, state: dict, today: date, cfg: Detecto
     for metric in INCIDENT_METRICS:
         # Each pass opens or closes an incident, each later than the one before.
         for _ in range(2 * len(bins) + 1):
-            detected = detect(metrics, cfg, exclusions(bins, incidents))
             incident = open_incident(incidents, metric)
             if incident is not None:
                 event = _settle(incident, metrics, bins, incidents, today, cfg)
@@ -90,6 +89,7 @@ def update_incidents(turns: pd.DataFrame, state: dict, today: date, cfg: Detecto
                     break
                 events.append(event)
                 continue
+            detected = detect(metrics, cfg, exclusions(bins, incidents), only=[metric])
             found = _new_flag_run(detected, metric, bins, incidents, state["reported"], today)
             if found is None:
                 break
@@ -171,6 +171,14 @@ def versions_text(turns: pd.DataFrame, days: Sequence[str]) -> list[str]:
             for version, share in shares.items() if share >= 0.2][:3]
 
 
+def incident_versions(turns: pd.DataFrame, incident: dict) -> list[str]:
+    """The versions behind an incident's first RECOVERY_BINS days, the days a flag
+    names; `ccdrift status` and `incident list` show them."""
+    days = turns["day"].astype(str)
+    first_days = sorted(days[days.between(incident["start"], incident["end"] or OPEN_END)].unique())
+    return versions_text(turns, first_days[:RECOVERY_BINS])
+
+
 def incident_cost(turns: pd.DataFrame, incident: dict, incidents: Sequence[dict], cfg: DetectorConfig) -> float:
     """What an incident cost beyond the days before it: for the cache ratio, the
     cache-creation tokens of missed prompt turns above the usual miss rate; for
@@ -203,28 +211,35 @@ def incident_cost(turns: pd.DataFrame, incident: dict, incidents: Sequence[dict]
 
 
 def describe(event: Event, turns: pd.DataFrame, incidents: Sequence[dict],
-             cfg: DetectorConfig) -> tuple[str, str, str, list[str]]:
-    """The alert for an event as (kind, title, message, log lines). Refreshes the
-    incident's versions and cost, which `ccdrift status` shows."""
+             cfg: DetectorConfig) -> tuple[str, str, str, list[str], list[str]]:
+    """The alert for an event as (kind, title, message, log lines, the versions the
+    message names: those of the event's days). Refreshes the incident's cost, which
+    `ccdrift status` shows, and sets its versions on a flag, whose days are the
+    incident's first, or when it has none: a recovery happens on other versions than
+    the incident did."""
     incident = event.incident
     metric, start = incident["metric"], incident["start"]
     label = INCIDENT_METRICS[metric]
-    incident["versions"] = versions_text(turns, event.days)
+    named = versions_text(turns, event.days)
+    if event.kind == "flag":
+        incident["versions"] = named
+    elif not incident["versions"]:
+        incident["versions"] = incident_versions(turns, incident)
     incident["cost"] = round(incident_cost(turns, incident, incidents, cfg))
-    on = f", on Claude Code {', '.join(incident['versions'])}" if incident["versions"] else ""
+    on = f", on Claude Code {', '.join(named)}" if named else ""
     cost = cost_text(metric, incident["cost"])
     if event.kind == "flag":
         z = ", ".join(f"{v:+.1f}" for v in event.z)
         return ("flag", "ccdrift flag",
                 f"{label} {MOVES[metric]} from {start}{on}. {cost[0].upper()}{cost[1:]} so far.",
-                [f"days {', '.join(event.run)}; z = {z}"])
+                [f"days {', '.join(event.run)}; z = {z}"], named)
     if event.kind == "recovered":
         return ("recovered", "ccdrift: back to normal",
                 f"{label} back to normal from {incident['recovered_from']}{on}. The incident from {start}: {cost}.",
-                [])
+                [], named)
     return ("persistent", "ccdrift: change persists",
             f"{label} still {MOVES[metric]} {PERSISTENT_DAYS} days after {start}. ccdrift now treats it as the "
-            "new normal; `ccdrift incident list` has the details.", [])
+            "new normal; `ccdrift incident list` has the details.", [], [])
 
 
 def parse_days(text: str) -> tuple[str, str]:
@@ -269,8 +284,10 @@ def close_incident(incidents: list[dict], metric: str, today: date) -> dict:
 
 def dismiss_incident(incidents: list[dict], metric: str, start: str, today: date) -> dict:
     """Mark an incident as a false alarm: its days rejoin the baseline, and a flag
-    over the same days isn't reported again."""
-    incident = next((i for i in incidents if i["metric"] == metric and i["start"] == start), None)
+    over the same days isn't reported again. One not dismissed yet comes first, since an
+    incident can be added over a dismissed one."""
+    matching = [i for i in incidents if i["metric"] == metric and i["start"] == start]
+    incident = next((i for i in matching if i["status"] != "dismissed"), matching[0] if matching else None)
     if incident is None:
         raise ValueError(f"no {SHORT_NAMES[metric]} incident starts on {start}")
     incident.update(status="dismissed", closed_by="user",

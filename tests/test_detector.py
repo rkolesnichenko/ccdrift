@@ -105,3 +105,13 @@ def test_pooled_z_leaves_out_days_without_a_value():
     scored = pooled_z(metrics, "cache_ratio", bins, baseline)
     assert scored == pytest.approx(pooled_z(metrics, "cache_ratio", kept_bins, kept_baseline))
     assert not np.isnan(scored)
+
+
+def test_detector_judges_one_metric_alone_as_it_does_among_all():
+    # The daily check judges one metric at a time.
+    metrics = bin_metrics(daily_turns(prompt_turn_days(MOSTLY_CLEAN_CACHE + [8] * 6, random.Random(0))))
+    alone = detect(metrics, DetectorConfig(), only=["cache_ratio"])
+    together = detect(metrics, DetectorConfig())
+    assert [c for c in alone.columns if c.endswith(("__z", "__flag"))] == ["cache_ratio__z", "cache_ratio__flag"]
+    pd.testing.assert_frame_equal(alone[["cache_ratio__z", "cache_ratio__flag"]],
+                                  together[["cache_ratio__z", "cache_ratio__flag"]])

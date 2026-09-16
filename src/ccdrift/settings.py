@@ -55,8 +55,9 @@ def setting_changes(turns: pd.DataFrame, state: dict[str, Any], today: date) -> 
                 pair = active.iloc[i - 1:i + 1]
                 if ((pair[usual] / pair.sum(axis=1)) >= CHANGED_SHARE).any():
                     continue
+                # Under half is still the most common value when three or more share the day.
                 change = {"setting": setting, "model": str(model), "from": usual,
-                          "to": str(pair.iloc[1].idxmax()), "since": days[i - 1],
+                          "to": str(pair.iloc[1].drop(usual).idxmax()), "since": days[i - 1],
                           "days": days[i - 1:i + 1], "reported_on": today.isoformat()}
                 if _already_reported(state, change):
                     continue

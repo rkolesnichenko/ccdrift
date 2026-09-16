@@ -166,11 +166,23 @@ def _schedule(args: argparse.Namespace) -> int:
 
 
 def _incident(args: argparse.Namespace) -> int:
-    from ccdrift.incidents import add_incident, close_incident, dismiss_incident, incident_line, parse_days, run_list
-    from ccdrift.state import load_state, save_state
+    from ccdrift.incidents import run_list
+    from ccdrift.state import state_lock
     state_path = _state(args)
     if args.action == "list":
         return run_list(_source(args), state_path)
+    # A check running now would otherwise save the state it read before this change.
+    try:
+        with state_lock(state_path):
+            return _change_incident(args, state_path)
+    except OSError as exc:
+        print(f"Can't change the state file {state_path}: {exc}", file=sys.stderr)
+        return 1
+
+
+def _change_incident(args: argparse.Namespace, state_path: Path) -> int:
+    from ccdrift.incidents import add_incident, close_incident, dismiss_incident, incident_line, parse_days
+    from ccdrift.state import load_state, save_state
     try:
         state = load_state(state_path)
     except (OSError, ValueError) as exc:

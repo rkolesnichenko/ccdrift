@@ -128,3 +128,12 @@ def test_incident_list_shows_each_incident_with_its_cost_newest_first(tmp_path, 
 def test_incident_list_says_so_when_there_are_none(tmp_path, capsys):
     assert main(["incident", "list", "--source", str(tmp_path), "--state", str(tmp_path / "state.json")]) == 0
     assert capsys.readouterr().out == "No incidents recorded.\n"
+
+
+def test_dismissing_picks_the_incident_not_yet_dismissed_when_two_start_on_the_same_day():
+    incidents = []
+    add_incident(incidents, "cache_ratio", "2026-08-16", "2026-09-04", TODAY)
+    dismiss_incident(incidents, "cache_ratio", "2026-08-16", TODAY)
+    second = add_incident(incidents, "cache_ratio", "2026-08-16", "2026-09-02", TODAY)
+    assert dismiss_incident(incidents, "cache_ratio", "2026-08-16", TODAY) is second
+    assert [i["status"] for i in incidents] == ["dismissed", "dismissed"]

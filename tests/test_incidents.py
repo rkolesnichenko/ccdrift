@@ -198,7 +198,7 @@ def test_a_flag_alert_names_the_versions_and_the_cost_so_far():
         "flag", "ccdrift flag",
         "Cache read ratio on new prompts down from 2026-09-03, on Claude Code 2.1.233 (since 09-03). "
         "~8k tokens re-cached so far.",
-        ["days 2026-09-03; z = -3.8"])
+        ["days 2026-09-03; z = -3.8"], ["2.1.233 (since 09-03)"])
     assert (incident["versions"], incident["cost"]) == (["2.1.233 (since 09-03)"], 8000)
 
 
@@ -210,6 +210,16 @@ def test_a_recovery_alert_names_the_versions_and_what_the_incident_cost():
         "ccdrift: back to normal",
         "Cache read ratio on new prompts back to normal from 2026-09-04, on Claude Code 2.1.259 (since 09-04). "
         "The incident from 2026-09-03: ~8k tokens re-cached.")
+    # The incident keeps the versions of its own first days, not of the days it recovered on.
+    assert incident["versions"] == ["2.1.233 (since 09-03)"]
+
+
+def test_a_recovery_keeps_the_versions_the_flag_named():
+    incident = {"metric": "cache_ratio", "start": nth_day(2), "end": nth_day(2), "status": "recovered",
+                "recovered_from": nth_day(3), "versions": ["2.1.232 (since 09-02)"], "cost": 0}
+    event = Event("recovered", incident, days=[nth_day(3)])
+    assert describe(event, cache_incident_turns(), [incident], DetectorConfig())[4] == ["2.1.259 (since 09-04)"]
+    assert incident["versions"] == ["2.1.232 (since 09-02)"]
 
 
 def test_a_persistent_alert_says_the_change_is_now_the_new_normal():

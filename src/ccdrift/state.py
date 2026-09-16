@@ -5,9 +5,17 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional
+
+try:
+    import fcntl
+except ImportError:  # Windows, where ccdrift sets up no schedule
+    fcntl = None  # type: ignore[assignment]
 
 STATE_VERSION = 2
 
@@ -46,11 +54,34 @@ def load_state(path: Path) -> dict[str, Any]:
 
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
-    """Write the state through a temporary file, so a reader never sees half of it."""
+    """Write the state through a temporary file of its own, so a reader never sees
+    half of it and two writers never write to the same one."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(state, indent=1) + "\n")
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(json.dumps(state, indent=1) + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+@contextmanager
+def state_lock(path: Path) -> Iterator[None]:
+    """Hold the lock on the state file `path` from reading it to saving it, so the
+    check and `ccdrift incident` never save over each other's changes, and two checks
+    don't send the same alerts. Waits, saying so on stderr, while another command
+    holds it. Raises OSError when the lock file next to the state file can't be opened."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(path.name + ".lock"), "a") as handle:
+        if fcntl is not None:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print(f"Waiting for another ccdrift command to finish with {path}...", file=sys.stderr, flush=True)
+                fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
 
 
 RUN_DAYS = 14

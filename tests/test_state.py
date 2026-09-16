@@ -52,7 +52,25 @@ def test_saving_replaces_the_state_file_in_one_step(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "replace", replace)
     save_state(path, {**new_state(), "blank_cache": ["2026-09-01"]})
-    assert replaced == [("state.json.tmp", "state.json")]
+    assert [(src.startswith("state.json.") and src.endswith(".tmp"), dst) for src, dst in replaced] == \
+        [(True, "state.json")]
+    assert load_state(path)["blank_cache"] == ["2026-09-01"]
+    assert [p.name for p in tmp_path.iterdir()] == ["state.json"]
+
+
+def test_two_saves_at_once_dont_share_a_temporary_file(tmp_path, monkeypatch):
+    path = tmp_path / "state.json"
+    real_replace = os.replace
+    saves = []
+
+    def replace(src, dst):
+        if not saves:
+            saves.append(src)
+            save_state(path, {**new_state(), "blank_cache": ["2026-09-02"]})
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", replace)
+    save_state(path, {**new_state(), "blank_cache": ["2026-09-01"]})
     assert load_state(path)["blank_cache"] == ["2026-09-01"]
     assert [p.name for p in tmp_path.iterdir()] == ["state.json"]
 

@@ -76,3 +76,10 @@ def test_the_settings_summary_lists_shares_and_day_to_day_changes():
         "service tier not logged 100%",
         "    2026-09-02: cache tier 1h -> 5m",
     ]
+
+
+def test_a_change_names_the_new_value_even_when_the_old_one_is_still_the_most_common():
+    # With three values on a day, the usual one can fall under half and still come first.
+    turns = responses([{"high": 40}] * 10 + [{"high": 18, "medium": 12, "low": 10}] * 2, setting="effort")
+    assert [(c["from"], c["to"]) for c in setting_changes(turns, new_state(), date(2026, 9, 13))] == \
+        [("high", "medium")]
