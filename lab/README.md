@@ -33,6 +33,9 @@ uv run --group lab python -m lab.session_start
 
 # G3: an early warning on cache misses — false alarms, time to catch, the real regression
 uv run --group lab python -m lab.early_warning --incident 2026-08-16..2026-09-04
+
+# G7: do built-in subagents keep one model?
+uv run --group lab python -m lab.subagent_models
 ```
 
 `--help` lists every option, including `--main-thread-only`, `--since`, `--until` and
