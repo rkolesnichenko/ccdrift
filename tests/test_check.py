@@ -256,3 +256,11 @@ def test_check_alerts_when_sessions_start_with_much_less_context(tmp_path, sent,
     assert sent == ["ccdrift: session start changed"]
     assert ("ccdrift: session start changed: New sessions start with ~54k tokens of context from 2026-09-09, on "
             "Claude Code 2.1.267 (since 09-09), down from ~130k.") in capsys.readouterr().out
+
+
+def test_check_warns_within_a_day_when_new_prompts_start_missing_the_cache(tmp_path, sent, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 20 + [{"misses": 10}])
+    check_logs(tmp_path, today=date(2026, 9, 22))
+    check_logs(tmp_path, today=date(2026, 9, 22), now=datetime(2026, 9, 22, 10, 0, tzinfo=timezone.utc))
+    assert sent == ["ccdrift: cache misses rising"]
+    assert "new-prompt turns missed the cache (usually 0.0%)" in capsys.readouterr().out

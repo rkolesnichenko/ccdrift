@@ -5,6 +5,7 @@ line that refreshes often."""
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any, Optional
 
 METRIC_ARGS = {"cache": "cache_ratio", "haiku": "haiku_fraction"}
@@ -58,6 +59,12 @@ def incident_line(incident: dict, cost: Optional[float] = None) -> str:
 def change_line(change: dict[str, Any]) -> str:
     return (f"{SETTING_NAMES[change['setting']]} for {change['model']}: {change['from']} -> {change['to']} "
             f"from {change['since']}")
+
+
+def clock_text(stamp: str, now: datetime) -> str:
+    """`stamp` as a time in `now`'s time zone: "14:20" on now's day, "09-19 23:40" before it."""
+    when = datetime.fromisoformat(stamp).astimezone(now.tzinfo)
+    return when.strftime("%H:%M") if when.date() == now.date() else when.strftime("%m-%d %H:%M")
 
 
 def version_key(version: str) -> tuple:

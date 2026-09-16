@@ -128,6 +128,14 @@ def test_short_status_shows_failing_hooks_for_three_days(tmp_path, reported_on, 
     assert short_status(path, NOW) == expected
 
 
+@pytest.mark.parametrize("hours_later, expected", [(0, "ccdrift: cache misses rising since 11:00"), (24, "")])
+def test_short_status_shows_rising_cache_misses_for_a_day(tmp_path, hours_later, expected):
+    warning = {"at": "2026-09-20T08:40:00+00:00", "since": "2026-09-20T08:00:00+00:00", "misses": 3, "turns": 7,
+               "base_rate": 0.005, "versions": [], "reported_on": "2026-09-20"}
+    path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00", early_warnings=[warning])
+    assert short_status(path, NOW + timedelta(hours=hours_later)) == expected
+
+
 def test_status_short_loads_neither_pandas_nor_numpy(tmp_path):
     # It runs on every status line refresh; importing pandas took ~0.3 s of it.
     root = Path(__file__).resolve().parents[1]

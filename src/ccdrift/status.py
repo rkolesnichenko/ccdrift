@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ccdrift.state import load_state
-from ccdrift.texts import change_line, incident_line
+from ccdrift.texts import change_line, clock_text, incident_line
 
 STALE_DAYS = 3
 HOOK_DAYS = 3
 RECENT_DAYS = 30
+RISING_HOURS = 24
 LIVE_NAMES = {"cache_ratio": "cache ratio down", "haiku_fraction": "Haiku share up"}
 
 
@@ -26,7 +27,7 @@ def short_status(state_path: Path, now: datetime) -> str:
     """One line for a status line, or "" when nothing needs attention. First match
     wins: an unreadable or malformed state, no check yet, a failed check, no successful
     check for more than STALE_DAYS days, open incidents, hooks failing since within
-    the last HOOK_DAYS days."""
+    the last HOOK_DAYS days, cache misses rising."""
     try:
         state = load_state(state_path)
         last = state.get("last_run")
@@ -45,6 +46,10 @@ def short_status(state_path: Path, now: datetime) -> str:
         failing = [f for f in state.get("hook_failures", []) if f["reported_on"] >= recent]
         if failing:
             return f"ccdrift: hooks failing since {failing[-1]['since'][5:]}"
+        rising = [w for w in state.get("early_warnings", [])
+                  if now - _when(w["at"]) < timedelta(hours=RISING_HOURS)]
+        if rising:
+            return f"ccdrift: cache misses rising since {clock_text(rising[-1]['since'], now)}"
         return ""
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return "ccdrift: can't read state"

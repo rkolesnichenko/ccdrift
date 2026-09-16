@@ -25,7 +25,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from ccdrift.early import miss_cusum
+from ccdrift.early import miss_cusum, prompt_turns
 from ccdrift.logs import default_source, parse_source
 from lab.harness import date_range
 
@@ -38,17 +38,6 @@ STARTS = 10
 SEEDS = 5
 MAX_TURNS = 150
 DEADLINE_DAYS = 5
-
-
-def prompt_turns(df: pd.DataFrame) -> pd.DataFrame:
-    """CLI main-thread new-prompt turns, in time order."""
-    keep = df["main_thread"].astype(bool) & df["prompt_within_ttl"].astype(bool)
-    if "entrypoint" in df:
-        keep &= ~df["entrypoint"].fillna("").astype(str).str.startswith("sdk-")
-    turns = df.loc[keep, ["timestamp", "day", "is_miss"]].copy()
-    turns["day"] = turns["day"].astype(str)
-    turns["is_miss"] = turns["is_miss"].astype(bool)
-    return turns.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
 
 def _shift(day: str, days: int) -> str:

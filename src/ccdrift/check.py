@@ -13,6 +13,7 @@ import pandas as pd
 
 from ccdrift.changelog import changelog_path, days_before, load_changelog, new_versions, note_lines, release_notes
 from ccdrift.detector import DetectorConfig
+from ccdrift.early import early_message, early_warning
 from ccdrift.fields import field_gaps, gap_message
 from ccdrift.history import load_history
 from ccdrift.hooks import failure_message, hook_failures, judged_hook_runs
@@ -68,7 +69,7 @@ def blank_cache_stretch(turns: pd.DataFrame, state: dict[str, Any],
 
 
 def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: DetectorConfig,
-            today: date) -> list[Alert]:
+            today: date, now: datetime) -> list[Alert]:
     """Everything that changed since the last run, in the order alerts go out;
     `state` is updated to match."""
     tables = load_history(source, state_path, claim=True)
@@ -88,6 +89,9 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
             notes = release_notes(changelog, new_versions(turns, first, max(event.days)),
                                   TOPIC_OF[event.incident["metric"]])
         alerts.append((kind, title, message, details + note_lines(notes)))
+    warning = early_warning(df, incidents, state, now)
+    if warning:
+        alerts.append(("early", "ccdrift: cache misses rising", early_message(warning, now), []))
     # `ccdrift status` reads only the state file, so it shows the cost and versions
     # saved here: for open incidents, and for incidents added by hand, which start
     # without either. describe() has just refreshed the incidents it alerted about.
@@ -160,7 +164,7 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
     updated = copy.deepcopy(state)
     try:
         alerts = _alerts(source, state_path, updated, cfg or DetectorConfig(),
-                         today or datetime.now(timezone.utc).date())
+                         today or datetime.now(timezone.utc).date(), started)
         record_run(updated, started, None)
         save_state(state_path, updated)
     except Exception as exc:
