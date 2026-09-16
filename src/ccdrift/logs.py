@@ -474,6 +474,17 @@ def judged_turns(df: pd.DataFrame, today: date) -> pd.DataFrame:
     return df[keep]
 
 
+def judged_subagent_turns(df: pd.DataFrame, today: date) -> pd.DataFrame:
+    """Subagent turns of complete UTC days whose agent type Claude Code logged,
+    without Agent SDK sessions."""
+    if df.empty or "agent_type" not in df:
+        return df.iloc[0:0]
+    keep = (df["day"].astype(str) < today.isoformat()) & df["is_sidechain"].astype(bool) & df["agent_type"].notna()
+    if "entrypoint" in df:
+        keep &= ~df["entrypoint"].fillna("").astype(str).str.startswith("sdk-")
+    return df[keep]
+
+
 # Turns the cache metric uses. In real logs a caching regression showed up on
 # main-thread turns that open with a new user prompt: on Claude Code
 # 2.1.233-2.1.258 they missed 4.3% of the time (0.5% before and after), however

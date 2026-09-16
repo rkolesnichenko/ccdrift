@@ -109,3 +109,27 @@ def settings_lines(summary: list[dict[str, Any]]) -> list[str]:
         lines.append(f"  {model['model']}: {'; '.join(parts)}")
         lines += [f"    {c['day']}: {SETTING_NAMES[c['setting']]} {c['from']} -> {c['to']}" for c in model["changes"]]
     return lines
+
+
+CALLER_PICKED = "general-purpose"  # its model is whatever the caller asks for
+
+
+def subagent_summary(sub_turns: pd.DataFrame, days: Sequence[str]) -> list[dict[str, Any]]:
+    """Each agent type's model shares over the subagent turns of `days`."""
+    window = sub_turns[sub_turns["day"].astype(str).isin(list(days))] if not sub_turns.empty else sub_turns
+    summary = []
+    for agent, group in window.groupby("agent_type", sort=True):
+        summary.append({"agent_type": str(agent), "responses": len(group),
+                        "models": {str(m): round(float(s), 3) for m, s in group["model"].value_counts(normalize=True).items()}})
+    return summary
+
+
+def subagent_lines(summary: list[dict[str, Any]]) -> list[str]:
+    """The report's subagent section, starting with a blank line; empty without subagents."""
+    if not summary:
+        return []
+    lines = ["", "Subagent models over these days (share of responses):"]
+    for agent in summary:
+        label = agent["agent_type"] + (" (model picked by the caller)" if agent["agent_type"] == CALLER_PICKED else "")
+        lines.append(f"  {label}: " + ", ".join(f"{model} {share:.0%}" for model, share in agent["models"].items()))
+    return lines

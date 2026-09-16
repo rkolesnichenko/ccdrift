@@ -9,7 +9,8 @@ from ccdrift.cli import main
 from ccdrift.history import load_history
 from ccdrift.logs import judged_turns
 from ccdrift.report import daily_rows, run_report, version_key
-from tests.helpers import HAIKU, QUIET, busy_days, daily_turns, damage_responses_table, main_thread_days
+from tests.helpers import (DAY, HAIKU, QUIET, at, busy_days, compact_boundary, daily_turns,
+                           damage_responses_table, line, main_thread_days, stop_hook_summary, text, write)
 
 
 def test_report_lists_recent_days_with_their_metrics(tmp_path, capsys):
@@ -97,10 +98,39 @@ def test_report_by_version_compares_claude_code_versions_oldest_first(tmp_path, 
         "Complete UTC days with main-thread activity, by Claude Code version.",
         "A miss is a new-prompt turn that reads less than half its input from the cache.",
         "",
-        "version      first day   last day    responses  prompt turns  cache ratio  misses  haiku share",
-        "2.1.99       2026-09-01  2026-09-02        120           118        0.900    0.0%        0.000",
-        "2.1.233      2026-09-03  2026-09-04        120           118        0.900    0.0%        0.000",
+        "version      first day   last day    responses  prompt turns  cache ratio  misses  haiku share  session start  compacts at",
+        "2.1.99       2026-09-01  2026-09-02        120           118        0.900    0.0%        0.000             1k            -",
+        "2.1.233      2026-09-03  2026-09-04        120           118        0.900    0.0%        0.000             1k            -",
     ]
+
+
+def test_report_by_version_shows_session_start_size_and_where_compaction_starts(tmp_path, capsys):
+    main_thread_days(tmp_path / "logs", [{"version": "2.1.99"}] * 2 + [{"version": "2.1.233"}] * 2)
+    write(tmp_path / "logs" / "compacted.jsonl",
+          [compact_boundary(at(2 * DAY + 30), trigger="auto", pre_tokens=971_000, version="2.1.233")])
+    run_report(tmp_path / "logs", tmp_path / "state.json", by="version", today=date(2026, 9, 5))
+    assert capsys.readouterr().out.splitlines()[3:6] == [
+        "version      first day   last day    responses  prompt turns  cache ratio  misses  haiku share  session start  compacts at",
+        "2.1.99       2026-09-01  2026-09-02        120           118        0.900    0.0%        0.000             1k            -",
+        "2.1.233      2026-09-03  2026-09-04        120           118        0.900    0.0%        0.000             1k         970k",
+    ]
+
+
+def test_report_shows_hooks_and_subagent_models_over_its_days(tmp_path, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    write(tmp_path / "logs" / "s0" / "subagents" / "agent-a.jsonl", [
+        line("p1", text(40), ts=at(100), sidechain=True, agent_type="Plan"),
+        line("g1", text(40), ts=at(200), sidechain=True, agent_type="general-purpose", model="claude-sonnet-5"),
+    ])
+    write(tmp_path / "logs" / "hooks.jsonl", [stop_hook_summary(at(300), 1, durations=(1500,), uuid="h1"),
+                                             stop_hook_summary(at(DAY + 300), 1, errors=("x",), durations=(500,),
+                                                               uuid="h2")])
+    run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4))
+    lines = capsys.readouterr().out.splitlines()
+    assert "Hooks over these days: 2 stop-hook runs, errors on 1 day, median 1.0 s" in lines
+    i = lines.index("Subagent models over these days (share of responses):")
+    assert lines[i + 1:i + 3] == ["  Plan: claude-opus-5 100%",
+                                  "  general-purpose (model picked by the caller): claude-sonnet-5 100%"]
 
 
 def test_versions_sort_by_their_numbers():
@@ -113,8 +143,8 @@ def test_report_json_holds_aggregates_without_paths_or_session_ids(tmp_path, cap
     assert run_report(tmp_path / "logs", tmp_path / "state.json", as_json=True, today=date(2026, 9, 4)) == 0
     out = capsys.readouterr().out
     payload = json.loads(out)
-    assert list(payload) == ["view", "days", "incidents", "reported_before_incidents", "settings", "cutoffs",
-                             "flag_rule"]
+    assert list(payload) == ["view", "days", "incidents", "reported_before_incidents", "settings", "hooks",
+                             "subagents", "cutoffs", "flag_rule"]
     assert payload["days"][0] == {"day": "2026-09-01", "responses": 60, "cache_ratio": pytest.approx(0.9),
                                   "cache_z": None, "haiku_share": 0.0, "haiku_z": None, "flagged": []}
     assert payload["cutoffs"] == {"cache_ratio": -3.0, "haiku_fraction": 3.5}
