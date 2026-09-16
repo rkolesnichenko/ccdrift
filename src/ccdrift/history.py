@@ -15,20 +15,22 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from ccdrift.logs import (SETTING_FIELDS, TOKEN_FIELDS, ParsedFile, duration_frame, frame, jsonl_files,
-                          parse_file, parse_source)
+from ccdrift.logs import (SETTING_FIELDS, TOKEN_FIELDS, ParsedFile, Tables, compaction_frame, duration_frame,
+                          frame, hook_frame, jsonl_files, parse_all, parse_file)
 
 HISTORY_FILE = "history.sqlite"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 # Bump whenever parse_file's output changes, so every transcript still on disk is
 # read again. Rows of transcripts Claude Code already deleted keep their values.
-PARSER_VERSION = 1
+PARSER_VERSION = 2
 
 TEXT_COLUMNS = ("model",) + SETTING_FIELDS
 FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction")
 COUNT_COLUMNS = TOKEN_FIELDS + ("thinking_logged", "signature_chars", "visible_chars", "n_mcp_calls")
 RESPONSE_COLUMNS = TEXT_COLUMNS + FLAG_COLUMNS + COUNT_COLUMNS
 DURATION_COLUMNS = ("version", "entrypoint", "is_sidechain", "duration_ms", "message_count")
+HOOK_COLUMNS = ("version", "entrypoint", "is_sidechain", "hook_count", "error_count", "duration_ms", "prevented")
+COMPACTION_COLUMNS = ("version", "entrypoint", "is_sidechain", "trigger", "pre_tokens")
 
 # Integer keys, microsecond timestamps and file ids keep a year of responses near
 # 65 MB; text keys, text timestamps and a path per row made it four times larger.
@@ -38,7 +40,7 @@ CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, size INTEGER, mtime_ns INTEGER, session_id TEXT);
 CREATE TABLE IF NOT EXISTS responses (
     key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
-    model TEXT, version TEXT, entrypoint TEXT, effort TEXT, speed TEXT, service_tier TEXT,
+    model TEXT, version TEXT, entrypoint TEXT, effort TEXT, speed TEXT, service_tier TEXT, agent_type TEXT,
     is_sidechain INTEGER, new_prompt INTEGER, after_compaction INTEGER,
     input_tokens INTEGER, output_tokens INTEGER, cache_creation INTEGER, cache_read INTEGER,
     cache_1h INTEGER, cache_5m INTEGER, thinking_logged INTEGER,
@@ -48,6 +50,15 @@ CREATE TABLE IF NOT EXISTS durations (
     key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
     version TEXT, entrypoint TEXT, is_sidechain INTEGER, duration_ms INTEGER, message_count INTEGER);
 CREATE INDEX IF NOT EXISTS durations_file ON durations (file_id);
+CREATE TABLE IF NOT EXISTS hook_runs (
+    key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
+    version TEXT, entrypoint TEXT, is_sidechain INTEGER, hook_count INTEGER, error_count INTEGER,
+    duration_ms INTEGER, prevented INTEGER);
+CREATE INDEX IF NOT EXISTS hook_runs_file ON hook_runs (file_id);
+CREATE TABLE IF NOT EXISTS compactions (
+    key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
+    version TEXT, entrypoint TEXT, is_sidechain INTEGER, trigger TEXT, pre_tokens INTEGER);
+CREATE INDEX IF NOT EXISTS compactions_file ON compactions (file_id);
 """
 
 
@@ -99,6 +110,12 @@ class History:
     """The store in `path`, created when missing."""
 
     def __init__(self, path: Path):
+        if sqlite3.sqlite_version_info < (3, 24, 0):
+            raise HistoryError(f"ccdrift needs SQLite 3.24 or newer for its history store; this Python has "
+                               f"SQLite {sqlite3.sqlite_version}.")
+        if path.is_dir():
+            raise HistoryError(f"Can't use the history store {path}: it is a folder. Move it aside to "
+                               "rebuild it from the transcripts still on disk.")
         self.path = path
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -127,13 +144,23 @@ class History:
             raise HistoryError(f"The history store {path} was written by a newer ccdrift. Upgrade ccdrift, "
                                "or move the store aside to rebuild it from the transcripts still on disk.")
         try:
+            if has_meta and schema_version < SCHEMA_VERSION:
+                self._migrate(schema_version)
             self.db.executescript(SCHEMA)
             self.meta = dict(self.db.execute("SELECT key, value FROM meta"))
-            if "schema_version" not in self.meta:
+            if self.meta.get("schema_version") != str(SCHEMA_VERSION):
                 self._set_meta("schema_version", str(SCHEMA_VERSION))
         except sqlite3.Error as exc:
             self.db.close()
             raise _unusable(path, exc) from exc
+
+    def _migrate(self, from_version: int) -> None:
+        """Bring a store from an older ccdrift up to date; SCHEMA then adds missing tables."""
+        if from_version < 2:
+            columns = {row[1] for row in self.db.execute("PRAGMA table_info(responses)")}
+            if columns and "agent_type" not in columns:
+                with self.db:
+                    self.db.execute("ALTER TABLE responses ADD COLUMN agent_type TEXT")
 
     def __enter__(self) -> "History":
         return self
@@ -154,14 +181,16 @@ class History:
         """The transcript folder the store holds, once it has read a transcript."""
         return self.meta.get("source")
 
-    def update(self, source: Path) -> int:
+    def update(self, source: Path, claim: bool = True) -> int:
         """Read the transcripts under `source` that are new or changed since the last
         update, or all of them after a parser change, and return how many were read.
-        A transcript that can't be read now is tried again next time."""
+        A known transcript that can't be read keeps its rows and is tried again next
+        time. With `claim`, a store that holds no transcript folder yet is tied to
+        `source` once it has read one."""
         known = {path: (size, mtime) for path, size, mtime in
                  self.db.execute("SELECT path, size, mtime_ns FROM files")}
         reread = self.meta.get("parser_version") != str(PARSER_VERSION)
-        read = skipped = 0
+        read = 0
         for fp, rel in jsonl_files(source):
             try:
                 stat = fp.stat()
@@ -169,14 +198,15 @@ class History:
                     continue
                 parsed = parse_file(fp, rel)
             except OSError:
-                skipped += 1
+                if rel in known:
+                    with self.db:
+                        self.db.execute("UPDATE files SET size = NULL WHERE path = ?", (rel,))
                 continue
             self._replace(rel, stat.st_size, stat.st_mtime_ns, parsed)
             read += 1
-        if read and self.built_from() is None:
+        if claim and read and self.built_from() is None:
             self._set_meta("source", str(source.expanduser().resolve()))
-        if not skipped:
-            self._set_meta("parser_version", str(PARSER_VERSION))
+        self._set_meta("parser_version", str(PARSER_VERSION))
         return read
 
     def _replace(self, rel: str, size: int, mtime_ns: int, parsed: ParsedFile) -> None:
@@ -190,6 +220,8 @@ class History:
             (file_id,) = self.db.execute("SELECT id FROM files WHERE path = ?", (rel,)).fetchone()
             self.db.execute("DELETE FROM responses WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM durations WHERE file_id = ?", (file_id,))
+            self.db.execute("DELETE FROM hook_runs WHERE file_id = ?", (file_id,))
+            self.db.execute("DELETE FROM compactions WHERE file_id = ?", (file_id,))
             self.db.executemany(_upsert("responses", RESPONSE_COLUMNS), [
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]),
                  *(row[c] for c in TEXT_COLUMNS), *(int(row[c]) for c in FLAG_COLUMNS),
@@ -199,6 +231,15 @@ class History:
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]), row["version"], row["entrypoint"],
                  int(row["is_sidechain"]), _count(row["duration_ms"]), row["message_count"])
                 for row in parsed.durations.values()])
+            self.db.executemany(_upsert("hook_runs", HOOK_COLUMNS), [
+                (row_key(row["key"]), file_id, _micros(row["timestamp"]), row["version"], row["entrypoint"],
+                 int(row["is_sidechain"]), row["hook_count"], row["error_count"], _count(row["duration_ms"]),
+                 int(row["prevented"]))
+                for row in parsed.hook_runs.values()])
+            self.db.executemany(_upsert("compactions", COMPACTION_COLUMNS), [
+                (row_key(row["key"]), file_id, _micros(row["timestamp"]), row["version"], row["entrypoint"],
+                 int(row["is_sidechain"]), row["trigger"], _count(row["pre_tokens"]))
+                for row in parsed.compactions.values()])
 
     def responses(self) -> pd.DataFrame:
         """Every stored response, as the table parse_source returns."""
@@ -216,22 +257,46 @@ class History:
             + " FROM durations d JOIN files f ON f.id = d.file_id ORDER BY f.path, d.ts", self.db)
         return duration_frame(_decode(rows, ("is_sidechain",)))
 
+    def hook_runs(self) -> pd.DataFrame:
+        """Every stored stop-hook run, as parse_all's `hook_runs` table."""
+        rows = pd.read_sql_query(
+            "SELECT f.path AS source_file, f.session_id, h.ts, " + ", ".join(f"h.{c}" for c in HOOK_COLUMNS)
+            + " FROM hook_runs h JOIN files f ON f.id = h.file_id ORDER BY f.path, h.ts", self.db)
+        return hook_frame(_decode(rows, ("is_sidechain", "prevented")))
 
-def load_turns(source: Path, state_path: Path) -> pd.DataFrame:
-    """Every response ccdrift knows of for `source`: the history store next to the
-    state file, first brought up to date. A store built from another folder is left
-    alone and `source` is parsed directly, with a note on stderr."""
+    def compactions(self) -> pd.DataFrame:
+        """Every stored compaction, as parse_all's `compactions` table."""
+        rows = pd.read_sql_query(
+            "SELECT f.path AS source_file, f.session_id, c.ts, " + ", ".join(f"c.{col}" for col in COMPACTION_COLUMNS)
+            + " FROM compactions c JOIN files f ON f.id = c.file_id ORDER BY f.path, c.ts", self.db)
+        return compaction_frame(_decode(rows, ("is_sidechain",)))
+
+
+def load_history(source: Path, state_path: Path, claim: bool) -> Tables:
+    """Everything ccdrift knows of for `source`: the history store next to the state
+    file, first brought up to date. Only the daily check claims a store (`claim`):
+    other commands read the transcripts directly while no check has tied the store to
+    a folder, and so does anything run on a folder other than the store's."""
     path = history_path(state_path)
+    if not claim and not path.exists():
+        return parse_all(source)
     try:
         with History(path) as history:
             built_from = history.built_from()
             if built_from is not None and built_from != str(source.expanduser().resolve()):
                 print(f"Not using ccdrift's history in {path}: it was built from {built_from}.", file=sys.stderr)
-                return parse_source(source)
-            history.update(source)
-            return history.responses()
+                return parse_all(source)
+            if built_from is None and not claim:
+                return parse_all(source)
+            history.update(source, claim=claim)
+            return Tables(history.responses(), history.durations(), history.hook_runs(), history.compactions())
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc
     except pd.errors.DatabaseError as exc:
         # pandas wraps SQLite's error in one that repeats the whole query.
         raise _unusable(path, exc.__cause__ or exc) from exc
+
+
+def load_turns(source: Path, state_path: Path) -> pd.DataFrame:
+    """The responses of load_history, claiming the store; what the daily check reads."""
+    return load_history(source, state_path, claim=True).responses

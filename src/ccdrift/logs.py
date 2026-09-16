@@ -39,6 +39,7 @@ CANDIDATES: dict[str, list[str]] = {
     "speed":             ["message.usage.speed", "usage.speed"],
     "service_tier":      ["message.usage.service_tier", "usage.service_tier"],
     "effort":            ["effort"],
+    "agent_type":        ["attributionAgent"],
     "version":           ["version"],
     "entrypoint":        ["entrypoint"],
     "timestamp":         ["timestamp", "message.timestamp", "createdAt"],
@@ -158,9 +159,9 @@ def parse_ts(raw: Any) -> Optional[datetime]:
 # Parsing → turn-level feature table
 # ---------------------------------------------------------------------------
 
-# Response fields that keep the first value logged across a response's lines,
-# and token counts that keep the largest.
-SETTING_FIELDS = ("version", "entrypoint", "effort", "speed", "service_tier")
+# Text fields that keep the first value logged across a response's lines, and
+# token counts that keep the largest.
+SETTING_FIELDS = ("version", "entrypoint", "effort", "speed", "service_tier", "agent_type")
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_creation", "cache_read", "cache_1h", "cache_5m")
 
 

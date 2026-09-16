@@ -7,10 +7,10 @@ import pandas as pd
 import pytest
 
 import ccdrift.history
-from ccdrift.history import History, HistoryError, load_turns
-from ccdrift.logs import parse_durations, parse_source
-from tests.helpers import (at, damage_responses_table, line, prompt, response, text, thinking, tool_result,
-                           turn_duration, write)
+from ccdrift.history import History, HistoryError, load_history, load_turns
+from ccdrift.logs import parse_all, parse_durations, parse_source
+from tests.helpers import (at, compact_boundary, damage_responses_table, line, prompt, response,
+                           stop_hook_summary, text, thinking, tool_result, turn_duration, write)
 
 
 def transcripts(folder):
@@ -102,7 +102,7 @@ def test_a_new_parser_version_reads_every_transcript_again(tmp_path, monkeypatch
     transcripts(tmp_path / "logs")
     with History(tmp_path / "history.sqlite") as history:
         history.update(tmp_path / "logs")
-    monkeypatch.setattr(ccdrift.history, "PARSER_VERSION", 2)
+    monkeypatch.setattr(ccdrift.history, "PARSER_VERSION", 3)
     with History(tmp_path / "history.sqlite") as history:
         assert history.update(tmp_path / "logs") == 2
         assert history.update(tmp_path / "logs") == 0
@@ -124,7 +124,7 @@ def test_a_store_from_a_newer_ccdrift_with_an_incompatible_schema_is_refused_unt
     path = tmp_path / "history.sqlite"
     db = sqlite3.connect(path)
     db.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-    db.execute("INSERT INTO meta VALUES ('schema_version', '2')")
+    db.execute("INSERT INTO meta VALUES ('schema_version', '3')")
     db.execute("CREATE TABLE responses (key INTEGER PRIMARY KEY, payload BLOB)")
     db.commit()
     db.close()
@@ -180,3 +180,95 @@ def test_a_store_that_cant_be_created_doesnt_suggest_moving_it_aside(tmp_path):
     with pytest.raises(HistoryError, match="Can't open the history store") as raised:
         load_turns(tmp_path / "logs", tmp_path / "home" / "state.json")
     assert "Move it aside" not in str(raised.value)
+
+
+V1_SCHEMA = """
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, size INTEGER, mtime_ns INTEGER, session_id TEXT);
+CREATE TABLE responses (key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
+    model TEXT, version TEXT, entrypoint TEXT, effort TEXT, speed TEXT, service_tier TEXT,
+    is_sidechain INTEGER, new_prompt INTEGER, after_compaction INTEGER,
+    input_tokens INTEGER, output_tokens INTEGER, cache_creation INTEGER, cache_read INTEGER,
+    cache_1h INTEGER, cache_5m INTEGER, thinking_logged INTEGER,
+    signature_chars INTEGER, visible_chars INTEGER, n_mcp_calls INTEGER);
+CREATE TABLE durations (key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
+    version TEXT, entrypoint TEXT, is_sidechain INTEGER, duration_ms INTEGER, message_count INTEGER);
+INSERT INTO meta VALUES ('schema_version', '1'), ('parser_version', '1'), ('source', '/somewhere');
+INSERT INTO files VALUES (1, 'old.jsonl', 10, 10, 'old');
+INSERT INTO responses (key, file_id, ts, model, is_sidechain, new_prompt, after_compaction, input_tokens,
+    output_tokens, cache_creation, cache_read, cache_1h, cache_5m, signature_chars, visible_chars, n_mcp_calls)
+    VALUES (7, 1, 1788000000000000, 'claude-opus-5', 0, 1, 0, 10, 20, 30, 40, 0, 0, 0, 0, 0);
+"""
+
+
+def test_a_store_from_ccdrift_0_2_is_upgraded_in_place_and_keeps_its_rows(tmp_path):
+    db = sqlite3.connect(tmp_path / "history.sqlite")
+    db.executescript(V1_SCHEMA)
+    db.close()
+    with History(tmp_path / "history.sqlite") as history:
+        assert history.meta["schema_version"] == "2"
+        columns = {row[1] for row in history.db.execute("PRAGMA table_info(responses)")}
+        tables = {row[0] for row in history.db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        assert "agent_type" in columns
+        assert {"hook_runs", "compactions"} <= tables
+        assert history.responses()["model"].tolist() == ["claude-opus-5"]
+
+
+def test_history_holds_the_same_hook_runs_compactions_and_agent_types_as_the_transcripts(tmp_path):
+    write(tmp_path / "logs" / "s1.jsonl", [
+        prompt(at(0)), line("m1", text(40), ts=at(0)),
+        stop_hook_summary(at(10), 2, durations=(500, 700), uuid="h1"),
+        stop_hook_summary(at(20), 1, errors=("boom",), uuid="h2"),
+        compact_boundary(at(30), trigger="auto", pre_tokens=965_000),
+    ])
+    write(tmp_path / "logs" / "s1" / "subagents" / "agent-a.jsonl",
+          [line("a1", text(40), ts=at(5), sidechain=True, agent_type="Plan")])
+    stored = load_history(tmp_path / "logs", tmp_path / "state.json", claim=True)
+    parsed = parse_all(tmp_path / "logs")
+    pd.testing.assert_frame_equal(stored.responses, parsed.responses, check_like=True)
+    pd.testing.assert_frame_equal(stored.hook_runs, parsed.hook_runs, check_like=True)
+    pd.testing.assert_frame_equal(stored.compactions, parsed.compactions, check_like=True)
+    agent_types = stored.responses["agent_type"].tolist()
+    # pandas' inferred string dtype uses NaN, not None, once a text column mixes
+    # missing and real values (pandas >= 3.0); pd.isna covers both.
+    assert pd.isna(agent_types[0]) and agent_types[1] == "Plan"
+
+
+def test_a_transcript_that_cant_be_read_is_tried_again_and_the_parser_version_still_recorded(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root can read unreadable files")
+    transcripts(tmp_path / "logs")
+    blocked = tmp_path / "logs" / "p" / "s1.jsonl"
+    with History(tmp_path / "history.sqlite") as history:
+        history.update(tmp_path / "logs")
+        with blocked.open("a") as fh:
+            fh.write('{"type": "user"}\n')
+        os.chmod(blocked, 0)
+        try:
+            assert history.update(tmp_path / "logs") == 0
+            assert history.meta["parser_version"] == "2"
+        finally:
+            os.chmod(blocked, 0o644)
+        assert history.update(tmp_path / "logs") == 1
+
+
+def test_report_and_incident_list_leave_an_unclaimed_store_alone(tmp_path):
+    transcripts(tmp_path / "logs")
+    load_history(tmp_path / "logs", tmp_path / "state.json", claim=False)
+    assert not (tmp_path / "history.sqlite").exists()
+    History(tmp_path / "history.sqlite").close()
+    assert len(load_history(tmp_path / "logs", tmp_path / "state.json", claim=False).responses) == 4
+    with History(tmp_path / "history.sqlite") as history:
+        assert history.built_from() is None
+
+
+def test_a_sqlite_too_old_for_the_store_is_named(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 22, 0))
+    with pytest.raises(HistoryError, match="needs SQLite 3.24"):
+        History(tmp_path / "history.sqlite")
+
+
+def test_a_folder_in_the_stores_place_says_to_move_it_aside(tmp_path):
+    (tmp_path / "history.sqlite").mkdir()
+    with pytest.raises(HistoryError, match="is a folder. Move it aside"):
+        History(tmp_path / "history.sqlite")

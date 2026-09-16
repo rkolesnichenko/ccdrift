@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from ccdrift.detector import DetectorConfig, baseline_bins, bin_metrics, detect, flag_onsets, pooled_z
-from ccdrift.history import HistoryError, load_turns
+from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import judged_turns
 from ccdrift.state import load_state
 from ccdrift.texts import (INCIDENT_METRICS, METRIC_ARGS, MOVES, PERSISTENT_DAYS, SHORT_NAMES, approx, cost_text,
@@ -290,7 +290,7 @@ def run_list(source: Path, state_path: Path, today: Optional[date] = None,
         print("No incidents recorded.")
         return 0
     try:
-        df = load_turns(source, state_path)
+        df = load_history(source, state_path, claim=False).responses
     except HistoryError as exc:
         print(exc, file=sys.stderr)
         return 1

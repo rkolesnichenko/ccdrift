@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from ccdrift.detector import DetectorConfig, bin_metrics, detect
-from ccdrift.history import HistoryError, load_turns
+from ccdrift.history import HistoryError, load_history
 from ccdrift.incidents import exclusions, incident_cost
 from ccdrift.logs import judged_turns, no_transcripts_message
 from ccdrift.settings import settings_lines, settings_summary
@@ -168,7 +168,7 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
         print(f"Can't read the state file {state_path}: {exc}", file=sys.stderr)
         return 1
     try:
-        df = load_turns(source, state_path)
+        df = load_history(source, state_path, claim=False).responses
     except HistoryError as exc:
         print(exc, file=sys.stderr)
         return 1
