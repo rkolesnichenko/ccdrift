@@ -27,6 +27,9 @@ uv run --group lab python lab/harness.py --sweep effort --thinking logged --inci
 
 # Turn latency: day-to-day spread and the smallest slowdown caught
 uv run --group lab python -m lab.latency --incident 2026-08-16..2026-09-04
+
+# G2: session-start size per version, and whether its alerts would be sound
+uv run --group lab python -m lab.session_start
 ```
 
 `--help` lists every option, including `--main-thread-only`, `--since`, `--until` and
