@@ -10,9 +10,10 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from ccdrift.check import CHECK_METRICS, load_state
 from ccdrift.detector import DetectorConfig, bin_metrics, detect
+from ccdrift.incidents import INCIDENT_METRICS
 from ccdrift.logs import judged_turns, no_transcripts_message, parse_source
+from ccdrift.state import load_state
 
 SHORT_NAMES = {"cache_ratio": "cache", "haiku_fraction": "haiku"}
 COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", "flagged"]
@@ -62,7 +63,7 @@ def format_report(rows: pd.DataFrame, reported: dict[str, list[str]],
             f"{_number(row.cache_z, '+.1f'):>5}  {_number(row.haiku_share, '.3f'):>11}  "
             f"{_number(row.haiku_z, '+.1f'):>5}  {row.flagged}".rstrip())
     lines.append("")
-    flags = [f"  {label} from {day}" for metric, label in CHECK_METRICS.items()
+    flags = [f"  {label} from {day}" for metric, label in INCIDENT_METRICS.items()
              for day in reported.get(metric, [])]
     if flags:
         lines += ["Flags reported by the daily check:"] + flags

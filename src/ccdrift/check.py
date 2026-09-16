@@ -1,82 +1,33 @@
-"""The daily check: report each new flag once, and alert when the check fails or
-can't compute the cache metric."""
+"""The daily check: follow incidents from their first flagged day until they
+recover, and alert when the check fails or can't compute the cache metric."""
 
 from __future__ import annotations
 
-import json
+import copy
 import os
 import traceback
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
 import pandas as pd
 
-from ccdrift.detector import DetectorConfig, bin_metrics, detect, flag_onsets
-from ccdrift.logs import judged_turns, no_transcripts_message, parse_source
+from ccdrift.detector import DetectorConfig
+from ccdrift.history import load_turns
+from ccdrift.incidents import describe, incident_cost, update_incidents
+from ccdrift.logs import judged_turns, no_transcripts_message
 from ccdrift.notify import notify
+from ccdrift.state import load_state, record_run, save_state
 
-
-# ---------------------------------------------------------------------------
-# Daily check — report each new flag once (run it from launchd or cron)
-# ---------------------------------------------------------------------------
-
-# The daily check leaves effort out: it swings more from day to day than a 70%
-# cut in thinking moves it, so its flags in one user's logs track the work.
-CHECK_METRICS = {"cache_ratio": "Cache read ratio on new prompts",
-                 "haiku_fraction": "Haiku share on the main thread"}
-CHECK_RECENT_DAYS = 14
+# kind, title, message, and lines for the log only
+Alert = tuple[str, str, str, list[str]]
 
 
 def ccdrift_home(environ: Mapping[str, str] = os.environ) -> Path:
-    """Where the daily check keeps its state file and log: $CCDRIFT_HOME when set,
-    otherwise ~/.ccdrift."""
+    """Where the daily check keeps its state file, history and log: $CCDRIFT_HOME
+    when set, otherwise ~/.ccdrift."""
     home = environ.get("CCDRIFT_HOME")
     return Path(home).expanduser() if home else Path.home() / ".ccdrift"
-
-
-def check(df: pd.DataFrame, today: date, state_path: Path,
-          cfg: Optional[DetectorConfig] = None,
-          recent_days: int = CHECK_RECENT_DAYS) -> list[dict[str, Any]]:
-    """Flags on main-thread turns of complete UTC days that start within the last
-    `recent_days` days and weren't reported before. Main thread only, because
-    subagent Haiku comes in bursts that flag on their own. The recent-days limit
-    keeps a first run from reporting incidents from weeks ago while still
-    covering a week or so without a run. Reported onsets are saved to
-    `state_path`, so each flag is reported once."""
-    turns = judged_turns(df, today)
-    if turns.empty:
-        return []
-    detected = detect(bin_metrics(turns), cfg or DetectorConfig())
-    bins = detected["bin"].astype(str).tolist()
-    since = (today - timedelta(days=recent_days)).isoformat()
-    state = load_state(state_path)
-    reported = state.setdefault("reported", {})
-    new = []
-    for metric, label in CHECK_METRICS.items():
-        flags = detected[f"{metric}__flag"].to_numpy(dtype=bool)
-        for onset in flag_onsets(detected, metric):
-            if bins[onset] < since or bins[onset] in reported.get(metric, []):
-                continue
-            end = onset
-            while end + 1 < len(flags) and flags[end + 1]:
-                end += 1
-            new.append({"metric": metric, "label": label, "onset": bins[onset],
-                        "days": bins[onset:end + 1],
-                        "z": detected[f"{metric}__z"].iloc[onset:end + 1].round(2).tolist()})
-            reported.setdefault(metric, []).append(bins[onset])
-    if new:
-        _save_state(state_path, state)
-    return new
-
-
-def load_state(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text()) if path.exists() else {}
-
-
-def _save_state(path: Path, state: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=1) + "\n")
 
 
 # A stretch of active days without usable cache values means the cache metric
@@ -87,14 +38,14 @@ CHECK_BLANK_DAYS = 3
 CHECK_ACTIVE_RESPONSES = 50  # main-thread responses; the quietest of 29 real days had 81
 
 
-def blank_cache_stretch(df: pd.DataFrame, today: date, state_path: Path,
+def blank_cache_stretch(turns: pd.DataFrame, state: dict[str, Any],
                         days: int = CHECK_BLANK_DAYS,
                         active: int = CHECK_ACTIVE_RESPONSES) -> Optional[dict[str, Any]]:
-    """The latest run of complete active days (at least `active` main-thread
-    responses) on which no new-prompt turn has cache token counts, once it is
-    `days` long and wasn't reported before. Every Claude Code response reads or
-    writes the prompt cache, so such days mean the parser has lost track of it."""
-    turns = judged_turns(df, today)
+    """The latest run of active days (at least `active` judged responses) on which no
+    new-prompt turn has cache token counts, once it is `days` long and wasn't
+    reported before; it is recorded in state["blank_cache"]. Every Claude Code
+    response reads or writes the prompt cache, so such days mean the parser has
+    lost track of it."""
     usable = turns["prompt_within_ttl"].astype(bool) & ((turns["cache_read"] + turns["cache_creation"]) > 0)
     per_day = pd.DataFrame({"responses": turns.groupby("day").size(),
                             "usable": usable.groupby(turns["day"]).sum()})
@@ -107,49 +58,77 @@ def blank_cache_stretch(df: pd.DataFrame, today: date, state_path: Path,
         start -= 1
     stretch = per_day.iloc[start:]
     first = str(stretch.index[0])
-    state = load_state(state_path)
-    if first in state.get("blank_cache", []):
+    if first in state["blank_cache"]:
         return None
-    state.setdefault("blank_cache", []).append(first)
-    _save_state(state_path, state)
+    state["blank_cache"].append(first)
     prompts = int(turns.loc[turns["day"].isin(stretch.index), "new_prompt"].sum())
     return {"first": first, "days": len(stretch), "responses": int(stretch["responses"].sum()),
             "prompts": prompts}
 
 
-def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = None,
-              notify_user: bool = False, today: Optional[date] = None) -> int:
-    """Run the daily check and print a line per result. With notify_user, also
-    show a notification for each new flag, for days the cache metric can't be
-    computed on, and when the check fails: a broken check otherwise looks like a
-    quiet week."""
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: DetectorConfig,
+            today: date) -> list[Alert]:
+    """Everything that changed since the last run, in the order alerts go out;
+    `state` is updated to match."""
+    df = load_turns(source, state_path)
+    if df.empty:
+        raise RuntimeError(no_transcripts_message(source))
+    turns = judged_turns(df, today)
+    incidents = state["incidents"]
+    alerts: list[Alert] = [describe(event, turns, incidents, cfg)
+                           for event in update_incidents(turns, state, today, cfg)]
+    for incident in incidents:
+        if incident["status"] == "open":
+            incident["cost"] = round(incident_cost(turns, incident, incidents, cfg))
+    blank = blank_cache_stretch(turns, state)
+    if blank:
+        alerts.append(("blank_cache", "ccdrift can't compute the cache metric",
+                       f"no usable cache values on {blank['days']} active days from {blank['first']} "
+                       f"({blank['responses']} responses, {blank['prompts']} prompts recognised). "
+                       "Claude Code's log format may have changed; run `ccdrift peek`.", []))
+    return alerts
 
-    def alert(title: str, message: str) -> None:
+
+def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = None,
+              notify_user: bool = False, today: Optional[date] = None,
+              now: Optional[datetime] = None) -> int:
+    """Run the daily check and print a line per alert; with notify_user, also show a
+    notification for each. The state file is read once and written once, with how
+    the run went, so `ccdrift status` can tell a broken check from a quiet week. A
+    state file that can't be read is left as it is."""
+    started = now or datetime.now().astimezone()
+    stamp = started.strftime("%Y-%m-%d %H:%M")
+
+    def alert(kind: str, title: str, message: str) -> None:
         print(f"[check {stamp}] {title}: {message}")
         if notify_user:
             notify(title, message)
 
     try:
-        df = parse_source(source)
-        if df.empty:
-            raise RuntimeError(no_transcripts_message(source))
-        today = today or datetime.now(timezone.utc).date()
-        flags = check(df, today, state_path, cfg)
-        blank = blank_cache_stretch(df, today, state_path)
+        state = load_state(state_path)
+    except (OSError, ValueError) as exc:
+        traceback.print_exc()
+        alert("failed", "ccdrift check failed", f"can't read the state file {state_path}: {exc}")
+        return 1
+    updated = copy.deepcopy(state)
+    try:
+        alerts = _alerts(source, state_path, updated, cfg or DetectorConfig(),
+                         today or datetime.now(timezone.utc).date())
+        record_run(updated, started, None)
+        save_state(state_path, updated)
     except Exception as exc:
         traceback.print_exc()
-        alert("ccdrift check failed", f"{type(exc).__name__}: {exc}")
+        record_run(state, started, f"{type(exc).__name__}: {exc}")
+        try:
+            save_state(state_path, state)
+        except OSError:
+            pass
+        alert("failed", "ccdrift check failed", f"{type(exc).__name__}: {exc}")
         return 1
-    for f in flags:
-        alert("ccdrift flag", f"{f['label']} flagged from {f['onset']}")
-        z = ", ".join(f"{v:+.1f}" for v in f["z"])
-        print(f"    days {', '.join(f['days'])}; z = {z}")
-    if blank:
-        alert("ccdrift can't compute the cache metric",
-              f"no usable cache values on {blank['days']} active days from {blank['first']} "
-              f"({blank['responses']} responses, {blank['prompts']} prompts recognised). "
-              "Claude Code's log format may have changed; run `ccdrift peek`.")
-    if not flags and not blank:
-        print(f"[check {stamp}] no new flags")
+    for kind, title, message, details in alerts:
+        alert(kind, title, message)
+        for detail in details:
+            print(f"    {detail}")
+    if not alerts:
+        print(f"[check {stamp}] no alerts")
     return 0

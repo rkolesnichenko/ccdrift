@@ -1,66 +1,14 @@
 """The daily check: new flags once, and alerts when it fails or can't compute the
 cache metric."""
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
 import ccdrift.check
-from ccdrift.check import check, run_check
-from tests.helpers import HAIKU, QUIET, busy_days, daily_turns
-
-
-def check_days(tmp_path, days, today):
-    df = daily_turns(days)
-    if "main_thread" not in df:
-        df["main_thread"] = True
-    flags = check(df, today=today, state_path=tmp_path / "state.json")
-    return [(f["metric"], f["onset"]) for f in flags]
-
-
-def test_check_reports_a_flag_that_starts_in_recent_days(tmp_path):
-    days = [QUIET] * 14 + [HAIKU] * 3
-    assert check_days(tmp_path, days, date(2026, 9, 18)) == [("haiku_fraction", "2026-09-15")]
-
-
-def test_check_does_not_repeat_a_flag_it_already_reported(tmp_path):
-    days = [QUIET] * 14 + [HAIKU] * 4
-    check_days(tmp_path, days[:17], date(2026, 9, 18))
-    assert check_days(tmp_path, days, date(2026, 9, 19)) == []
-
-
-def test_check_waits_for_the_current_day_to_finish(tmp_path):
-    # A day still in progress holds only part of its turns.
-    days = [QUIET] * 14 + [HAIKU] * 3
-    assert check_days(tmp_path, days, date(2026, 9, 17)) == []
-
-
-def test_check_stays_quiet_about_flags_from_weeks_ago(tmp_path):
-    # Installed on Sep 15, the check would otherwise open with the August cache
-    # regression, four weeks old by then.
-    days = [QUIET] * 14 + [HAIKU] * 3
-    assert check_days(tmp_path, days, date(2026, 10, 10)) == []
-
-
-def test_check_leaves_subagent_haiku_out(tmp_path):
-    # Subagent Haiku comes in bursts: across all turns, 3 of 5 synthetic logs
-    # were falsely flagged.
-    quiet = {"is_haiku": [0.0] * 440, "main_thread": [True] * 400 + [False] * 40}
-    burst = {"is_haiku": [0.0] * 400 + [1.0] * 40, "main_thread": [True] * 400 + [False] * 40}
-    assert check_days(tmp_path, [quiet] * 14 + [burst] * 3, date(2026, 9, 18)) == []
-
-
-def test_check_leaves_effort_out(tmp_path):
-    # Effort swings more from day to day than a 70% cut in thinking moves it,
-    # so an effort flag in one user's logs says more about the work than Claude.
-    days = [{"thinking_fraction": [0.5] * 400}] * 14 + [{"thinking_fraction": [0.1] * 400}] * 3
-    assert check_days(tmp_path, days, date(2026, 9, 18)) == []
-
-
-def test_check_leaves_agent_sdk_haiku_out(tmp_path):
-    quiet = {"is_haiku": [0.0] * 440, "entrypoint": ["cli"] * 400 + ["sdk-py"] * 40}
-    burst = {"is_haiku": [0.0] * 400 + [1.0] * 40, "entrypoint": ["cli"] * 400 + ["sdk-py"] * 40}
-    assert check_days(tmp_path, [quiet] * 14 + [burst] * 3, date(2026, 9, 18)) == []
+from ccdrift.check import run_check
+from ccdrift.state import load_state
+from tests.helpers import busy_days, main_thread_days
 
 
 @pytest.fixture
@@ -124,3 +72,61 @@ def test_cache_metric_alert_points_to_ccdrift_peek(tmp_path, sent, capsys):
     out = capsys.readouterr().out
     assert "run `ccdrift peek`" in out
     assert "--schema-peek" not in out
+
+
+def test_check_alerts_when_a_flag_opens_an_incident(tmp_path, sent, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12, "version": "2.1.233"}] * 3)
+    assert check_logs(tmp_path, today=date(2026, 9, 18)) == 0
+    assert sent == ["ccdrift flag"]
+    assert ("ccdrift flag: Haiku share on the main thread up from 2026-09-15, on Claude Code 2.1.233 "
+            "(since 09-15). ~36 extra Haiku responses so far.") in capsys.readouterr().out
+
+
+def test_check_alerts_when_an_incident_is_back_to_normal(tmp_path, sent, capsys):
+    days = [{}] * 14 + [{"haiku": 12, "version": "2.1.233"}] * 3 + [{"version": "2.1.259"}] * 5
+    main_thread_days(tmp_path / "logs", days)
+    check_logs(tmp_path, today=date(2026, 9, 18))
+    check_logs(tmp_path, today=date(2026, 9, 23))
+    assert sent == ["ccdrift flag", "ccdrift: back to normal"]
+    assert ("ccdrift: back to normal: Haiku share on the main thread back to normal from 2026-09-20, on Claude "
+            "Code 2.1.259 (since 09-18). The incident from 2026-09-15: ~36 extra Haiku responses.") \
+        in capsys.readouterr().out
+
+
+def test_check_says_so_when_there_is_nothing_to_report(tmp_path, sent, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    check_logs(tmp_path)
+    assert capsys.readouterr().out.endswith("no alerts\n")
+
+
+def test_check_saves_each_run_in_the_state_file(tmp_path, sent):
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    now = datetime(2026, 9, 4, 9, 0, tzinfo=timezone(timedelta(hours=3)))
+    run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4), now=now)
+    state = load_state(tmp_path / "state.json")
+    assert state["last_run"] == {"started": "2026-09-04T09:00:00+03:00", "ok": True, "error": None}
+    assert state["last_ok"] == "2026-09-04T09:00:00+03:00"
+
+
+def test_a_failed_run_is_saved_in_the_state_file(tmp_path, sent):
+    # So `ccdrift status` can tell a broken check from a quiet week.
+    (tmp_path / "logs").mkdir()
+    check_logs(tmp_path)
+    last_run = load_state(tmp_path / "state.json")["last_run"]
+    assert last_run["ok"] is False
+    assert last_run["error"].startswith("RuntimeError: No Claude Code transcripts found")
+
+
+def test_check_leaves_an_unreadable_state_file_as_it_is(tmp_path, sent):
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    (tmp_path / "state.json").write_text("not json")
+    assert check_logs(tmp_path) == 1
+    assert sent == ["ccdrift check failed"]
+    assert (tmp_path / "state.json").read_text() == "not json"
+
+
+def test_check_names_an_unusable_history_store(tmp_path, sent, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    (tmp_path / "history.sqlite").write_text("not a database")
+    assert check_logs(tmp_path) == 1
+    assert "Can't use the history store" in capsys.readouterr().out

@@ -220,3 +220,10 @@ def test_a_persistent_alert_says_the_change_is_now_the_new_normal():
         "ccdrift: change persists",
         "Haiku share on the main thread still up 30 days after 2026-09-15. ccdrift now treats it as the "
         "new normal; `ccdrift incident list` has the details.")
+
+
+def test_agent_sdk_haiku_opens_nothing():
+    # Agent SDK sessions are the user's own scripts.
+    quiet = {"is_haiku": [0.0] * 440, "entrypoint": ["cli"] * 400 + ["sdk-py"] * 40}
+    burst = {"is_haiku": [0.0] * 400 + [1.0] * 40, "entrypoint": ["cli"] * 400 + ["sdk-py"] * 40}
+    assert run(new_state(), [quiet] * 14 + [burst] * 3, date(2026, 9, 18)) == []
