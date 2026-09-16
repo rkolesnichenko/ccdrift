@@ -15,7 +15,7 @@ from typing import Optional, Sequence
 P1 = 0.05
 MIN_P0 = 0.002
 MAX_P0 = 0.025
-THRESHOLD: Optional[float] = None
+THRESHOLD: Optional[float] = 4.0
 
 
 def clamp_rate(rate: float) -> float:
