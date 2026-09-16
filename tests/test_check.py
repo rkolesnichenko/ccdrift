@@ -209,3 +209,15 @@ def test_an_exec_command_that_raises_is_logged_and_every_alert_still_goes_out(tm
     out = capsys.readouterr().out
     assert '--exec failed for "ccdrift flag": RuntimeError: boom' in out
     assert '--exec failed for "ccdrift: setting changed": RuntimeError: boom' in out
+
+
+def test_alerts_quote_release_notes_on_their_topic_from_new_versions(tmp_path, sent, capsys):
+    logs = tmp_path / "cfg" / "projects"
+    main_thread_days(logs, [{}] * 14 + [{"haiku": 12, "version": "2.1.233"}] * 3)
+    (tmp_path / "cfg" / "cache").mkdir(parents=True)
+    (tmp_path / "cfg" / "cache" / "changelog.md").write_text(
+        "## 2.1.233\n\n- Search subagents now run on the Haiku model\n- Added a theme picker\n")
+    run_check(logs, tmp_path / "state.json", today=date(2026, 9, 18))
+    out = capsys.readouterr().out
+    assert "    release notes 2.1.233: Search subagents now run on the Haiku model" in out.splitlines()
+    assert "theme picker" not in out

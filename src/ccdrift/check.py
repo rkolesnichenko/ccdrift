@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from ccdrift.changelog import changelog_path, days_before, load_changelog, new_versions, note_lines, release_notes
 from ccdrift.detector import DetectorConfig
 from ccdrift.history import load_turns
 from ccdrift.incidents import describe, incident_cost, update_incidents, versions_text
@@ -21,6 +22,10 @@ from ccdrift.state import ccdrift_home, load_state, record_run, save_state
 
 # kind, title, message, and lines for the log only
 Alert = tuple[str, str, str, list[str]]
+
+# Which release notes explain an alert about each metric or setting.
+TOPIC_OF = {"cache_ratio": "cache", "haiku_fraction": "haiku", "cache_tier": "cache", "effort": "effort",
+            "subagent_model": "subagents"}
 
 
 # A stretch of active days without usable cache values means the cache metric
@@ -67,9 +72,18 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     if df.empty:
         raise RuntimeError(no_transcripts_message(source))
     turns = judged_turns(df, today)
+    changelog = load_changelog(changelog_path(source))
     incidents = state["incidents"]
     events = update_incidents(turns, state, today, cfg)
-    alerts: list[Alert] = [describe(event, turns, incidents, cfg) for event in events]
+    alerts: list[Alert] = []
+    for event in events:
+        kind, title, message, details = describe(event, turns, incidents, cfg)
+        notes = []
+        if event.kind != "persistent" and event.days:
+            first = days_before(event.incident["start"], 7) if event.kind == "flag" else event.incident["start"]
+            notes = release_notes(changelog, new_versions(turns, first, max(event.days)),
+                                  TOPIC_OF[event.incident["metric"]])
+        alerts.append((kind, title, message, details + note_lines(notes)))
     # `ccdrift status` reads only the state file, so it shows the cost and versions
     # saved here: for open incidents, and for incidents added by hand, which start
     # without either. describe() has just refreshed the incidents it alerted about.
@@ -82,8 +96,11 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
             days = turns["day"].astype(str)
             first_days = sorted(days[days.between(incident["start"], incident["end"])].unique())[:3]
             incident["versions"] = versions_text(turns, first_days)
-    alerts += [("setting", "ccdrift: setting changed", change_message(change, versions_text(turns, change["days"])), [])
-               for change in setting_changes(turns, state, today)]
+    for change in setting_changes(turns, state, today):
+        notes = release_notes(changelog, new_versions(turns, days_before(change["since"], 7), change["days"][-1]),
+                              TOPIC_OF[change["setting"]])
+        alerts.append(("setting", "ccdrift: setting changed",
+                       change_message(change, versions_text(turns, change["days"])), note_lines(notes)))
     blank = blank_cache_stretch(turns, state)
     if blank:
         alerts.append(("blank_cache", "ccdrift can't compute the cache metric",

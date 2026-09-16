@@ -139,3 +139,14 @@ def test_report_options_reach_the_report(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["view"] == "version"
     assert [v["version"] for v in payload["versions"]] == ["2.1.226"]
+
+
+def test_report_by_version_quotes_release_notes_under_each_version(tmp_path, capsys):
+    logs = tmp_path / "cfg" / "projects"
+    main_thread_days(logs, [{"version": "2.1.99"}] * 2 + [{"version": "2.1.233"}] * 2)
+    (tmp_path / "cfg" / "cache").mkdir(parents=True)
+    (tmp_path / "cfg" / "cache" / "changelog.md").write_text("## 2.1.233\n\n- Fixed prompt cache misses at turn boundaries\n")
+    run_report(logs, tmp_path / "state.json", by="version", today=date(2026, 9, 5))
+    lines = capsys.readouterr().out.splitlines()
+    row = next(i for i, text in enumerate(lines) if text.startswith("2.1.233"))
+    assert lines[row + 1] == "    release notes: Fixed prompt cache misses at turn boundaries"

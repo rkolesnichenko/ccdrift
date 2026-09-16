@@ -13,6 +13,7 @@ from typing import Any, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from ccdrift.changelog import changelog_path, load_changelog, release_notes
 from ccdrift.detector import DetectorConfig, bin_metrics, detect
 from ccdrift.history import HistoryError, load_history
 from ccdrift.incidents import exclusions, incident_cost
@@ -23,7 +24,8 @@ from ccdrift.texts import INCIDENT_METRICS, SHORT_NAMES, incident_line, version_
 
 COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", "flagged"]
 VERSION_COLUMNS = ["version", "first_day", "last_day", "responses", "prompt_turns", "cache_ratio",
-                   "miss_share", "haiku_share"]
+                   "miss_share", "haiku_share", "release_notes"]
+REPORT_TOPICS = ("cache", "haiku", "effort", "context", "hooks", "subagents")
 DEFAULT_DAYS = 21
 Entry = tuple[dict, float]  # an incident and its cost
 
@@ -51,10 +53,10 @@ def daily_rows(turns: pd.DataFrame, days: int = DEFAULT_DAYS, cfg: Optional[Dete
     }, columns=COLUMNS)
 
 
-def version_rows(turns: pd.DataFrame) -> pd.DataFrame:
+def version_rows(turns: pd.DataFrame, changelog: Optional[dict] = None) -> pd.DataFrame:
     """Per Claude Code version on judged turns, oldest version first: first and last
-    day, responses, new-prompt turns with their cache ratio and share of misses, and
-    Haiku share."""
+    day, responses, new-prompt turns with their cache ratio and share of misses,
+    Haiku share, and up to 3 release notes on file for that version."""
     rows = []
     if not turns.empty:
         versions = (turns["version"].fillna("unknown") if "version" in turns
@@ -67,6 +69,8 @@ def version_rows(turns: pd.DataFrame) -> pd.DataFrame:
                 "cache_ratio": float(prompts["cache_read_ratio"].mean()) if len(prompts) else math.nan,
                 "miss_share": float(prompts["is_miss"].astype(bool).mean()) if len(prompts) else math.nan,
                 "haiku_share": float(group["is_haiku"].mean()),
+                "release_notes": [text for _, text in release_notes(changelog or {}, [str(version)], REPORT_TOPICS,
+                                                                    limit=3)],
             })
     rows.sort(key=lambda row: version_key(row["version"]))
     return pd.DataFrame(rows, columns=VERSION_COLUMNS)
@@ -128,6 +132,7 @@ def format_version_report(rows: pd.DataFrame, entries: Sequence[Entry], reported
             f"{row.version:<11}  {row.first_day:<10}  {row.last_day:<10}  {int(row.responses):>9}  "
             f"{int(row.prompt_turns):>12}  {_number(row.cache_ratio, '.3f'):>11}  {misses:>6}  "
             f"{_number(row.haiku_share, '.3f'):>11}")
+        lines += [f"    release notes: {text}" for text in row.release_notes]
     return "\n".join(lines + _tail(entries, reported, summary)) + "\n"
 
 
@@ -184,7 +189,8 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
         if days is not None:
             recent = sorted(turns["day"].astype(str).unique())[-days:]
             turns = turns[turns["day"].astype(str).isin(recent)]
-        rows = version_rows(turns)
+        changelog = load_changelog(changelog_path(source))
+        rows = version_rows(turns, changelog)
         window = sorted(turns["day"].astype(str).unique())
     else:
         rows = daily_rows(turns, days or DEFAULT_DAYS, cfg, incidents)
