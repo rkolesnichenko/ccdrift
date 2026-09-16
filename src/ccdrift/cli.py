@@ -17,6 +17,7 @@ from ccdrift.logs import default_source, peek
 from ccdrift.report import run_report
 from ccdrift.schedule import ScheduleError, choose_backend, install as install_job, make_job
 from ccdrift.state import load_state, save_state
+from ccdrift.status import run_status
 
 
 def _add_source(parser: argparse.ArgumentParser) -> None:
@@ -63,6 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--json", action="store_true", help="print the report as JSON")
     _add_source(report)
     _add_state(report)
+
+    status = commands.add_parser("status", help="how the last check went and what ccdrift is following")
+    status.add_argument("--short", action="store_true",
+                        help="one line when something needs attention, nothing otherwise (for a status line)")
+    _add_state(status)
 
     incident = commands.add_parser("incident", help="list incidents, or add, close or dismiss one")
     incident_actions = incident.add_subparsers(dest="action", required=True, metavar="ACTION")
@@ -175,6 +181,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0 if peek(_source(args)) else 2
     if args.command == "report":
         return run_report(_source(args), _state(args), days=args.days, by=args.by, as_json=args.json)
+    if args.command == "status":
+        return run_status(_state(args), short=args.short)
     if args.command == "incident":
         return _incident(args)
     if args.command == "schedule":
