@@ -13,6 +13,7 @@ import pandas as pd
 
 from ccdrift.changelog import changelog_path, days_before, load_changelog, new_versions, note_lines, release_notes
 from ccdrift.detector import DetectorConfig
+from ccdrift.fields import field_gaps, gap_message
 from ccdrift.history import load_turns
 from ccdrift.incidents import describe, incident_cost, update_incidents, versions_text
 from ccdrift.logs import judged_turns, no_transcripts_message
@@ -101,6 +102,9 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
                               TOPIC_OF[change["setting"]])
         alerts.append(("setting", "ccdrift: setting changed",
                        change_message(change, versions_text(turns, change["days"])), note_lines(notes)))
+    for gap in field_gaps(turns, state, today):
+        notes = release_notes(changelog, [] if gap["version"] == "unknown" else [gap["version"]], "fields")
+        alerts.append(("fields", "ccdrift: Claude Code stopped logging a field", gap_message(gap), note_lines(notes)))
     blank = blank_cache_stretch(turns, state)
     if blank:
         alerts.append(("blank_cache", "ccdrift can't compute the cache metric",

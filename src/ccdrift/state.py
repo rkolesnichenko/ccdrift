@@ -20,7 +20,8 @@ def ccdrift_home(environ: Mapping[str, str] = os.environ) -> Path:
 
 
 def new_state() -> dict[str, Any]:
-    return {"version": STATE_VERSION, "incidents": [], "settings": [], "blank_cache": [], "reported": {}}
+    return {"version": STATE_VERSION, "incidents": [], "settings": [], "blank_cache": [], "reported": {},
+            "field_gaps": [], "hook_failures": [], "context_changes": [], "early_warnings": [], "runs": []}
 
 
 def load_state(path: Path) -> dict[str, Any]:

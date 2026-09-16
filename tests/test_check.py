@@ -1,7 +1,7 @@
 """The daily check: new flags once, and alerts when it fails or can't compute the
 cache metric."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 import pytest
 
@@ -20,8 +20,10 @@ def sent(monkeypatch):
     return titles
 
 
-def check_logs(tmp_path, today=date(2026, 9, 4)):
-    return run_check(tmp_path / "logs", tmp_path / "state.json", notify_user=True, today=today)
+def check_logs(tmp_path, today=date(2026, 9, 4), **options):
+    """Run the check as the schedule would at 09:00 UTC on `today`."""
+    options.setdefault("now", datetime.combine(today, time(9, 0), tzinfo=timezone.utc))
+    return run_check(tmp_path / "logs", tmp_path / "state.json", notify_user=True, today=today, **options)
 
 
 def test_check_alerts_when_busy_days_show_no_cache_usage(tmp_path, sent):
@@ -221,3 +223,12 @@ def test_alerts_quote_release_notes_on_their_topic_from_new_versions(tmp_path, s
     out = capsys.readouterr().out
     assert "    release notes 2.1.233: Search subagents now run on the Haiku model" in out.splitlines()
     assert "theme picker" not in out
+
+
+def test_check_alerts_when_a_new_version_stops_logging_effort(tmp_path, sent, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"version": "2.1.280", "effort": None}] * 2)
+    check_logs(tmp_path, today=date(2026, 9, 17))
+    assert sent == ["ccdrift: Claude Code stopped logging a field"]
+    assert ("ccdrift: Claude Code stopped logging a field: Claude Code 2.1.280 no longer logs effort "
+            "(on 0% of 120 responses, 100% before). Effort change alerts can't work until ccdrift reads it again; "
+            "run `ccdrift peek`.") in capsys.readouterr().out
