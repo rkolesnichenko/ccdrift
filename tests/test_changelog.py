@@ -72,6 +72,40 @@ def test_release_notes_skip_lines_that_only_mention_a_model_a_tool_an_agent_or_c
         ("2.1.267", "Changed CLAUDE_CODE_SUBAGENT_MODEL to set the default subagent model")]
 
 
+def test_release_notes_quote_the_lines_matching_most_of_a_topic_first():
+    # From 2.1.267, whose sessions started with far less context: the likeliest
+    # causes name both deferred tools or tool definitions and the system prompt.
+    notes = {"2.1.267": ["Added `--system-prompt-snapshot off` to render the system prompt fresh on every request",
+                         "Fixed a tool that disappears mid-conversation rewriting the tool list",
+                         "Fixed MCP tools being added to the tool list mid-session; models now receive them as "
+                         "deferred definitions",
+                         "Improved prompt-cache stability: sessions record the system prompt and tool definitions once"],
+             "2.1.266": ["Fixed the plugin cache not refreshing after an update",
+                         "Fixed a prompt-cache miss after /rewind"]}
+    assert release_notes(notes, ["2.1.267", "2.1.266"], "context") == [
+        ("2.1.267", "Fixed MCP tools being added to the tool list mid-session; models now receive them as "
+                    "deferred definitions"),
+        ("2.1.267", "Improved prompt-cache stability: sessions record the system prompt and tool definitions once")]
+    assert release_notes(notes, ["2.1.266"], "cache") == [
+        ("2.1.266", "Fixed a prompt-cache miss after /rewind"),
+        ("2.1.266", "Fixed the plugin cache not refreshing after an update")]
+
+
+def test_release_notes_skip_lines_that_only_mention_thinking_or_the_transcript_view():
+    # "thinking" and "transcript" matched mostly display fixes in Claude Code's real changelog.
+    notes = {"2.1.251": ["Fixed the thinking toggle having no effect for the rest of a session",
+                         "Fixed custom theme overrides for the effort badge colors being ignored",
+                         "Changed /effort to save your default effort level per model",
+                         "Fixed content jumping when scrolling up through long transcript history",
+                         "Fixed history search breaking when ~/.claude/history.jsonl has a malformed entry",
+                         "Changed session transcripts to record the reasoning effort level on each assistant message"]}
+    assert release_notes(notes, ["2.1.251"], "effort") == [
+        ("2.1.251", "Changed /effort to save your default effort level per model"),
+        ("2.1.251", "Changed session transcripts to record the reasoning effort level on each assistant message")]
+    assert release_notes(notes, ["2.1.251"], "fields") == [
+        ("2.1.251", "Changed session transcripts to record the reasoning effort level on each assistant message")]
+
+
 def test_long_release_notes_are_cut_at_160_characters():
     notes = release_notes({"2.1.1": ["cache " + "x" * 300]}, ["2.1.1"], "cache")
     assert len(notes[0][1]) == 160 and notes[0][1].endswith("…")

@@ -14,15 +14,17 @@ import pandas as pd
 from ccdrift.texts import version_key
 
 # Checked against Claude Code's own changelog: "model", "tool", "agent" and "context"
-# matched about half of each version's notes, "mcp" mostly sign-in and menu fixes.
+# matched about half of each version's notes, "mcp" mostly sign-in and menu fixes,
+# "thinking" and "transcript" mostly display fixes. A line matching more of a topic's
+# words is quoted first.
 TOPICS: dict[str, tuple[str, ...]] = {
-    "cache": ("cache",),
+    "cache": ("cache", "prompt-cache", "prompt cache", "cache miss", "cache reuse"),
     "haiku": ("haiku", "small model", "small-model", "fallback model", "default model"),
-    "effort": ("effort", "thinking"),
+    "effort": ("effort level", "default effort", "reasoning effort", "effortlevel", "thinking budget"),
     "context": ("system prompt", "tool definition", "tool list", "deferred"),
-    "hooks": ("hook",),
+    "hooks": ("hook", "stop hook", "hook input"),
     "subagents": ("subagent model", "subagent_model"),
-    "fields": ("transcript", "jsonl", "session file"),
+    "fields": ("session transcript", "transcript file", "transcript writes", "saved transcript", "session file"),
 }
 NOTES_PER_VERSION = 2
 NOTE_CHARS = 160
@@ -68,13 +70,15 @@ def new_versions(turns: pd.DataFrame, first_day: str, last_day: str) -> list[str
 def release_notes(changelog: dict[str, list[str]], versions: Sequence[str],
                   topics: Union[str, Sequence[str]], limit: int = 5) -> list[tuple[str, str]]:
     """Up to `limit` (version, line) pairs from `versions`, in that order, whose text
-    mentions any keyword of `topics`, at most NOTES_PER_VERSION from each version; long
-    lines are cut at NOTE_CHARS."""
+    mentions any keyword of `topics`: at most NOTES_PER_VERSION from each version, those
+    mentioning the most keywords first, then in changelog order. Long lines are cut at
+    NOTE_CHARS."""
     names = (topics,) if isinstance(topics, str) else tuple(topics)
-    words = tuple(word for name in names for word in TOPICS[name])
+    words = tuple(dict.fromkeys(word for name in names for word in TOPICS[name]))
     found = []
     for version in versions:
-        lines = [text for text in changelog.get(version, []) if any(word in text.lower() for word in words)]
+        scored = [(sum(word in text.lower() for word in words), text) for text in changelog.get(version, [])]
+        lines = [text for score, text in sorted(scored, key=lambda item: -item[0]) if score]
         for text in lines[:NOTES_PER_VERSION]:
             found.append((version, text if len(text) <= NOTE_CHARS else text[:NOTE_CHARS - 1] + "…"))
             if len(found) == limit:
