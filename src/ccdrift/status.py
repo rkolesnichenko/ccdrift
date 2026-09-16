@@ -52,7 +52,7 @@ def short_status(state_path: Path, now: datetime) -> str:
         if rising:
             return f"ccdrift: cache misses rising since {clock_text(rising[-1]['since'], now)}"
         return ""
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    except Exception:  # a status line must never show a traceback, whatever the state holds
         return "ccdrift: can't read state"
 
 

@@ -64,6 +64,16 @@ def test_short_status_treats_a_malformed_state_as_unreadable(tmp_path, state):
     assert short_status(state_file(tmp_path, **state), NOW) == "ccdrift: can't read state"
 
 
+def test_short_status_treats_an_early_warning_time_out_of_range_as_unreadable(tmp_path, capsys):
+    # Shown in UTC-5, this `since` falls before year 1, which raised OverflowError.
+    warning = {"at": "2026-09-20T08:40:00+00:00", "since": "0001-01-01T00:00:00+05:00", "misses": 3, "turns": 7,
+               "base_rate": 0.005, "versions": [], "reported_on": "2026-09-20"}
+    path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00", early_warnings=[warning])
+    now = datetime(2026, 9, 20, 4, 0, tzinfo=timezone(timedelta(hours=-5)))
+    assert run_status(path, short=True, now=now) == 0
+    assert capsys.readouterr().out == "ccdrift: can't read state\n"
+
+
 def test_run_status_short_never_fails_on_a_malformed_state(tmp_path, capsys):
     path = state_file(tmp_path, **ran())  # ok, but no top-level "last_ok"
     assert run_status(path, short=True, now=NOW) == 0
