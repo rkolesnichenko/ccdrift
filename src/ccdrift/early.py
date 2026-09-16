@@ -70,6 +70,16 @@ RECENT_HOURS = 24    # an alarm this recent is news
 QUIET_DAYS = 7       # at most one warning in this many days
 
 
+def _rise_first(runs: list[tuple[int, int]]) -> int:
+    """The earliest `first` of the alarms chained back from the last one: the CUSUM's
+    reset after an alarm is bookkeeping, not the sum standing at 0, so alarms whose
+    later `first` is the earlier one's alarm + 1 are one continuous rise."""
+    i = len(runs) - 1
+    while i > 0 and runs[i][0] == runs[i - 1][1] + 1:
+        i -= 1
+    return runs[i][0]
+
+
 def _known_incident_days(days: pd.Series, incidents: Sequence[dict], today: str) -> pd.Series:
     known = pd.Series(False, index=days.index)
     for incident in incidents:
@@ -107,11 +117,11 @@ def early_warning(responses: pd.DataFrame, incidents: Sequence[dict], state: dic
     runs = alarm_runs(stretch["is_miss"].tolist(), base_rate, h)
     if not runs:
         return None
-    first, alarm = runs[-1]
+    alarm = runs[-1][1]
     at = stretch["timestamp"][alarm].to_pydatetime()
     if now - at > timedelta(hours=RECENT_HOURS):
         return None
-    run = stretch.iloc[first:alarm + 1]
+    run = stretch.iloc[_rise_first(runs):alarm + 1]
     main = responses[responses["main_thread"].astype(bool)]
     if "entrypoint" in main:
         main = main[~main["entrypoint"].fillna("").astype(str).str.startswith("sdk-")]

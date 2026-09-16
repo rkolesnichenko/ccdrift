@@ -65,6 +65,17 @@ def test_misses_rising_today_warn_once_saying_how_many_missed():
     assert early_warning(prompt_frame(RISING), [], state, NOW, h=6) is None
 
 
+def test_a_sustained_rise_across_several_alarms_reports_the_whole_rise():
+    # Nine misses in a row cross h=6 three times, about every third miss (each miss
+    # adds about 2.35): the CUSUM's reset after each alarm is bookkeeping, not the sum
+    # standing at 0, so the rise is reported from the first of the nine, not just the
+    # last three.
+    misses = RISING | {(20, k) for k in range(3, 12)}
+    warning = early_warning(prompt_frame(misses), [], new_state(), NOW, h=6)
+    assert (warning["at"], warning["since"], warning["misses"], warning["turns"]) == (
+        "2026-09-21T11:40:00+00:00", "2026-09-21T09:00:00+00:00", 9, 9)
+
+
 def test_no_warning_while_a_cache_incident_is_open_or_over_its_days():
     open_incident = {"metric": "cache_ratio", "start": "2026-09-20", "end": None, "status": "open"}
     known = {"metric": "cache_ratio", "start": "2026-09-21", "end": "2026-09-21", "status": "recovered"}
@@ -77,5 +88,8 @@ def test_an_alarm_more_than_a_day_old_is_not_news():
 
 
 def test_too_few_turns_before_the_week_give_no_warning():
-    # 14 turns a day: 196 in the 14 days before the week.
-    assert early_warning(prompt_frame(RISING, per_day=14), [], new_state(), NOW, h=6) is None
+    # 14 turns a day: 196 in the 14 days before the week. At h=4 the misses at turns
+    # 3, 6 and 9 would otherwise cross it (1.589, then 3.096 and 3.014 after the
+    # hits that follow, then 4.604), so this exercises the MIN_BASE_TURNS gate rather
+    # than the CUSUM staying quiet on its own.
+    assert early_warning(prompt_frame(RISING, per_day=14), [], new_state(), NOW, h=4) is None

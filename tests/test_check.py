@@ -259,8 +259,12 @@ def test_check_alerts_when_sessions_start_with_much_less_context(tmp_path, sent,
 
 
 def test_check_warns_within_a_day_when_new_prompts_start_missing_the_cache(tmp_path, sent, capsys):
+    # Ten misses in a row on Sep 21 from 10:50 UTC pass h = THRESHOLD = 4.0 at 10:59;
+    # the second run, an hour later, stays quiet.
     main_thread_days(tmp_path / "logs", [{}] * 20 + [{"misses": 10}])
     check_logs(tmp_path, today=date(2026, 9, 22))
     check_logs(tmp_path, today=date(2026, 9, 22), now=datetime(2026, 9, 22, 10, 0, tzinfo=timezone.utc))
     assert sent == ["ccdrift: cache misses rising"]
-    assert "new-prompt turns missed the cache (usually 0.0%)" in capsys.readouterr().out
+    assert ("ccdrift: cache misses rising: 10 of the last 10 new-prompt turns missed the cache (usually 0.0%), "
+            "since 09-21 10:50, on Claude Code 2.1.226 (since 09-01). The daily check confirms or clears it "
+            "within a few days.") in capsys.readouterr().out
