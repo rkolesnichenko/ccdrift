@@ -241,6 +241,39 @@ def test_alerts_quote_release_notes_on_their_topic_from_new_versions(tmp_path, s
     assert "theme picker" not in out
 
 
+def test_alerts_quote_the_version_they_name_first_then_other_new_versions_newest_first(tmp_path, sent, capsys):
+    # Sessions start smaller from Sep 9 on 2.1.265; 2.1.263 came before it and 2.1.267
+    # showed up on Sep 10 in a resumed session, so the alert names only 2.1.265.
+    logs = tmp_path / "cfg" / "projects"
+    for d, version in enumerate(["2.1.261"] * 4 + ["2.1.263"] * 4 + ["2.1.265"] * 3):
+        tokens = 54_000 if version == "2.1.265" else 128_000
+        records = [prompt(at(d * DAY), sid=f"s{d}"),
+                   line(f"m{d}", text(40), ts=at(d * DAY), sid=f"s{d}", cache_creation=100, cache_read=tokens - 110,
+                        version=version, entrypoint="cli")]
+        if d == 9:
+            records.append(line("resumed", text(40), ts=at(d * DAY + 3600), sid=f"s{d}", cache_read=54_000,
+                                version="2.1.267", entrypoint="cli"))
+        write(logs / f"session-{d}.jsonl", records)
+    (tmp_path / "cfg" / "cache").mkdir(parents=True)
+    (tmp_path / "cfg" / "cache" / "changelog.md").write_text(
+        "## 2.1.267\n\n- Fixed the tool list changing when an MCP server reconnects\n\n"
+        "## 2.1.265\n\n- Fixed tool definitions re-rendering after a login\n- Added a theme picker\n"
+        "- Changed the system prompt to load later\n- Changed deferred tools to load on first use\n\n"
+        "## 2.1.263\n\n- Fixed background agents losing their tool results\n- Changed the system prompt on Bedrock\n\n"
+        "## 2.1.261\n\n- Fixed the system prompt on Vertex\n")
+    run_check(logs, tmp_path / "state.json", today=date(2026, 9, 12), digest=False,
+              now=datetime(2026, 9, 12, 9, 0, tzinfo=timezone.utc))
+    out = capsys.readouterr().out
+    assert "ccdrift: session start changed: New sessions start with ~54k tokens of context from 2026-09-09, on " \
+           "Claude Code 2.1.265 (since 09-09)" in out
+    assert [text for text in out.splitlines() if "release notes" in text] == [
+        "    release notes 2.1.265: Fixed tool definitions re-rendering after a login",
+        "    release notes 2.1.265: Changed the system prompt to load later",
+        "    release notes 2.1.267: Fixed the tool list changing when an MCP server reconnects",
+        "    release notes 2.1.263: Changed the system prompt on Bedrock",
+    ]
+
+
 def test_check_alerts_when_a_new_version_stops_logging_effort(tmp_path, sent, capsys):
     main_thread_days(tmp_path / "logs", [{}] * 14 + [{"version": "2.1.280", "effort": None}] * 2)
     check_logs(tmp_path, today=date(2026, 9, 17))

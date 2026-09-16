@@ -151,9 +151,9 @@ ccdrift schedule status
 ```
 
 `report --by version` also shows each version's session start size, where automatic
-compaction started, and release note lines about caching, models, effort, context,
-hooks and subagents. `ccdrift report` also shows stop-hook runs and the models
-subagents ran on.
+compaction started, and up to 2 release note lines about caching, Haiku and default
+models, effort, the system prompt and tool definitions, hooks, or subagent models.
+`ccdrift report` also shows stop-hook runs and the models subagents ran on.
 
 `report --json` holds aggregates only: no paths, session ids or project names.
 

@@ -70,7 +70,7 @@ def version_rows(turns: pd.DataFrame, changelog: Optional[dict] = None, starts: 
                  compactions: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """Per Claude Code version on judged turns, oldest version first: first and last
     day, responses, new-prompt turns with their cache ratio and share of misses,
-    Haiku share, median session-start size and pre-compaction size, and up to 3
+    Haiku share, median session-start size and pre-compaction size, and up to 2
     release notes on file for that version."""
     rows = []
     if not turns.empty:
@@ -86,8 +86,7 @@ def version_rows(turns: pd.DataFrame, changelog: Optional[dict] = None, starts: 
                 "haiku_share": float(group["is_haiku"].mean()),
                 "session_start": _median_for(starts, str(version), "prompt_tokens"),
                 "compacts_at": _median_for(compactions, str(version), "pre_tokens"),
-                "release_notes": [text for _, text in release_notes(changelog or {}, [str(version)], REPORT_TOPICS,
-                                                                    limit=3)],
+                "release_notes": [text for _, text in release_notes(changelog or {}, [str(version)], REPORT_TOPICS)],
             })
     rows.sort(key=lambda row: version_key(row["version"]))
     return pd.DataFrame(rows, columns=VERSION_COLUMNS)

@@ -69,6 +69,14 @@ def blank_cache_stretch(turns: pd.DataFrame, state: dict[str, Any],
             "prompts": prompts}
 
 
+def _note_versions(turns: pd.DataFrame, named: list[str], first_day: str, last_day: str) -> list[str]:
+    """The versions whose release notes an alert quotes: those its message names
+    ("2.1.267 (since 09-10)"), then the others first seen from `first_day` to
+    `last_day`, newest first."""
+    new = new_versions(turns, first_day, last_day)
+    return list(dict.fromkeys([text.split(" ")[0] for text in named] + new[::-1]))
+
+
 def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: DetectorConfig,
             today: date, now: datetime, digest: bool) -> list[Alert]:
     """Everything that changed since the last run, in the order alerts go out;
@@ -87,7 +95,7 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
         notes = []
         if event.kind != "persistent" and event.days:
             first = days_before(event.incident["start"], 7) if event.kind == "flag" else event.incident["start"]
-            notes = release_notes(changelog, new_versions(turns, first, max(event.days)),
+            notes = release_notes(changelog, _note_versions(turns, event.incident["versions"], first, max(event.days)),
                                   TOPIC_OF[event.incident["metric"]])
         alerts.append((kind, title, message, details + note_lines(notes)))
     warning = early_warning(df, incidents, state, now)
@@ -108,20 +116,21 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
             first_days = sorted(days[days.between(incident["start"], incident["end"])].unique())[:3]
             incident["versions"] = versions_text(turns, first_days)
     for change in setting_changes(turns, state, today):
-        notes = release_notes(changelog, new_versions(turns, days_before(change["since"], 7), change["days"][-1]),
-                              TOPIC_OF[change["setting"]])
-        alerts.append(("setting", "ccdrift: setting changed",
-                       change_message(change, versions_text(turns, change["days"])), note_lines(notes)))
+        versions = versions_text(turns, change["days"])
+        notes = release_notes(changelog, _note_versions(turns, versions, days_before(change["since"], 7),
+                                                        change["days"][-1]), TOPIC_OF[change["setting"]])
+        alerts.append(("setting", "ccdrift: setting changed", change_message(change, versions), note_lines(notes)))
     for change in context_alerts(session_starts(df), state, today):
-        notes = release_notes(changelog, new_versions(turns, days_before(change["since"], 7), change["days"][-1]),
-                              "context")
-        alerts.append(("context", "ccdrift: session start changed",
-                       context_message(change, versions_text(turns, change["days"])), note_lines(notes)))
+        versions = versions_text(turns, change["days"])
+        notes = release_notes(changelog, _note_versions(turns, versions, days_before(change["since"], 7),
+                                                        change["days"][-1]), "context")
+        alerts.append(("context", "ccdrift: session start changed", context_message(change, versions),
+                       note_lines(notes)))
     for failure in hook_failures(judged_hook_runs(tables.hook_runs, today), state, today):
-        notes = release_notes(changelog, new_versions(turns, days_before(failure["since"], 7), failure["days"][-1]),
-                              "hooks")
-        alerts.append(("hooks", "ccdrift: hooks failing",
-                       failure_message(failure, versions_text(turns, failure["days"])), note_lines(notes)))
+        versions = versions_text(turns, failure["days"])
+        notes = release_notes(changelog, _note_versions(turns, versions, days_before(failure["since"], 7),
+                                                        failure["days"][-1]), "hooks")
+        alerts.append(("hooks", "ccdrift: hooks failing", failure_message(failure, versions), note_lines(notes)))
     for gap in field_gaps(turns, state, today):
         notes = release_notes(changelog, [] if gap["version"] == "unknown" else [gap["version"]], "fields")
         alerts.append(("fields", "ccdrift: Claude Code stopped logging a field", gap_message(gap), note_lines(notes)))

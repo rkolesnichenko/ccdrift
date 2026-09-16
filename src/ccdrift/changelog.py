@@ -13,15 +13,18 @@ import pandas as pd
 
 from ccdrift.texts import version_key
 
+# Checked against Claude Code's own changelog: "model", "tool", "agent" and "context"
+# matched about half of each version's notes, "mcp" mostly sign-in and menu fixes.
 TOPICS: dict[str, tuple[str, ...]] = {
     "cache": ("cache",),
-    "haiku": ("haiku", "model"),
+    "haiku": ("haiku", "small model", "small-model", "fallback model", "default model"),
     "effort": ("effort", "thinking"),
-    "context": ("system prompt", "tool", "context", "mcp", "deferred"),
+    "context": ("system prompt", "tool definition", "tool list", "deferred"),
     "hooks": ("hook",),
-    "subagents": ("subagent", "agent", "model"),
+    "subagents": ("subagent model", "subagent_model"),
     "fields": ("transcript", "jsonl", "session file"),
 }
+NOTES_PER_VERSION = 2
 NOTE_CHARS = 160
 
 
@@ -65,16 +68,17 @@ def new_versions(turns: pd.DataFrame, first_day: str, last_day: str) -> list[str
 def release_notes(changelog: dict[str, list[str]], versions: Sequence[str],
                   topics: Union[str, Sequence[str]], limit: int = 5) -> list[tuple[str, str]]:
     """Up to `limit` (version, line) pairs from `versions`, in that order, whose text
-    mentions any keyword of `topics`; long lines are cut at NOTE_CHARS."""
+    mentions any keyword of `topics`, at most NOTES_PER_VERSION from each version; long
+    lines are cut at NOTE_CHARS."""
     names = (topics,) if isinstance(topics, str) else tuple(topics)
     words = tuple(word for name in names for word in TOPICS[name])
     found = []
     for version in versions:
-        for text in changelog.get(version, []):
-            if any(word in text.lower() for word in words):
-                found.append((version, text if len(text) <= NOTE_CHARS else text[:NOTE_CHARS - 1] + "…"))
-                if len(found) == limit:
-                    return found
+        lines = [text for text in changelog.get(version, []) if any(word in text.lower() for word in words)]
+        for text in lines[:NOTES_PER_VERSION]:
+            found.append((version, text if len(text) <= NOTE_CHARS else text[:NOTE_CHARS - 1] + "…"))
+            if len(found) == limit:
+                return found
     return found
 
 

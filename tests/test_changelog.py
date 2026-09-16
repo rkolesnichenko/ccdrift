@@ -47,6 +47,31 @@ def test_release_notes_keep_lines_on_the_topic_in_version_order(tmp_path):
         ("2.1.261", "Hooks now receive the session's effort level")]
 
 
+def test_release_notes_quote_at_most_2_lines_a_version():
+    notes = {"2.1.267": ["Fixed a prompt-cache miss after /rewind", "Fixed a prompt-cache miss on resume",
+                         "Fixed a prompt-cache miss after a login"],
+             "2.1.265": ["Fixed a prompt-cache miss in print mode"]}
+    assert release_notes(notes, ["2.1.267", "2.1.265"], "cache") == [
+        ("2.1.267", "Fixed a prompt-cache miss after /rewind"), ("2.1.267", "Fixed a prompt-cache miss on resume"),
+        ("2.1.265", "Fixed a prompt-cache miss in print mode")]
+
+
+def test_release_notes_skip_lines_that_only_mention_a_model_a_tool_an_agent_or_context():
+    # Those words matched about half of each version's notes in Claude Code's real changelog.
+    notes = {"2.1.267": ["Fixed the /model picker showing disabled models",
+                         "Fixed background agents losing their tool results",
+                         "Fixed a tip about 5x more context on Opus",
+                         "Fixed MCP tools rewriting the tool list mid-session",
+                         "Changed the default model for Enterprise seats to Opus 5",
+                         "Changed CLAUDE_CODE_SUBAGENT_MODEL to set the default subagent model"]}
+    assert release_notes(notes, ["2.1.267"], "context") == [
+        ("2.1.267", "Fixed MCP tools rewriting the tool list mid-session")]
+    assert release_notes(notes, ["2.1.267"], "haiku") == [
+        ("2.1.267", "Changed the default model for Enterprise seats to Opus 5")]
+    assert release_notes(notes, ["2.1.267"], "subagents") == [
+        ("2.1.267", "Changed CLAUDE_CODE_SUBAGENT_MODEL to set the default subagent model")]
+
+
 def test_long_release_notes_are_cut_at_160_characters():
     notes = release_notes({"2.1.1": ["cache " + "x" * 300]}, ["2.1.1"], "cache")
     assert len(notes[0][1]) == 160 and notes[0][1].endswith("…")
