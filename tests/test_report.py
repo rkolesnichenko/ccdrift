@@ -10,7 +10,8 @@ from ccdrift.history import load_history
 from ccdrift.logs import judged_turns
 from ccdrift.report import daily_rows, run_report, version_key
 from tests.helpers import (DAY, HAIKU, QUIET, at, busy_days, compact_boundary, daily_turns,
-                           damage_responses_table, line, main_thread_days, stop_hook_summary, text, write)
+                           damage_responses_table, line, main_thread_days, prompt, stop_hook_summary, text,
+                           tool_result, write)
 
 
 def test_report_lists_recent_days_with_their_metrics(tmp_path, capsys):
@@ -21,9 +22,9 @@ def test_report_lists_recent_days_with_their_metrics(tmp_path, capsys):
         "Flagged once 3 of any 4 days in a row pass the cutoff: z <= -3.0 for the cache ratio, "
         "z >= +3.5 for Haiku share.",
         "",
-        "day         responses  cache ratio      z  haiku share      z  flagged",
-        "2026-09-02         60        0.900      -        0.000      -",
-        "2026-09-03         60        0.900      -        0.000      -",
+        "day         responses  cache ratio      z  haiku share      z  loop misses  subagent misses  flagged",
+        "2026-09-02         60        0.900      -        0.000      -            -                -",
+        "2026-09-03         60        0.900      -        0.000      -            -                -",
         "",
         "Incidents: none yet",
         "",
@@ -94,13 +95,17 @@ def test_report_explains_a_history_store_whose_rows_cant_be_read(tmp_path, capsy
 def test_report_by_version_compares_claude_code_versions_oldest_first(tmp_path, capsys):
     main_thread_days(tmp_path / "logs", [{"version": "2.1.99"}] * 2 + [{"version": "2.1.233"}] * 2)
     assert run_report(tmp_path / "logs", tmp_path / "state.json", by="version", today=date(2026, 9, 5)) == 0
-    assert capsys.readouterr().out.splitlines()[:6] == [
+    assert capsys.readouterr().out.splitlines()[:7] == [
         "Complete UTC days with main-thread activity, by Claude Code version.",
         "A miss is a new-prompt turn that reads less than half its input from the cache.",
+        "A loop miss is a tool-loop turn that reads less than half of what the response before it had cached.",
         "",
-        "version      first day   last day    responses  prompt turns  cache ratio  misses  haiku share  session start  compacts at",
-        "2.1.99       2026-09-01  2026-09-02        120           118        0.900    0.0%        0.000              -            -",
-        "2.1.233      2026-09-03  2026-09-04        120           118        0.900    0.0%        0.000              -            -",
+        "version      first day   last day    responses  prompt turns  cache ratio  misses  loop misses  subagent misses"
+        "  haiku share  session start  compacts at",
+        "2.1.99       2026-09-01  2026-09-02        120           118        0.900    0.0%            -                -"
+        "        0.000              -            -",
+        "2.1.233      2026-09-03  2026-09-04        120           118        0.900    0.0%            -                -"
+        "        0.000              -            -",
     ]
 
 
@@ -110,10 +115,13 @@ def test_report_by_version_shows_session_start_size_and_where_compaction_starts(
     write(tmp_path / "logs" / "compacted.jsonl",
           [compact_boundary(at(3 * DAY + 30), trigger="auto", pre_tokens=971_000, version="2.1.233")])
     run_report(tmp_path / "logs", tmp_path / "state.json", by="version", today=date(2026, 9, 6))
-    assert capsys.readouterr().out.splitlines()[3:6] == [
-        "version      first day   last day    responses  prompt turns  cache ratio  misses  haiku share  session start  compacts at",
-        "2.1.99       2026-09-01  2026-09-03        180           177        0.900    0.0%        0.000             1k            -",
-        "2.1.233      2026-09-04  2026-09-05        120           118        0.900    0.0%        0.000              -         970k",
+    assert capsys.readouterr().out.splitlines()[4:7] == [
+        "version      first day   last day    responses  prompt turns  cache ratio  misses  loop misses  subagent misses"
+        "  haiku share  session start  compacts at",
+        "2.1.99       2026-09-01  2026-09-03        180           177        0.900    0.0%            -                -"
+        "        0.000             1k            -",
+        "2.1.233      2026-09-04  2026-09-05        120           118        0.900    0.0%            -                -"
+        "        0.000              -         970k",
     ]
 
 
@@ -134,6 +142,55 @@ def test_report_shows_hooks_and_subagent_models_over_its_days(tmp_path, capsys):
                                   "  general-purpose (model picked by the caller): claude-sonnet-5 100%"]
 
 
+def tool_loop_logs(path):
+    """Sep 1-2 on 2.1.280 and Sep 3 on 2.1.281: a main-thread session a day of 1 prompt
+    and 4 tool-loop turns a minute apart, the last missing the cache on Sep 2, and on
+    Sep 3 a subagent of 1 prompt and 2 tool-loop turns, the second a miss."""
+    for d, version in enumerate(["2.1.280", "2.1.280", "2.1.281"]):
+        records = [prompt(at(d * DAY)), line(f"m{d}-0", text(40), ts=at(d * DAY), sid=f"s{d}", cache_creation=1000,
+                                             version=version, entrypoint="cli")]
+        for k in range(1, 5):
+            read = 0 if (d == 1 and k == 4) else 1000 * k
+            records += [tool_result(at(d * DAY + 60 * k), sid=f"s{d}"),
+                        line(f"m{d}-{k}", text(40), ts=at(d * DAY + 60 * k), sid=f"s{d}", cache_read=read,
+                             cache_creation=1000 if read else 1000 * (k + 1), version=version, entrypoint="cli")]
+        write(path / f"s{d}.jsonl", records)
+    write(path / "s2" / "subagents" / "agent-a.jsonl", [
+        prompt(at(2 * DAY + 10), sid="s2", sidechain=True),
+        line("a0", text(40), ts=at(2 * DAY + 10), sid="s2", sidechain=True, cache_creation=500, version="2.1.281",
+             entrypoint="cli"),
+        tool_result(at(2 * DAY + 20), sid="s2", sidechain=True),
+        line("a1", text(40), ts=at(2 * DAY + 20), sid="s2", sidechain=True, cache_read=500, cache_creation=100,
+             version="2.1.281", entrypoint="cli"),
+        tool_result(at(2 * DAY + 30), sid="s2", sidechain=True),
+        line("a2", text(40), ts=at(2 * DAY + 30), sid="s2", sidechain=True, cache_read=0, cache_creation=700,
+             version="2.1.281", entrypoint="cli"),
+    ])
+
+
+def test_report_counts_tool_loop_misses_by_day_and_version(tmp_path, capsys):
+    tool_loop_logs(tmp_path / "logs")
+    run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4))
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[4:7] == [
+        "2026-09-01          5            -      -        0.000      -          0/4                -",
+        "2026-09-02          5            -      -        0.000      -          1/4                -",
+        "2026-09-03          5            -      -        0.000      -          0/4              1/2",
+    ]
+    run_report(tmp_path / "logs", tmp_path / "state.json", by="version", today=date(2026, 9, 4))
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[5:7] == [
+        "2.1.280      2026-09-01  2026-09-02         10             0            -       -       12.50%                -"
+        "        0.000              -            -",
+        "2.1.281      2026-09-03  2026-09-03          5             0            -       -        0.00%           50.00%"
+        "        0.000              -            -",
+    ]
+    run_report(tmp_path / "logs", tmp_path / "state.json", by="version", as_json=True, today=date(2026, 9, 4))
+    versions = json.loads(capsys.readouterr().out)["versions"]
+    assert [(v["loop_turns"], v["loop_misses"], v["subagent_loop_turns"], v["subagent_loop_misses"])
+            for v in versions] == [(8, 1, 0, 0), (4, 0, 2, 1)]
+
+
 def test_versions_sort_by_their_numbers():
     assert sorted(["2.1.233", "unknown", "2.1.99", "2.0.300"], key=version_key) == \
         ["2.0.300", "2.1.99", "2.1.233", "unknown"]
@@ -147,7 +204,9 @@ def test_report_json_holds_aggregates_without_paths_or_session_ids(tmp_path, cap
     assert list(payload) == ["view", "days", "incidents", "reported_before_incidents", "settings", "hooks",
                              "subagents", "cutoffs", "flag_rule"]
     assert payload["days"][0] == {"day": "2026-09-01", "responses": 60, "cache_ratio": pytest.approx(0.9),
-                                  "cache_z": None, "haiku_share": 0.0, "haiku_z": None, "flagged": []}
+                                  "cache_z": None, "haiku_share": 0.0, "haiku_z": None, "loop_turns": 0,
+                                  "loop_misses": 0, "subagent_loop_turns": 0, "subagent_loop_misses": 0,
+                                  "flagged": []}
     assert payload["cutoffs"] == {"cache_ratio": -3.0, "haiku_fraction": 3.5}
     assert str(tmp_path) not in out and ".jsonl" not in out and '"s0"' not in out
 

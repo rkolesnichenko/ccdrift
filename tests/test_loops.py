@@ -1,9 +1,11 @@
 """Tool-loop cache misses: the turns judged and the alarms that count."""
 
+from datetime import date
+
 import pandas as pd
 
 from ccdrift.early import alarm_runs, clamp_rate
-from ccdrift.loops import LoopSetting, loop_turns, qualifying_alarms
+from ccdrift.loops import COUNT_COLUMNS, LoopSetting, loop_counts, loop_turns, qualifying_alarms
 
 
 def test_loop_turns_keep_each_streams_tool_loop_turns_outside_sdk_sessions_in_time_order():
@@ -22,6 +24,11 @@ def test_a_frame_without_loop_columns_has_no_loop_turns():
     df = pd.DataFrame({"timestamp": pd.to_datetime(["2026-09-01T10:00Z"]), "day": ["2026-09-01"],
                        "main_thread": [True]})
     assert loop_turns(df, "main").empty
+
+
+def test_tool_loop_counts_of_a_table_without_loop_turns_are_empty():
+    counts = loop_counts(pd.DataFrame(), date(2026, 9, 4))
+    assert counts.empty and list(counts.columns) == COUNT_COLUMNS
 
 
 def test_the_usual_rate_can_be_held_below_a_lower_p1():

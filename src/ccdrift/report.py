@@ -19,24 +19,33 @@ from ccdrift.history import HistoryError, load_history
 from ccdrift.hooks import hooks_lines, hooks_summary, judged_hook_runs
 from ccdrift.incidents import exclusions, incident_cost
 from ccdrift.logs import judged_subagent_turns, judged_turns, no_transcripts_message, outside_sdk
+from ccdrift.loops import COUNT_COLUMNS, loop_counts
 from ccdrift.sessions import MIN_SESSIONS, session_starts
 from ccdrift.settings import settings_lines, settings_summary, subagent_lines, subagent_summary
 from ccdrift.state import load_state
 from ccdrift.texts import INCIDENT_METRICS, SHORT_NAMES, approx, incident_line, version_key
 
-COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", "flagged"]
+COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", *COUNT_COLUMNS, "flagged"]
 VERSION_COLUMNS = ["version", "first_day", "last_day", "responses", "prompt_turns", "cache_ratio",
-                   "miss_share", "haiku_share", "session_start", "compacts_at", "release_notes"]
+                   "miss_share", *COUNT_COLUMNS, "haiku_share", "session_start", "compacts_at", "release_notes"]
 REPORT_TOPICS = ("cache", "haiku", "effort", "context", "hooks", "subagents")
 DEFAULT_DAYS = 21
 Entry = tuple[dict, float]  # an incident and its cost
 
 
+def _counts_for(loops: Optional[pd.DataFrame], keys: Sequence[str]) -> pd.DataFrame:
+    """The tool-loop counts (see loops.loop_counts) for `keys`, 0 where there are none."""
+    if loops is None or loops.empty:
+        return pd.DataFrame(0, index=list(keys), columns=COUNT_COLUMNS)
+    return loops.reindex(list(keys), fill_value=0)
+
+
 def daily_rows(turns: pd.DataFrame, days: int = DEFAULT_DAYS, cfg: Optional[DetectorConfig] = None,
-               incidents: Sequence[dict] = ()) -> pd.DataFrame:
+               incidents: Sequence[dict] = (), loops: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """The last `days` days of judged turns, each judged against the days before it
     with incident days left out: responses, cache ratio and Haiku share with their
-    z-scores, and the metrics flagged that day."""
+    z-scores, tool-loop turns and misses from `loops` (loop_counts by day), and the
+    metrics flagged that day."""
     if turns.empty:
         return pd.DataFrame(columns=COLUMNS)
     metrics = bin_metrics(turns)
@@ -44,13 +53,16 @@ def daily_rows(turns: pd.DataFrame, days: int = DEFAULT_DAYS, cfg: Optional[Dete
     detected = detect(metrics, cfg or DetectorConfig(), excluded).tail(days)
     flagged = [", ".join(short for metric, short in SHORT_NAMES.items() if row[f"{metric}__flag"])
                for _, row in detected.iterrows()]
+    day_list = detected["bin"].astype(str).tolist()
+    counts = _counts_for(loops, day_list)
     return pd.DataFrame({
-        "day": detected["bin"].astype(str).to_numpy(),
+        "day": day_list,
         "responses": detected["n_turns"].to_numpy(),
         "cache_ratio": detected["cache_ratio"].to_numpy(),
         "cache_z": detected["cache_ratio__z"].to_numpy(),
         "haiku_share": detected["haiku_fraction"].to_numpy(),
         "haiku_z": detected["haiku_fraction__z"].to_numpy(),
+        **{column: counts[column].to_numpy() for column in COUNT_COLUMNS},
         "flagged": flagged,
     }, columns=COLUMNS)
 
@@ -68,15 +80,17 @@ def _size(value: float) -> str:
 
 
 def version_rows(turns: pd.DataFrame, changelog: Optional[dict] = None, starts: Optional[pd.DataFrame] = None,
-                 compactions: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+                 compactions: Optional[pd.DataFrame] = None, loops: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """Per Claude Code version on judged turns, oldest version first: first and last
     day, responses, new-prompt turns with their cache ratio and share of misses,
-    Haiku share, median session-start size (over MIN_SESSIONS or more sessions) and
-    pre-compaction size, and up to 2 release notes on file for that version."""
+    tool-loop turns and misses from `loops` (loop_counts by version), Haiku share,
+    median session-start size (over MIN_SESSIONS or more sessions) and pre-compaction
+    size, and up to 2 release notes on file for that version."""
     rows = []
     if not turns.empty:
         versions = (turns["version"].fillna("unknown") if "version" in turns
                     else pd.Series("unknown", index=turns.index))
+        counts = _counts_for(loops, [str(version) for version in versions.unique()])
         for version, group in turns.groupby(versions):
             prompts = group[group["prompt_within_ttl"].astype(bool)]
             rows.append({
@@ -84,6 +98,7 @@ def version_rows(turns: pd.DataFrame, changelog: Optional[dict] = None, starts: 
                 "responses": len(group), "prompt_turns": len(prompts),
                 "cache_ratio": float(prompts["cache_read_ratio"].mean()) if len(prompts) else math.nan,
                 "miss_share": float(prompts["is_miss"].astype(bool).mean()) if len(prompts) else math.nan,
+                **{column: int(counts.loc[str(version), column]) for column in COUNT_COLUMNS},
                 "haiku_share": float(group["is_haiku"].mean()),
                 "session_start": _median_for(starts, str(version), "prompt_tokens", MIN_SESSIONS),
                 "compacts_at": _median_for(compactions, str(version), "pre_tokens"),
@@ -91,6 +106,13 @@ def version_rows(turns: pd.DataFrame, changelog: Optional[dict] = None, starts: 
             })
     rows.sort(key=lambda row: version_key(row["version"]))
     return pd.DataFrame(rows, columns=VERSION_COLUMNS)
+
+
+def _misses(misses: int, turns: int, share: bool = False) -> str:
+    """Tool-loop misses as "2/412", or as a share ("0.49%"); "-" without turns."""
+    if not turns:
+        return "-"
+    return f"{misses / turns:.2%}" if share else f"{misses}/{turns}"
 
 
 def _number(value: Any, spec: str) -> str:
@@ -125,13 +147,15 @@ def format_report(rows: pd.DataFrame, entries: Sequence[Entry], reported: dict, 
         f"Flagged once {cfg.deviant_bins} of any {cfg.flag_window} days in a row pass the cutoff: "
         f"z <= -{cache_cutoff:.1f} for the cache ratio, z >= +{haiku_cutoff:.1f} for Haiku share.",
         "",
-        f"{'day':<10}  {'responses':>9}  {'cache ratio':>11}  {'z':>5}  {'haiku share':>11}  {'z':>5}  flagged",
+        f"{'day':<10}  {'responses':>9}  {'cache ratio':>11}  {'z':>5}  {'haiku share':>11}  {'z':>5}  "
+        f"{'loop misses':>11}  {'subagent misses':>15}  flagged",
     ]
     for row in rows.itertuples(index=False):
         lines.append(
             f"{row.day:<10}  {int(row.responses):>9}  {_number(row.cache_ratio, '.3f'):>11}  "
             f"{_number(row.cache_z, '+.1f'):>5}  {_number(row.haiku_share, '.3f'):>11}  "
-            f"{_number(row.haiku_z, '+.1f'):>5}  {row.flagged}".rstrip())
+            f"{_number(row.haiku_z, '+.1f'):>5}  {_misses(row.loop_misses, row.loop_turns):>11}  "
+            f"{_misses(row.subagent_loop_misses, row.subagent_loop_turns):>15}  {row.flagged}".rstrip())
     return "\n".join(lines + _tail(entries, reported, summary, extra)) + "\n"
 
 
@@ -140,9 +164,10 @@ def format_version_report(rows: pd.DataFrame, entries: Sequence[Entry], reported
     lines = [
         "Complete UTC days with main-thread activity, by Claude Code version.",
         "A miss is a new-prompt turn that reads less than half its input from the cache.",
+        "A loop miss is a tool-loop turn that reads less than half of what the response before it had cached.",
         "",
         f"{'version':<11}  {'first day':<10}  {'last day':<10}  {'responses':>9}  {'prompt turns':>12}  "
-        f"{'cache ratio':>11}  {'misses':>6}  {'haiku share':>11}"
+        f"{'cache ratio':>11}  {'misses':>6}  {'loop misses':>11}  {'subagent misses':>15}  {'haiku share':>11}"
         f"  {'session start':>13}  {'compacts at':>11}",
     ]
     for row in rows.itertuples(index=False):
@@ -150,6 +175,8 @@ def format_version_report(rows: pd.DataFrame, entries: Sequence[Entry], reported
         lines.append(
             f"{row.version:<11}  {row.first_day:<10}  {row.last_day:<10}  {int(row.responses):>9}  "
             f"{int(row.prompt_turns):>12}  {_number(row.cache_ratio, '.3f'):>11}  {misses:>6}  "
+            f"{_misses(row.loop_misses, row.loop_turns, share=True):>11}  "
+            f"{_misses(row.subagent_loop_misses, row.subagent_loop_turns, share=True):>15}  "
             f"{_number(row.haiku_share, '.3f'):>11}"
             f"  {_size(row.session_start):>13}  {_size(row.compacts_at):>11}")
         lines += [f"    release notes: {text}" for text in row.release_notes]
@@ -223,11 +250,11 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
             if not compactions.empty:
                 compactions = compactions[compactions["day"].astype(str).isin(recent)]
         changelog = load_changelog(changelog_path(source))
-        rows = version_rows(turns, changelog, starts, compactions)
         window = sorted(turns["day"].astype(str).unique())
+        rows = version_rows(turns, changelog, starts, compactions, loop_counts(df, today, by="version", days=window))
         extra_lines, extra_json = [], {}
     else:
-        rows = daily_rows(turns, days or DEFAULT_DAYS, cfg, incidents)
+        rows = daily_rows(turns, days or DEFAULT_DAYS, cfg, incidents, loop_counts(df, today))
         window = rows["day"].tolist()
         hooks = hooks_summary(judged_hook_runs(tables.hook_runs, today), window)
         subagents = subagent_summary(judged_subagent_turns(df, today), window)

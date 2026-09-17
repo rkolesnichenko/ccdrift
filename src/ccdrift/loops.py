@@ -9,7 +9,8 @@ subagents) and set LOOP_SETTINGS; None means that stream gets no warning."""
 from __future__ import annotations
 
 from collections import namedtuple
-from typing import Optional
+from datetime import date
+from typing import Optional, Sequence
 
 import pandas as pd
 
@@ -36,6 +37,28 @@ def loop_turns(df: pd.DataFrame, stream: str) -> pd.DataFrame:
     turns["day"] = turns["day"].astype(str)
     turns["is_loop_miss"] = turns["is_loop_miss"].astype(bool)
     return turns.sort_values("timestamp", kind="stable").reset_index(drop=True)
+
+
+PREFIXES = {"main": "loop", "subagent": "subagent_loop"}
+COUNT_COLUMNS = ["loop_turns", "loop_misses", "subagent_loop_turns", "subagent_loop_misses"]
+
+
+def loop_counts(df: pd.DataFrame, today: date, by: str = "day", days: Optional[Sequence[str]] = None) -> pd.DataFrame:
+    """Tool-loop turns and misses of each stream (COUNT_COLUMNS) on complete UTC days
+    before `today`, or only on `days`, per day or per Claude Code version ("unknown"
+    when not logged)."""
+    parts = []
+    for stream in STREAMS:
+        turns = loop_turns(df, stream)
+        keep = turns["day"] < today.isoformat()
+        if days is not None:
+            keep &= turns["day"].isin(list(days))
+        turns = turns[keep]
+        key = turns["day"] if by == "day" else turns["version"].fillna("unknown").astype(str)
+        grouped = turns["is_loop_miss"].groupby(key)
+        prefix = PREFIXES[stream]
+        parts.append(pd.DataFrame({f"{prefix}_turns": grouped.size(), f"{prefix}_misses": grouped.sum()}))
+    return pd.concat(parts, axis=1).fillna(0).astype(int)
 
 
 def qualifying_alarms(turns: pd.DataFrame, base_rate: float, setting: LoopSetting) -> list[tuple[int, int]]:
