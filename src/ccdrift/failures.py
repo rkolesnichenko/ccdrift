@@ -65,9 +65,10 @@ def failure_counts(failures: pd.DataFrame, turns: pd.DataFrame) -> pd.DataFrame:
 
 
 def _judged_days(counts: pd.DataFrame, state_key: str, state: dict[str, Any], today: date,
-                 hit: Callable[[pd.Series, pd.DataFrame], bool]) -> list[pd.Series]:
-    """The active days within RECENT_DAYS that `hit` accepts against the active days
-    before them, skipping those a reported episode already covers."""
+                 hit: Callable[[pd.Series, pd.DataFrame], bool]) -> list[tuple[pd.Series, pd.DataFrame]]:
+    """The active days within RECENT_DAYS that `hit` accepts, each with the active days
+    before it that `hit` judged it against, skipping those a reported episode already
+    covers."""
     if counts.empty:
         return []
     active = counts[counts["responses"] >= ACTIVE_RESPONSES].reset_index(drop=True)
@@ -86,7 +87,7 @@ def _judged_days(counts: pd.DataFrame, state_key: str, state: dict[str, Any], to
         # reported for a day within BEFORE_DAYS before it is left alone.
         if any(episode["since"] >= earliest for episode in state[state_key]):
             continue
-        found.append(active.loc[i])
+        found.append((active.loc[i], before))
     return found
 
 
@@ -99,11 +100,8 @@ def failing_requests(counts: pd.DataFrame, state: dict[str, Any], today: date,
         return row["requests"] >= floor and row["requests"] >= ratio * max(1, int(before["requests"].max()))
 
     new = []
-    for row in _judged_days(counts, "failed_requests", state, today, hit):
+    for row, before in _judged_days(counts, "failed_requests", state, today, hit):
         day = str(row["day"])
-        earliest = (date.fromisoformat(day) - timedelta(days=BEFORE_DAYS)).isoformat()
-        days = counts["day"].astype(str)
-        before = counts[(days < day) & (days >= earliest)]
         episode = {"since": day, "days": [day], "requests": int(row["requests"]),
                    "kinds": {kind: int(row[kind]) for kind in COUNTED if int(row[kind])},
                    "before": int(before["requests"].max()) if len(before) else 0,
@@ -127,10 +125,12 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
         return cut >= floor and today_share >= share and today_share >= CUT_RATIO * usual
 
     new = []
-    for row in _judged_days(counts, "cut_short", state, today, hit):
+    for row, before in _judged_days(counts, "cut_short", state, today, hit):
+        before_share = float(((before["truncated"] + before["refused"]) / before["responses"]).max())
         episode = {"since": str(row["day"]), "days": [str(row["day"])],
                    "cut": int(row["truncated"] + row["refused"]), "truncated": int(row["truncated"]),
                    "refused": int(row["refused"]), "responses": int(row["responses"]),
+                   "before_share": before_share,
                    "reported_on": today.isoformat()}
         state["cut_short"].append(episode)
         new.append(episode)
@@ -143,17 +143,20 @@ def _on(versions: Sequence[str]) -> str:
 
 def requests_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
     named = kinds_text(episode["kinds"])
+    before = (f"against at most {episode['before']} a day in the {BEFORE_DAYS} days before" if episode["before"] > 0
+              else f"against none in the {BEFORE_DAYS} days before")
     return (f"{episode['requests']} requests failed on {episode['since']}"
-            f"{f' ({named})' if named else ''}, against at most {episode['before']} a day in the "
-            f"{BEFORE_DAYS} days before{_on(versions)}. Claude Code retries these itself; a run of them points at "
-            "the API or your connection, not your setup.")
+            f"{f' ({named})' if named else ''}, {before}{_on(versions)}. Claude Code retries these itself; a run "
+            "of them points at the API or your connection, not your setup.")
 
 
 def cut_short_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
     what = "stopped at the token limit or refused" if episode["refused"] else "stopped at the token limit"
     share = episode["cut"] / episode["responses"] if episode["responses"] else 0.0
+    before = (f"against at most {episode['before_share']:.2%} a day in the {BEFORE_DAYS} days before"
+              if episode["before_share"] > 0 else f"against none in the {BEFORE_DAYS} days before")
     return (f"{episode['cut']} of {episode['responses']:,} main-thread responses {what} on {episode['since']} "
-            f"({share:.2%}), against under {CUT_USUAL:.2%} a day in the {BEFORE_DAYS} days before{_on(versions)}. "
+            f"({share:.2%}), {before}{_on(versions)}. "
             "A Claude Code update may have changed the output limit.")
 
 

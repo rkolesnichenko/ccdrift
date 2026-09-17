@@ -12,7 +12,7 @@ from ccdrift.history import History, load_history
 from ccdrift.logs import judged_turns, parse_all, parse_source
 from ccdrift.state import new_state, save_state
 from ccdrift.texts import cut_short_line, failure_line
-from tests.helpers import api_error, at, failure_days, line, no_response_stub, retry_record, text, write
+from tests.helpers import DAY, api_error, at, failure_days, line, no_response_stub, prompt, retry_record, text, write
 
 
 def parsed_failures(tmp_path, records):
@@ -104,11 +104,31 @@ def test_a_day_alerts_when_responses_stop_at_the_token_limit_far_more_than_befor
     counts = counts_of(tmp_path, [{}] * 6 + [{"truncated": 5}])
     state = state_with()
     episodes = cut_short(counts, state, date(2026, 9, 8))
-    assert [(e["since"], e["cut"], e["truncated"], e["refused"], e["responses"]) for e in episodes] == [
-        ("2026-09-07", 5, 5, 0, 60)]
+    assert [(e["since"], e["cut"], e["truncated"], e["refused"], e["responses"], e["before_share"])
+            for e in episodes] == [("2026-09-07", 5, 5, 0, 60, 0.0)]
     assert state["cut_short"] == episodes
     few = counts_of(tmp_path, [{}] * 6 + [{"truncated": 4}])
     assert cut_short(few, state_with(), date(2026, 9, 8)) == []
+
+
+def test_the_days_an_alert_compares_with_are_the_active_ones(tmp_path):
+    # 5 quiet active days, then the alerting day; a day within the 14 days before it has
+    # far more failures than any of them but too few responses to count, and must be
+    # ignored both for whether the alert fires and for the "before" it reports.
+    failure_days(tmp_path / "logs", [{}] * 5 + [{"errors": 5}])
+    quiet = []
+    for k in range(10):
+        ts = at(-2 * DAY + 60 * k)
+        quiet.append(prompt(ts, sid="quiet"))
+        quiet.append(line(f"quiet-{k}", text(40), ts=ts, sid="quiet", version="2.1.226", entrypoint="cli"))
+    quiet += [api_error(at(-2 * DAY + 600 + j), sid="quiet", version="2.1.226") for j in range(20)]
+    write(tmp_path / "logs" / "quiet.jsonl", quiet)
+
+    today = date(2026, 10, 1)
+    tables = parse_all(tmp_path / "logs")
+    counts = failure_counts(judged_failures(tables.failures, today), judged_turns(tables.responses, today))
+    episodes = failing_requests(counts, state_with(), date(2026, 9, 7))
+    assert [(e["since"], e["requests"], e["before"]) for e in episodes] == [("2026-09-06", 5, 0)]
 
 
 def test_the_messages_name_the_kinds_the_counts_and_the_version():
@@ -118,11 +138,15 @@ def test_the_messages_name_the_kinds_the_counts_and_the_version():
         "9 requests failed on 2026-09-20 (7 overloaded, 2 retried), against at most 1 a day in the 14 days before, "
         "on Claude Code 2.1.280. Claude Code retries these itself; a run of them points at the API or your "
         "connection, not your setup.")
+    clean = {**episode, "before": 0}
+    assert requests_message(clean, []) == (
+        "9 requests failed on 2026-09-20 (7 overloaded, 2 retried), against none in the 14 days before. Claude "
+        "Code retries these itself; a run of them points at the API or your connection, not your setup.")
     cut = {"since": "2026-09-20", "days": ["2026-09-20"], "cut": 8, "truncated": 8, "refused": 0,
-           "responses": 640, "reported_on": "2026-09-21"}
+           "responses": 640, "before_share": 0.0014, "reported_on": "2026-09-21"}
     assert cut_short_message(cut, []) == (
-        "8 of 640 main-thread responses stopped at the token limit on 2026-09-20 (1.25%), against under 0.10% a day "
-        "in the 14 days before. A Claude Code update may have changed the output limit.")
+        "8 of 640 main-thread responses stopped at the token limit on 2026-09-20 (1.25%), against at most 0.14% a "
+        "day in the 14 days before. A Claude Code update may have changed the output limit.")
     assert failure_line(episode) == (
         "requests failing on 2026-09-20: 9 (7 overloaded, 2 retried), at most 1 a day before")
     assert cut_short_line(cut) == "responses cut short on 2026-09-20: 8 of 640 main-thread responses"
