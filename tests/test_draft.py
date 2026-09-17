@@ -55,6 +55,23 @@ def test_the_days_compared_are_the_baseline_the_incident_was_judged_against_and_
     assert (periods["during"][-1], len(periods["during"]), periods["after"]) == ("2026-10-10", 21, [])
 
 
+def test_after_stops_before_a_later_incident_a_dismissed_one_doesnt_and_persistent_has_none(tmp_path):
+    main_thread_days(tmp_path / "logs", [{}] * 40)
+    turns = judged_turns(parse_source(tmp_path / "logs"), date(2026, 10, 20))
+    closed = incident("cache_ratio", "2026-09-20", "2026-09-22")
+    later = incident("cache_ratio", "2026-09-30", "2026-10-02")
+    periods = draft_periods(turns, closed, [closed, later], DetectorConfig())
+    assert periods["after"] == [f"2026-09-{day:02d}" for day in range(23, 30)]
+
+    dismissed = incident("cache_ratio", "2026-09-30", "2026-10-02", status="dismissed")
+    periods = draft_periods(turns, closed, [closed, dismissed], DetectorConfig())
+    assert (periods["after"][0], len(periods["after"])) == ("2026-09-23", 14)
+
+    persistent = incident("cache_ratio", "2026-09-20", "2026-09-22", status="persistent")
+    periods = draft_periods(turns, persistent, [persistent], DetectorConfig())
+    assert periods["after"] == []
+
+
 def cache_logs(path):
     """Sep 1-14 clean on 2.1.279; Sep 15-18 on 2.1.280, the last 6 of 60 prompts a day
     missing the cache; Sep 19-21 clean on 2.1.281; release notes for both new versions."""
@@ -76,7 +93,8 @@ CACHE_METHOD = (
     "that open with a new prompt within an hour of the previous response, outside Agent SDK sessions and not right "
     "after a compaction. A turn misses the cache when it reads less than half of its input from it. Each day is "
     "compared with up to 14 days before it; an incident opens when 3 of 4 days in a row fall below z = −3.0 and "
-    "closes once 3 pooled days are back inside the cutoff on 3 days in a row.\n")
+    "closes once 3 pooled days are back inside the cutoff on 3 days in a row, or after 30 days, when it takes the "
+    "change as the new normal.\n")
 
 
 def test_a_cache_incident_draft_holds_the_evidence_as_aggregates(tmp_path):
@@ -113,9 +131,10 @@ def test_a_cache_incident_draft_holds_the_evidence_as_aggregates(tmp_path):
         "### Release notes that may be related\n\n"
         "- 2.1.280: Changed how the prompt cache is keyed\n\n"
         "### Environment\n\n"
-        "- Claude Code: 2.1.280 (CLI)\n"
+        "- Claude Code: 2.1.280 (entrypoint cli)\n"
         "- Models during: claude-opus-5 (100.00% of responses)\n"
-        "- Main thread: cache tier 1h on 100.00% of responses, effort xhigh on 100.00% of responses\n"
+        "- Main thread: cache tier 1h on 100.00% of responses that write to the cache, effort xhigh on 100.00% of "
+        "responses\n"
         "- OS: macOS 26.5.2\n"
         f"- Measured with ccdrift {__version__} from local session transcripts (aggregates only)\n\n"
         + CACHE_METHOD)
@@ -131,6 +150,24 @@ def test_a_draft_of_an_open_incident_says_it_is_still_going_and_has_no_after(tmp
         "tokens were written to the cache again beyond the usual miss rate.")
     assert "| After" not in text
     assert "- OS: Linux 6.8.0" in text
+
+
+def test_a_persistent_incidents_draft_says_it_still_changed_and_has_no_after(tmp_path):
+    cache_logs(tmp_path)
+    found = incident("cache_ratio", "2026-09-15", "2026-09-18", status="persistent", closed_by="check")
+    text = drafted(tmp_path, found, date(2026, 9, 25))
+    assert text.split("\n\n")[2] == (
+        "From 2026-09-15 to 2026-09-18, still changed after 30 days, 24 of 236 main-thread turns that open with a "
+        "new prompt (10.17%) missed the prompt cache, against 0 of 826 (0.00%) on the 14 days before. ccdrift "
+        "estimates ~24k tokens were written to the cache again beyond the usual miss rate.")
+    assert "| After" not in text
+
+
+def test_a_draft_leaves_out_usually_when_there_are_no_turns_before(tmp_path):
+    cache_logs(tmp_path)
+    found = incident("cache_ratio", "2026-09-01", "2026-09-03")
+    text = drafted(tmp_path, found, date(2026, 9, 25))
+    assert text.split("\n")[0] == "New prompts miss the prompt cache 0.00% of the time on Claude Code 2.1.279"
 
 
 def test_a_draft_leaves_out_what_the_history_cant_say(tmp_path):
@@ -180,19 +217,31 @@ def test_a_haiku_incident_draft_compares_haiku_share_and_the_models_during(tmp_p
         "|---|---|---|---|---|\n"
         "| 2.1.226 | before | 840 | 0 | 0.00% |\n"
         "| 2.1.233 | during | 180 | 36 | 20.00% |\n"
-        "| 2.1.259 | during, after | 300 | 0 | 0.00% |\n\n"
+        "| 2.1.259 | during | 120 | 0 | 0.00% |\n"
+        "| 2.1.259 | after | 180 | 0 | 0.00% |\n\n"
         "### Models during\n\n"
         "claude-opus-5 88.00%, claude-haiku-4-5 12.00%\n\n"
         "### Environment\n\n"
-        "- Claude Code: 2.1.233, 2.1.259 (CLI)\n"
+        "- Claude Code: 2.1.233, 2.1.259 (entrypoint cli)\n"
         "- Models during: claude-opus-5 (88.00% of responses), claude-haiku-4-5 (12.00% of responses)\n"
-        "- Main thread: cache tier 1h on 100.00% of responses, effort xhigh on 100.00% of responses\n"
+        "- Main thread: cache tier 1h on 100.00% of responses that write to the cache, effort xhigh on 100.00% of "
+        "responses\n"
         "- OS: macOS 26.5.2\n"
         f"- Measured with ccdrift {__version__} from local session transcripts (aggregates only)\n\n"
         "### How this was measured\n\nccdrift reads Claude Code's local session transcripts. It counts main-thread "
         "responses outside Agent SDK sessions and the share answered by a Haiku model. Each day is compared with up "
         "to 14 days before it; an incident opens when 3 of 4 days in a row fall above z = +3.5 and closes once 3 "
-        "pooled days are back inside the cutoff on 3 days in a row.\n")
+        "pooled days are back inside the cutoff on 3 days in a row, or after 30 days, when it takes the change as "
+        "the new normal.\n")
+
+
+def test_the_environment_names_several_entrypoints_most_responses_first(tmp_path):
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"version": "2.1.280"}] * 3
+                     + [{"version": "2.1.280", "entrypoint": "claude-vscode"}])
+    found = incident("cache_ratio", "2026-09-15", "2026-09-18")
+    text = draft_markdown(parse_source(tmp_path / "logs"), found, [found], {}, date(2026, 9, 25), DetectorConfig(),
+                          "macOS 26.5.2")
+    assert "- Claude Code: 2.1.280 (entrypoints cli, claude-vscode)" in text
 
 
 @pytest.mark.parametrize("platform_name, mac_version, system, release, expected", [
@@ -234,6 +283,16 @@ def test_run_draft_says_when_there_is_no_such_incident_or_it_cant_read(tmp_path,
     (tmp_path / "state.json").write_text("not json")
     assert run_draft(tmp_path / "logs", tmp_path / "state.json", "cache_ratio", today=date(2026, 9, 25)) == 1
     assert "Can't read the state file" in capsys.readouterr().err
+
+
+def test_run_draft_refuses_an_incident_with_no_judged_days_during(tmp_path, capsys):
+    cache_logs(tmp_path)
+    save_state(tmp_path / "state.json",
+               {**new_state(), "incidents": [incident("cache_ratio", "2026-10-01", "2026-10-03")]})
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "cache_ratio", today=date(2026, 10, 10)) == 2
+    captured = capsys.readouterr()
+    assert "The history holds no judged days during the cache incident from 2026-10-01.\n" in captured.err
+    assert captured.out == ""
 
 
 def test_the_draft_command_reads_the_metric_day_and_options(tmp_path, capsys):

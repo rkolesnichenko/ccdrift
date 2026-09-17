@@ -123,9 +123,9 @@ days, without recording anything or sending an alert, and says whether each inci
 it finds is recorded.
 
 `ccdrift incident draft` prints a Claude Code issue about an incident as Markdown, ready
-to paste into GitHub: what changed before, during and after it, by version, what a
-missed turn looks like, the release notes that may be related and your environment, as
-aggregates only.
+to paste into GitHub: what changed before, during and after it, by version, the release
+notes that may be related and your environment, as aggregates only. A cache incident's
+draft also shows what a missed turn looks like.
 
 ```text
 ccdrift incident list                               every incident, its cost and versions

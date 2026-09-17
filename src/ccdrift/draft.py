@@ -25,7 +25,7 @@ from ccdrift.incidents import OPEN_END, RECOVERY_BINS, exclusions, incident_cost
 from ccdrift.logs import judged_turns, no_transcripts_message
 from ccdrift.loops import loop_turns
 from ccdrift.state import load_state
-from ccdrift.texts import SHORT_NAMES, approx, version_key
+from ccdrift.texts import PERSISTENT_DAYS, SHORT_NAMES, approx, version_key
 
 AFTER_DAYS = 14  # judged days after an incident that the draft compares with
 PAUSES = [(60, "≤1 min"), (300, "1–5 min"), (900, "5–15 min"), (3600, "15–60 min")]
@@ -46,14 +46,23 @@ def find_incident(incidents: Sequence[dict[str, Any]], metric: str,
 def draft_periods(turns: pd.DataFrame, incident: dict[str, Any], incidents: Sequence[dict[str, Any]],
                   cfg: DetectorConfig) -> dict[str, list[str]]:
     """The judged days before the incident (the baseline its cost compares with), during
-    it (through the last judged day while it is open) and up to AFTER_DAYS after it."""
+    it (through the last judged day while it is open) and, for one with an end that
+    isn't persistent, up to AFTER_DAYS after it and before the start of the next
+    incident of the same metric that isn't dismissed; an open or persistent incident
+    has none."""
     days = sorted(turns["day"].astype(str).unique()) if not turns.empty else []
     first = next((k for k, day in enumerate(days) if day >= incident["start"]), len(days))
     mask = np.array(exclusions(days, incidents)[incident["metric"]], dtype=bool)
     end = incident["end"] or OPEN_END
+    after: list[str] = []
+    if incident["end"] and incident["status"] != "persistent":
+        later = [i["start"] for i in incidents if i["metric"] == incident["metric"] and i["status"] != "dismissed"
+                 and i["start"] > incident["end"]]
+        limit = min(later) if later else None
+        after = [day for day in days if incident["end"] < day and (limit is None or day < limit)][:AFTER_DAYS]
     return {"before": [days[j] for j in baseline_bins(first, mask, cfg.baseline_window)],
             "during": [day for day in days if incident["start"] <= day <= end],
-            "after": [day for day in days if incident["end"] and day > incident["end"]][:AFTER_DAYS]}
+            "after": after}
 
 
 def _rate(part: float, whole: float) -> str:
@@ -92,6 +101,8 @@ def _compared(parts: dict[str, tuple[int, int]], periods: dict[str, list[str]]) 
 
 
 def _lead(incident: dict[str, Any], periods: dict[str, list[str]]) -> str:
+    if incident["status"] == "persistent":
+        return f"From {incident['start']} to {incident['end']}, still changed after {PERSISTENT_DAYS} days"
     if incident["end"]:
         return f"From {incident['start']} to {incident['end']}"
     as_of = f" as of {periods['during'][-1]}" if periods["during"] else ""
@@ -110,8 +121,9 @@ def _cache_sections(responses: pd.DataFrame, turns: pd.DataFrame, incident: dict
     counts = {name: (int(rows["is_miss"].astype(bool).sum()), len(rows)) for name, rows in by_period.items()}
     during = by_period["during"]
     span = _version_span(during["version"].dropna().astype(str)) if during["version"].notna().any() else ""
+    usually = f" (usually {_rate(*counts['before'])})" if counts["before"][1] else ""
     title = (f"New prompts miss the prompt cache {_rate(*counts['during'])} of the time"
-             + (f" on Claude Code {span}" if span else "") + f" (usually {_rate(*counts['before'])})")
+             + (f" on Claude Code {span}" if span else "") + usually)
     beyond = (f"~{approx(cost)} tokens were written to the cache again" if cost > 0
               else "no tokens were written to the cache again")
     sections = [
@@ -161,18 +173,20 @@ def _cache_sections(responses: pd.DataFrame, turns: pd.DataFrame, incident: dict
 
 
 def _version_table(by_period: dict[str, pd.DataFrame], column: str, names: Sequence[str]) -> str:
-    """One row per Claude Code version in the periods: the periods it ran in, its rows,
-    those where `column` holds, and their share; "" when no version is logged."""
+    """One row per Claude Code version and period that has rows, ordered by version
+    (`version_key`) then by period order before, during, after: its rows, those where
+    `column` holds, and their share; "" when no version is logged."""
     rows = []
     frames = [frame.assign(period=name) for name, frame in by_period.items() if len(frame)]
     if frames:
         both = pd.concat(frames)
         both = both[both["version"].notna()]
         for version in sorted(both["version"].astype(str).unique(), key=version_key):
-            group = both[both["version"].astype(str) == version]
-            hits = int(group[column].astype(float).sum())
-            ran = ", ".join(name for name in PERIODS if (group["period"] == name).any())
-            rows.append([version, ran, f"{len(group):,}", f"{hits:,}", _rate(hits, len(group))])
+            for name in PERIODS:
+                group = both[(both["version"].astype(str) == version) & (both["period"] == name)]
+                if len(group):
+                    hits = int(group[column].astype(float).sum())
+                    rows.append([version, name, f"{len(group):,}", f"{hits:,}", _rate(hits, len(group))])
     return _table(["Version", "Period", *names], rows) if rows else ""
 
 
@@ -182,8 +196,9 @@ def _haiku_sections(turns: pd.DataFrame, incident: dict[str, Any], periods: dict
     counts = {name: (int(rows["is_haiku"].sum()), len(rows)) for name, rows in by_period.items()}
     during = by_period["during"]
     span = _version_span(during["version"].dropna().astype(str)) if during["version"].notna().any() else ""
+    usually = f" (usually {_rate(*counts['before'])})" if counts["before"][1] else ""
     title = (f"Haiku answers {_rate(*counts['during'])} of main-thread responses"
-             + (f" on Claude Code {span}" if span else "") + f" (usually {_rate(*counts['before'])})")
+             + (f" on Claude Code {span}" if span else "") + usually)
     extra = f"~{approx(cost)} extra Haiku responses" if cost > 0 else "no extra Haiku responses"
     sections = [
         "### What happened\n\n"
@@ -213,14 +228,17 @@ def os_text() -> str:
 
 def _environment(during: pd.DataFrame, os_name: str) -> str:
     versions = sorted(during["version"].dropna().astype(str).unique(), key=version_key)
-    lines = [f"- Claude Code: {', '.join(versions)} (CLI)" if versions else "- Claude Code: version not logged"]
+    entrypoints = _shares(during["entrypoint"]) if "entrypoint" in during and len(during) else []
+    names = ", ".join(name for name, _ in entrypoints)
+    entry = f" (entrypoint{'s' if len(entrypoints) > 1 else ''} {names})" if entrypoints else ""
+    lines = [f"- Claude Code: {', '.join(versions)}{entry}" if versions else f"- Claude Code: version not logged{entry}"]
     models = _shares(during["model"]) if len(during) else []
     if models:
         lines.append("- Models during: " + ", ".join(f"{model} ({share:.2%} of responses)" for model, share in models))
     settings = []
-    for column, name in (("cache_tier", "cache tier"), ("effort", "effort")):
+    for column, name, suffix in (("cache_tier", "cache tier", " that write to the cache"), ("effort", "effort", "")):
         shares = _shares(during[column]) if column in during and len(during) else []
-        settings.append(f"{name} {shares[0][0]} on {shares[0][1]:.2%} of responses" if shares
+        settings.append(f"{name} {shares[0][0]} on {shares[0][1]:.2%} of responses{suffix}" if shares
                         else f"{name} not logged")
     lines += [f"- Main thread: {', '.join(settings)}", f"- OS: {os_name}",
               f"- Measured with ccdrift {__version__} from local session transcripts (aggregates only)"]
@@ -231,7 +249,8 @@ def _method(metric: str, cfg: DetectorConfig) -> str:
     cutoff = cfg.metric_z_thresholds.get(metric, cfg.z_threshold)
     rule = (f"an incident opens when {cfg.deviant_bins} of {cfg.flag_window} days in a row fall "
             f"{'below z = −' if metric == 'cache_ratio' else 'above z = +'}{cutoff:.1f} and closes once "
-            f"{RECOVERY_BINS} pooled days are back inside the cutoff on {RECOVERY_BINS} days in a row.")
+            f"{RECOVERY_BINS} pooled days are back inside the cutoff on {RECOVERY_BINS} days in a row, or after "
+            f"{PERSISTENT_DAYS} days, when it takes the change as the new normal.")
     if metric == "cache_ratio":
         counted = ("It counts main-thread turns that open with a new prompt within an hour of the previous response, "
                    "outside Agent SDK sessions and not right after a compaction. A turn misses the cache when it "
@@ -244,10 +263,14 @@ def _method(metric: str, cfg: DetectorConfig) -> str:
 
 
 def draft_markdown(responses: pd.DataFrame, incident: dict[str, Any], incidents: Sequence[dict[str, Any]],
-                   changelog: dict[str, list[str]], today: date, cfg: DetectorConfig, os_name: str) -> str:
-    """The draft: a title line, a blank line and the body's sections."""
+                   changelog: dict[str, list[str]], today: date, cfg: DetectorConfig,
+                   os_name: str) -> Optional[str]:
+    """The draft: a title line, a blank line and the body's sections. None when the
+    history holds no judged days during the incident."""
     turns = judged_turns(responses, today)
     periods = draft_periods(turns, incident, incidents, cfg)
+    if not periods["during"]:
+        return None
     cost = incident_cost(turns, incident, incidents, cfg)
     if incident["metric"] == "cache_ratio":
         title, sections = _cache_sections(responses, turns, incident, periods, cost)
@@ -269,7 +292,9 @@ def run_draft(source: Path, state_path: Path, metric: str, start: Optional[str] 
               today: Optional[date] = None, cfg: Optional[DetectorConfig] = None,
               os_name: Optional[str] = None) -> int:
     """Print a GitHub issue draft about the incident of `metric` starting on `start`, or
-    the latest, from the history; nothing is written or sent."""
+    the latest, from the history. It saves no state and creates or claims no history
+    store; like `ccdrift report`, it brings a store the check has claimed up to date.
+    Nothing is sent."""
     try:
         incidents = load_state(state_path)["incidents"]
     except (OSError, ValueError) as exc:
@@ -290,6 +315,11 @@ def run_draft(source: Path, state_path: Path, metric: str, start: Optional[str] 
         print(no_transcripts_message(source), file=sys.stderr)
         return 2
     today = today or datetime.now(timezone.utc).date()
-    print(draft_markdown(responses, incident, incidents, load_changelog(changelog_path(source)), today,
-                         cfg or DetectorConfig(), os_name or os_text()), end="")
+    text = draft_markdown(responses, incident, incidents, load_changelog(changelog_path(source)), today,
+                          cfg or DetectorConfig(), os_name or os_text())
+    if text is None:
+        print(f"The history holds no judged days during the {SHORT_NAMES[metric]} incident from {incident['start']}.",
+              file=sys.stderr)
+        return 2
+    print(text, end="")
     return 0

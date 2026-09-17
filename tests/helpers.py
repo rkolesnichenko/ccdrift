@@ -168,7 +168,8 @@ def main_thread_days(path, days, per_day=60, first_day=0):
     1-hour cache. Each entry of `days` can set that day's `version` (default
     "2.1.226"), `haiku` (how many responses come from Haiku, default 0), `misses` (how
     many of the day's last responses miss the cache, writing 1000 tokens, default 0),
-    `tier` ("1h" or "5m" cache writes, default "1h") and `effort` (default "xhigh")."""
+    `tier` ("1h" or "5m" cache writes, default "1h"), `effort` (default "xhigh") and
+    `entrypoint` (default "cli")."""
     for d, spec in enumerate(days, start=first_day):
         tier = spec.get("tier", "1h")
         records = []
@@ -180,7 +181,7 @@ def main_thread_days(path, days, per_day=60, first_day=0):
                         line(f"m{d}-{k}", text(40), ts=ts, sid=f"s{d}", model=model,
                              cache_read=read, cache_creation=written,
                              cache_1h=written if tier == "1h" else 0, cache_5m=written if tier == "5m" else 0,
-                             version=spec.get("version", "2.1.226"), entrypoint="cli",
+                             version=spec.get("version", "2.1.226"), entrypoint=spec.get("entrypoint", "cli"),
                              effort=spec.get("effort", "xhigh"))]
         write(path / f"s{d}.jsonl", records)
 
