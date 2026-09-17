@@ -88,7 +88,7 @@ set this in `~/.claude/settings.json`:
 
 | Alert | What it means | What to do |
 |---|---|---|
-| **ccdrift flag** | 3 of the last 4 days passed the cutoff for the cache ratio or main-thread Haiku share. ccdrift opens an incident and names the version and the cost so far. | `ccdrift report` lists the days; `ccdrift report --by version` compares versions. A false alarm? `ccdrift incident dismiss`. |
+| **ccdrift flag** | 3 of the last 4 days passed the cutoff for the cache ratio or main-thread Haiku share. ccdrift opens an incident and names the version and the cost so far. | `ccdrift report` lists the days; `ccdrift report --by version` compares versions. A false alarm? `ccdrift incident dismiss`. A regression to report? `ccdrift incident draft` prints an issue draft. |
 | **ccdrift: back to normal** | The metric has been back inside the cutoff, 3 days pooled, on 3 days in a row. | Nothing. `ccdrift incident list` keeps the record. |
 | **ccdrift: change persists** | The metric hasn't recovered 30 days after the incident started. ccdrift now treats the new level as normal. | Check whether you changed something: hooks, MCP servers, model. |
 | **ccdrift: past incidents found** | The first check replayed the history on disk day by day and found incidents ccdrift would have followed. They're recorded as if it had run all along. | `ccdrift incident list` shows them; `ccdrift incident dismiss` for a false alarm. |
@@ -122,11 +122,17 @@ runs the same replay on any install, over all of the history, not just the last 
 days, without recording anything or sending an alert, and says whether each incident
 it finds is recorded.
 
+`ccdrift incident draft` prints a Claude Code issue about an incident as Markdown, ready
+to paste into GitHub: what changed before, during and after it, by version, what a
+missed turn looks like, the release notes that may be related and your environment, as
+aggregates only.
+
 ```text
 ccdrift incident list                               every incident, its cost and versions
 ccdrift incident add cache 2026-08-16..2026-09-04   record one from before ccdrift ran
 ccdrift incident close cache                        end the open one as of yesterday (UTC)
 ccdrift incident dismiss cache 2026-09-14           a false alarm: its days rejoin the baseline
+ccdrift incident draft cache 2026-08-18             an issue draft with the evidence, aggregates only
 ccdrift replay                                      the incidents the check would have followed
 ```
 
@@ -173,6 +179,7 @@ ccdrift incident list [--source DIR] [--state FILE]
 ccdrift incident add {cache|haiku} START..END [--state FILE]
 ccdrift incident close {cache|haiku} [--state FILE]
 ccdrift incident dismiss {cache|haiku} START [--state FILE]
+ccdrift incident draft {cache|haiku} [START] [--source DIR] [--state FILE]
 ccdrift replay [--source DIR] [--state FILE]                           incidents the check would have followed
 ccdrift peek [--source DIR]                                            the fields ccdrift reads
 ccdrift schedule install [--at HH:MM] [--no-notify] [--exec CMD] [--no-digest] [--source DIR]
