@@ -5,10 +5,12 @@ from datetime import date
 
 import pytest
 
+from ccdrift.cli import main
 from ccdrift.detector import DetectorConfig
+from ccdrift.incidents import add_incident, dismiss_incident
 from ccdrift.logs import parse_source
-from ccdrift.replay import first_run, history_message, replay_incidents, replayed_line
-from ccdrift.state import new_state
+from ccdrift.replay import first_run, history_message, replay_incidents, replayed_line, run_replay
+from ccdrift.state import new_state, save_state
 from tests.helpers import main_thread_days
 
 # Haiku on 12 of 60 responses a day from Sep 15 to 17 on 2.1.233, then none on 2.1.259.
@@ -81,3 +83,83 @@ def test_the_summary_names_each_incident_with_how_it_ended_what_it_cost_and_its_
     assert replayed_line(cache_incident("persistent", end="2026-09-16", recovered_from=None)) == (
         "cache ratio down from 2026-08-18, still changed after 30 days, ~16M tokens re-cached, on Claude Code "
         "2.1.235 (since 08-19)")
+
+
+def test_replay_prints_the_alerts_the_check_would_have_sent_and_the_incidents_it_found(tmp_path, capsys):
+    main_thread_days(tmp_path / "logs", REGRESSION)
+    assert run_replay(tmp_path / "logs", tmp_path / "state.json", today=TODAY) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "Replaying the check day by day from 2026-09-02 to 2026-10-10 (UTC) on an empty state, incidents only.",
+        "Nothing is recorded and no alert is sent.",
+        "",
+        "2026-09-18  ccdrift flag: Haiku share on the main thread up from 2026-09-15, on Claude Code 2.1.233 "
+        "(since 09-15). ~36 extra Haiku responses so far.",
+        "2026-09-23  ccdrift: back to normal: Haiku share on the main thread back to normal from 2026-09-20, on "
+        "Claude Code 2.1.259 (since 09-18). The incident from 2026-09-15: ~36 extra Haiku responses.",
+        "",
+        "Incidents the replay found:",
+        "  haiku  2026-09-15..2026-09-19    back to normal from 2026-09-20; ~36 extra Haiku responses; on 2.1.233 "
+        "(since 09-15)",
+        "    not recorded: `ccdrift incident add haiku 2026-09-15..2026-09-19` records it",
+    ]
+
+
+@pytest.mark.parametrize("dismissed, expected", [
+    (False, "    recorded: haiku 2026-09-14..2026-09-17"),
+    (True, "    dismissed: haiku 2026-09-14..2026-09-17"),
+])
+def test_replay_says_whether_each_incident_it_found_is_recorded(tmp_path, capsys, dismissed, expected):
+    main_thread_days(tmp_path / "logs", REGRESSION)
+    state = new_state()
+    add_incident(state["incidents"], "haiku_fraction", "2026-09-14", "2026-09-17", TODAY)
+    if dismissed:
+        dismiss_incident(state["incidents"], "haiku_fraction", "2026-09-14", TODAY)
+    save_state(tmp_path / "state.json", state)
+    run_replay(tmp_path / "logs", tmp_path / "state.json", today=TODAY)
+    assert capsys.readouterr().out.splitlines()[-1] == expected
+
+
+@pytest.mark.parametrize("days, today, expected", [
+    ([{}] * 14 + [{"haiku": 12}] * 10, date(2026, 10, 1),
+     "    not recorded: `ccdrift incident add haiku 2026-09-15..2026-09-30` records its days so far"),
+    ([{}] * 14 + [{"haiku": 12}] * 40, date(2026, 11, 1),
+     "    not recorded: after 30 days the check takes the new level as normal, so its days need no record"),
+])
+def test_replay_says_how_to_record_an_open_incident_and_that_a_persistent_one_needs_no_record(
+        tmp_path, capsys, days, today, expected):
+    main_thread_days(tmp_path / "logs", days)
+    run_replay(tmp_path / "logs", tmp_path / "state.json", today=today)
+    assert capsys.readouterr().out.splitlines()[-1] == expected
+
+
+def test_replay_of_a_clean_history_says_so(tmp_path, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 20)
+    run_replay(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 10, 1))
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        "No incidents: the check would have sent no incident alert over these days.")
+
+
+def test_replay_before_a_complete_day_says_there_is_nothing_to_replay(tmp_path, capsys):
+    main_thread_days(tmp_path / "logs", [{}])
+    assert run_replay(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 1)) == 0
+    assert capsys.readouterr().out == "Nothing to replay: no complete UTC day with main-thread activity yet.\n"
+
+
+def test_replay_writes_no_state_and_no_history_store(tmp_path, capsys):
+    main_thread_days(tmp_path / "logs", REGRESSION)
+    run_replay(tmp_path / "logs", tmp_path / "state.json", today=TODAY)
+    assert [path.name for path in tmp_path.iterdir()] == ["logs"]
+
+
+def test_replay_exits_2_without_transcripts_and_1_on_an_unreadable_state(tmp_path, capsys):
+    (tmp_path / "logs").mkdir()
+    assert run_replay(tmp_path / "logs", tmp_path / "state.json", today=TODAY) == 2
+    (tmp_path / "state.json").write_text("not json")
+    assert run_replay(tmp_path / "logs", tmp_path / "state.json", today=TODAY) == 1
+    assert "Can't read the state file" in capsys.readouterr().err
+
+
+def test_the_replay_command_reads_the_source_and_state_options(tmp_path, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    assert main(["replay", "--source", str(tmp_path / "logs"), "--state", str(tmp_path / "state.json")]) == 0
+    assert capsys.readouterr().out.startswith("Replaying the check day by day from 2026-09-02 to ")

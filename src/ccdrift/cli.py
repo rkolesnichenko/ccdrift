@@ -103,6 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
     dismiss_action.add_argument("start", help="the incident's first day")
     _add_state(dismiss_action)
 
+    replay = commands.add_parser("replay", help="replay the check day by day over your history and show the "
+                                 "incidents it would have followed, without recording anything")
+    _add_source(replay)
+    _add_state(replay)
+
     schedule = commands.add_parser("schedule", help="run the check every hour, or once a day")
     actions = schedule.add_subparsers(dest="action", required=True, metavar="ACTION")
     install_action = actions.add_parser("install", help="set up the job, replacing an existing one")
@@ -227,6 +232,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         return run_status(_state(args), short=args.short)
     if args.command == "incident":
         return _incident(args)
+    if args.command == "replay":
+        from ccdrift.replay import run_replay
+        return run_replay(_source(args), _state(args))
     if args.command == "schedule":
         return _schedule(args)
     raise AssertionError(f"unhandled command: {args.command}")
