@@ -93,6 +93,13 @@ def field_gap_line(gap: dict[str, Any]) -> str:
             f"{gap['share_before']:.0%} before")
 
 
+def loop_warning_line(warning: dict[str, Any]) -> str:
+    sessions = f"{warning['sessions']} session{'' if warning['sessions'] == 1 else 's'}"
+    return (f"{LOOP_NAMES[warning['stream']]} at {warning['at'][:16].replace('T', ' ')} UTC: {warning['misses']} of "
+            f"{warning['turns']} turns in {sessions} (usually {warning['base_rate']:.2%}), "
+            f"~{approx(warning['tokens'])} tokens rewritten")
+
+
 def early_warning_line(warning: dict[str, Any]) -> str:
     return (f"cache misses rising at {warning['at'][:16].replace('T', ' ')} UTC: {warning['misses']} of "
             f"{warning['turns']} new-prompt turns (usually {warning['base_rate']:.1%})")

@@ -32,6 +32,12 @@ def ran(ok=True, when="2026-09-20T09:00:02+03:00", error=None):
     return {"last_run": {"started": when, "ok": ok, "error": error}}
 
 
+def loop_warning(stream, at="2026-09-20T08:40:00+00:00", misses=7, sessions=2):
+    return {"stream": stream, "at": at, "since": "2026-09-20T08:00:00+00:00", "misses": misses, "turns": 180,
+            "sessions": sessions, "base_rate": 0.0018, "tokens": 3_200_000, "versions": [],
+            "reported_on": "2026-09-20"}
+
+
 @pytest.mark.parametrize("state, expected", [
     ({}, "ccdrift: no check yet"),
     ({**ran(ok=False, error="RuntimeError: boom"), "last_ok": "2026-09-19T09:00:01+03:00"},
@@ -122,7 +128,8 @@ def test_status_lists_other_changes_of_the_last_30_days(tmp_path, capsys):
                     {"field": "version", "version": "unknown", "share_before": 1.0, "share": 0.0,
                      "responses": 60, "reported_on": "2026-09-19"}],
         early_warnings=[{"at": "2026-09-20T08:40:00+00:00", "since": "2026-09-20T08:00:00+00:00", "misses": 3,
-                         "turns": 7, "base_rate": 0.005, "versions": [], "reported_on": "2026-09-20"}])
+                         "turns": 7, "base_rate": 0.005, "versions": [], "reported_on": "2026-09-20"}],
+        loop_warnings=[loop_warning("subagent", misses=1, sessions=1)])
     run_status(path, now=NOW)
     lines = capsys.readouterr().out.splitlines()
     assert lines[lines.index("Other changes in the last 30 days:"):] == [
@@ -132,6 +139,8 @@ def test_status_lists_other_changes_of_the_last_30_days(tmp_path, capsys):
         "  effort not logged on 2.1.280: 0% of 312 responses, 100% before",
         "  version not logged: 0% of 60 responses, 100% before",
         "  cache misses rising at 2026-09-20 08:40 UTC: 3 of 7 new-prompt turns (usually 0.5%)",
+        "  subagent cache misses rising at 2026-09-20 08:40 UTC: 1 of 180 turns in 1 session (usually 0.18%), "
+        "~3.2M tokens rewritten",
     ]
 
 
@@ -171,6 +180,17 @@ def test_short_status_shows_rising_cache_misses_for_a_day(tmp_path, hours_later,
     warning = {"at": "2026-09-20T08:40:00+00:00", "since": "2026-09-20T08:00:00+00:00", "misses": 3, "turns": 7,
                "base_rate": 0.005, "versions": [], "reported_on": "2026-09-20"}
     path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00", early_warnings=[warning])
+    assert short_status(path, NOW + timedelta(hours=hours_later)) == expected
+
+
+@pytest.mark.parametrize("warnings, hours_later, expected", [
+    ([loop_warning("subagent"), loop_warning("main")], 0, "ccdrift: tool-loop cache misses rising since 11:00"),
+    ([loop_warning("subagent")], 0, "ccdrift: subagent cache misses rising since 11:00"),
+    ([loop_warning("subagent")], 24, ""),
+])
+def test_short_status_shows_rising_tool_loop_misses_for_a_day_main_thread_first(tmp_path, warnings, hours_later,
+                                                                                expected):
+    path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00", loop_warnings=warnings)
     assert short_status(path, NOW + timedelta(hours=hours_later)) == expected
 
 

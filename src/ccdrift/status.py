@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ccdrift.state import load_state
-from ccdrift.texts import (change_line, clock_text, context_change_line, early_warning_line, field_gap_line,
-                           hook_failure_line, incident_line)
+from ccdrift.texts import (LOOP_NAMES, change_line, clock_text, context_change_line, early_warning_line,
+                           field_gap_line, hook_failure_line, incident_line, loop_warning_line)
 
 STALE_DAYS = 3
 HOOK_DAYS = 3
@@ -28,7 +28,8 @@ def short_status(state_path: Path, now: datetime) -> str:
     """One line for a status line, or "" when nothing needs attention. First match
     wins: an unreadable or malformed state, no check yet, a failed check, no successful
     check for more than STALE_DAYS days, open incidents, hooks failing since within
-    the last HOOK_DAYS days, cache misses rising."""
+    the last HOOK_DAYS days, cache misses rising, tool-loop cache misses rising (the
+    main thread, then subagents)."""
     try:
         state = load_state(state_path)
         last = state.get("last_run")
@@ -51,6 +52,11 @@ def short_status(state_path: Path, now: datetime) -> str:
                   if now - _when(w["at"]) < timedelta(hours=RISING_HOURS)]
         if rising:
             return f"ccdrift: cache misses rising since {clock_text(rising[-1]['since'], now)}"
+        for stream in ("main", "subagent"):
+            loops = [w for w in state.get("loop_warnings", [])
+                     if w["stream"] == stream and now - _when(w["at"]) < timedelta(hours=RISING_HOURS)]
+            if loops:
+                return f"ccdrift: {LOOP_NAMES[stream]} since {clock_text(loops[-1]['since'], now)}"
         return ""
     except Exception:  # a status line must never show a traceback, whatever the state holds
         return "ccdrift: can't read state"
@@ -78,7 +84,8 @@ def status_report(state: dict[str, Any], now: datetime) -> str:
     other = ([context_change_line(c) for c in state.get("context_changes", []) if c["reported_on"] >= since]
              + [hook_failure_line(f) for f in state.get("hook_failures", []) if f["reported_on"] >= since]
              + [field_gap_line(g) for g in state.get("field_gaps", []) if g["reported_on"] >= since]
-             + [early_warning_line(w) for w in state.get("early_warnings", []) if w["reported_on"] >= since])
+             + [early_warning_line(w) for w in state.get("early_warnings", []) if w["reported_on"] >= since]
+             + [loop_warning_line(w) for w in state.get("loop_warnings", []) if w["reported_on"] >= since])
     lines += _section(f"Other changes in the last {RECENT_DAYS} days", other)
     return "\n".join(lines) + "\n"
 
