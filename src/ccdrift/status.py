@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ccdrift.state import load_state
-from ccdrift.texts import (LOOP_NAMES, change_line, clock_text, context_change_line, early_warning_line,
-                           field_gap_line, hook_failure_line, incident_line, loop_warning_line)
+from ccdrift.texts import (LOOP_NAMES, change_line, clock_text, context_change_line, cut_short_line,
+                           early_warning_line, failure_line, field_gap_line, hook_failure_line, incident_line,
+                           loop_warning_line)
 
 STALE_DAYS = 3
 HOOK_DAYS = 3
@@ -85,7 +86,9 @@ def status_report(state: dict[str, Any], now: datetime) -> str:
              + [hook_failure_line(f) for f in state.get("hook_failures", []) if f["reported_on"] >= since]
              + [field_gap_line(g) for g in state.get("field_gaps", []) if g["reported_on"] >= since]
              + [early_warning_line(w) for w in state.get("early_warnings", []) if w["reported_on"] >= since]
-             + [loop_warning_line(w) for w in state.get("loop_warnings", []) if w["reported_on"] >= since])
+             + [loop_warning_line(w) for w in state.get("loop_warnings", []) if w["reported_on"] >= since]
+             + [failure_line(f) for f in state.get("failed_requests", []) if f["reported_on"] >= since]
+             + [cut_short_line(c) for c in state.get("cut_short", []) if c["reported_on"] >= since])
     lines += _section(f"Other changes in the last {RECENT_DAYS} days", other)
     return "\n".join(lines) + "\n"
 

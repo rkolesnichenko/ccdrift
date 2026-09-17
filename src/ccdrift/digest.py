@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from ccdrift.failures import digest_part
 from ccdrift.texts import version_key
 
 DIGEST_HOUR = 9
@@ -49,10 +50,11 @@ def _loop_part(loops: Optional[pd.DataFrame], days: list[str]) -> str:
 
 
 def weekly_digest(turns: pd.DataFrame, state: dict[str, Any], week_start: date,
-                  loops: Optional[pd.DataFrame] = None) -> str:
+                  loops: Optional[pd.DataFrame] = None, failures: Optional[pd.DataFrame] = None) -> str:
     """One line on the judged turns of the week from `week_start`, its tool-loop misses
-    from `loops` (loops.loop_counts by day), the open incidents, the setting changes
-    reported that week, and the days the check ran."""
+    from `loops` (loops.loop_counts by day), its failed requests from `failures`
+    (failures.failure_counts), the open incidents, the setting changes reported that
+    week, and the days the check ran."""
     days = [(week_start + timedelta(days=i)).isoformat() for i in range(7)]
     week = turns[turns["day"].astype(str).isin(days)] if not turns.empty else turns
     parts = []
@@ -72,6 +74,8 @@ def weekly_digest(turns: pd.DataFrame, state: dict[str, Any], week_start: date,
         haiku = float(week["is_haiku"].mean())
         parts.append("no Haiku" if haiku == 0 else f"Haiku {haiku:.1%} of responses")
         parts.append(_loop_part(loops, days))
+        if failures is not None:
+            parts.append(digest_part(failures, days))
     parts.append(_count(sum(1 for i in state["incidents"] if i["status"] == "open"), "open incident"))
     parts.append(_count(sum(1 for c in state["settings"] if c["reported_on"] in days), "setting change"))
     ran = len(set(state.get("runs", [])) & set(days))

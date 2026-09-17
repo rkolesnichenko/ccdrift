@@ -16,6 +16,7 @@ import pandas as pd
 from ccdrift.changelog import changelog_path, load_changelog, release_notes
 from ccdrift.detector import DetectorConfig, bin_metrics, detect
 from ccdrift.history import HistoryError, load_history
+from ccdrift.failures import failure_counts, failure_lines, failure_summary, judged_failures
 from ccdrift.hooks import hooks_lines, hooks_summary, judged_hook_runs
 from ccdrift.incidents import exclusions, incident_cost
 from ccdrift.logs import judged_subagent_turns, judged_turns, no_transcripts_message, outside_sdk
@@ -258,8 +259,9 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
         window = rows["day"].tolist()
         hooks = hooks_summary(judged_hook_runs(tables.hook_runs, today), window)
         subagents = subagent_summary(judged_subagent_turns(df, today), window)
-        extra_lines = hooks_lines(hooks) + subagent_lines(subagents)
-        extra_json = {"hooks": hooks, "subagents": subagents}
+        fails = failure_summary(failure_counts(judged_failures(tables.failures, today), turns), window)
+        extra_lines = hooks_lines(hooks) + subagent_lines(subagents) + failure_lines(fails)
+        extra_json = {"hooks": hooks, "subagents": subagents, "failures": fails}
     summary = settings_summary(turns, window)
     if as_json:
         text = report_json(by, rows, entries, state["reported"], summary, cfg, extra_json)

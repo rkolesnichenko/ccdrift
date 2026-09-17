@@ -15,6 +15,8 @@ from ccdrift.changelog import changelog_path, days_before, load_changelog, note_
 from ccdrift.detector import DetectorConfig
 from ccdrift.digest import digest_due, digest_week, weekly_digest
 from ccdrift.early import early_message, early_warning
+from ccdrift.failures import (cut_short, cut_short_message, failing_requests, failure_counts, judged_failures,
+                              requests_message)
 from ccdrift.fields import field_gaps, gap_message
 from ccdrift.history import load_history
 from ccdrift.hooks import failure_message, hook_failures, judged_hook_runs
@@ -193,6 +195,13 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     for failure in hook_failures(judged_hook_runs(tables.hook_runs, today), state, today):
         versions, notes = _change_notes(turns, changelog, failure, "hooks")
         alerts.append(("hooks", "ccdrift: hooks failing", failure_message(failure, versions), notes))
+    counts = failure_counts(judged_failures(tables.failures, today), turns)
+    for episode in failing_requests(counts, state, today):
+        versions, notes = _change_notes(turns, changelog, episode, "errors")
+        alerts.append(("failed_requests", "ccdrift: requests failing", requests_message(episode, versions), notes))
+    for episode in cut_short(counts, state, today):
+        versions, notes = _change_notes(turns, changelog, episode, "errors")
+        alerts.append(("cut_short", "ccdrift: responses cut short", cut_short_message(episode, versions), notes))
     for gap in field_gaps(turns, state, today):
         notes = release_notes(changelog, [] if gap["version"] == "unknown" else [gap["version"]], "fields")
         alerts.append(("fields", "ccdrift: Claude Code stopped logging a field", gap_message(gap), note_lines(notes)))
@@ -206,7 +215,7 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     if week_start is not None:
         state["digest_week"] = digest_week(now)
         alerts.append(("digest", "ccdrift: weekly summary",
-                       weekly_digest(turns, state, week_start, loop_counts(df, today)), []))
+                       weekly_digest(turns, state, week_start, loop_counts(df, today), counts), []))
     return alerts
 
 

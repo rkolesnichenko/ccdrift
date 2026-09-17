@@ -1,16 +1,17 @@
 """Failed requests and responses cut short: what the parser keeps, what a day's counts
 say, and when the check alerts."""
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pandas as pd
 import pytest
 
-from ccdrift.failures import (cut_short, cut_short_message, failing_requests, failure_counts, judged_failures,
-                              requests_message)
+from ccdrift.check import run_check
+from ccdrift.failures import (cut_short, cut_short_message, digest_part, failing_requests, failure_counts,
+                              failure_lines, failure_summary, judged_failures, requests_message)
 from ccdrift.history import History, load_history
 from ccdrift.logs import judged_turns, parse_all, parse_source
-from ccdrift.state import new_state, save_state
+from ccdrift.state import load_state, new_state, save_state
 from ccdrift.texts import cut_short_line, failure_line
 from tests.helpers import DAY, api_error, at, failure_days, line, no_response_stub, prompt, retry_record, text, write
 
@@ -150,3 +151,54 @@ def test_the_messages_name_the_kinds_the_counts_and_the_version():
     assert failure_line(episode) == (
         "requests failing on 2026-09-20: 9 (7 overloaded, 2 retried), at most 1 a day before")
     assert cut_short_line(cut) == "responses cut short on 2026-09-20: 8 of 640 main-thread responses"
+    cut_clean = {**cut, "before_share": 0.0}
+    assert cut_short_message(cut_clean, []) == (
+        "8 of 640 main-thread responses stopped at the token limit on 2026-09-20 (1.25%), against none in the 14 "
+        "days before. A Claude Code update may have changed the output limit.")
+
+
+def test_the_report_line_and_the_weekly_part_say_what_the_days_held(tmp_path):
+    counts = counts_of(tmp_path, [{"errors": 2, "slept": 1, "truncated": 1}, {"retries": 1}])
+    days = ["2026-09-01", "2026-09-02"]
+    assert failure_lines(failure_summary(counts, days)) == [
+        "", "Failures over these days: 2 overloaded, 1 retried, 1 while the Mac slept, 1 response cut short"]
+    assert digest_part(counts, days) == "3 failed requests, 1 response cut short"
+    quiet = counts_of(tmp_path, [{}])
+    assert failure_lines(failure_summary(quiet, ["2026-09-01"])) == []
+    assert digest_part(quiet, ["2026-09-01"]) == "no failed requests"
+    # The Mac sleeping mid-response is not Claude Code drift: the report names it, but
+    # the weekly summary's failed-request count leaves it out.
+    slept_only = counts_of(tmp_path, [{"slept": 3}])
+    assert failure_lines(failure_summary(slept_only, ["2026-09-01"])) == [
+        "", "Failures over these days: 3 while the Mac slept"]
+    assert digest_part(slept_only, ["2026-09-01"]) == "no failed requests"
+
+
+def test_the_check_alerts_on_a_day_of_failed_requests_and_records_it(tmp_path, capsys):
+    failure_days(tmp_path / "logs", [{}] * 6 + [{"errors": 5, "version": "2.1.280"}])
+    save_state(tmp_path / "state.json", new_state())
+    assert run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 8),
+                     now=datetime(2026, 9, 8, 9, 0, tzinfo=timezone.utc), digest=False) == 0
+    out = capsys.readouterr().out
+    assert "ccdrift: requests failing: 5 requests failed on 2026-09-07 (5 overloaded)" in out
+    assert "on Claude Code 2.1.280" in out
+    state = load_state(tmp_path / "state.json")
+    assert [e["since"] for e in state["failed_requests"]] == ["2026-09-07"]
+    assert state["cut_short"] == []
+
+
+def test_the_check_alerts_when_responses_are_cut_short(tmp_path, capsys):
+    failure_days(tmp_path / "logs", [{}] * 6 + [{"truncated": 6}])
+    save_state(tmp_path / "state.json", new_state())
+    assert run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 8),
+                     now=datetime(2026, 9, 8, 9, 0, tzinfo=timezone.utc), digest=False) == 0
+    assert ("ccdrift: responses cut short: 6 of 60 main-thread responses stopped at the token limit on 2026-09-07 "
+            "(10.00%)") in capsys.readouterr().out
+
+
+def test_a_quiet_history_alerts_about_nothing(tmp_path, capsys):
+    failure_days(tmp_path / "logs", [{}] * 7)
+    save_state(tmp_path / "state.json", new_state())
+    assert run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 8),
+                     now=datetime(2026, 9, 8, 9, 0, tzinfo=timezone.utc), digest=False) == 0
+    assert "no alerts" in capsys.readouterr().out

@@ -576,7 +576,8 @@ def test_check_sends_the_weekly_summary_on_the_first_run_after_monday_9(tmp_path
                    digest=True)
     assert sent == ["ccdrift: weekly summary"]
     assert ("ccdrift: weekly summary: Week of 09-14: 420 responses on 2.1.226; cache ratio 0.900 (0.0% misses); "
-            "no Haiku; no tool-loop turns, no subagent loop turns; no open incidents; no setting changes; "
+            "no Haiku; no tool-loop turns, no subagent loop turns; no failed requests; no open incidents; "
+            "no setting changes; "
             "check ran on 1 of 7 days.") in capsys.readouterr().out
 
 

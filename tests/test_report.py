@@ -202,7 +202,7 @@ def test_report_json_holds_aggregates_without_paths_or_session_ids(tmp_path, cap
     out = capsys.readouterr().out
     payload = json.loads(out)
     assert list(payload) == ["view", "days", "incidents", "reported_before_incidents", "settings", "hooks",
-                             "subagents", "cutoffs", "flag_rule"]
+                             "subagents", "failures", "cutoffs", "flag_rule"]
     assert payload["days"][0] == {"day": "2026-09-01", "responses": 60, "cache_ratio": pytest.approx(0.9),
                                   "cache_z": None, "haiku_share": 0.0, "haiku_z": None, "loop_turns": 0,
                                   "loop_misses": 0, "subagent_loop_turns": 0, "subagent_loop_misses": 0,

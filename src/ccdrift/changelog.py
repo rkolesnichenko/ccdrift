@@ -30,6 +30,8 @@ TOPICS: dict[str, dict[str, int]] = {
     "subagents": {"subagent model": 2, "subagent_model": 2},
     "fields": {"session transcript": 2, "transcript file": 2, "transcript writes": 2, "saved transcript": 2,
                "session file": 2, "transcript": 1, "usage": 1},
+    "errors": {"api error": 2, "rate limit": 2, "overloaded": 2, "retry": 2, "retries": 2, "max tokens": 2,
+               "max_tokens": 2, "output limit": 2, "truncat": 1, "timeout": 1},
 }
 QUOTE_WEIGHT = 2
 NOTES_PER_VERSION = 2
