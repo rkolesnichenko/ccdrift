@@ -37,6 +37,20 @@ def test_the_grid_rows_say_how_often_each_setting_alerts_and_whether_it_catches_
     assert (loose["alerts"], loose["catches"]) == (1, True)
 
 
+def test_a_setting_only_catches_when_the_planted_day_itself_alerts():
+    # An early real spike (20 failed requests) sits far enough before the last day that
+    # a setting's window over the days before the planted day never sees it. A setting
+    # whose floor the spike alone clears must not be credited with catching the plant
+    # just because the spike alerted somewhere earlier in the history.
+    rows = [(0, 0)] * 6 + [(20, 0)] + [(0, 0)] * 20
+    result = request_rows(counts_of(rows), days=27)
+    floor_12 = next(row for row in result if (row["floor"], row["ratio"]) == (12, 2))
+    assert floor_12["catches"] is False
+    assert floor_12["alerts"] == 1
+    floor_5 = next(row for row in result if (row["floor"], row["ratio"]) == (5, 2))
+    assert floor_5["catches"] is True
+
+
 def test_a_setting_passes_when_it_stays_within_the_budget_and_catches_the_burst():
     rows = cut_rows(counts_of([(0, 0)] * 6 + [(0, 1)]), days=7)
     passed, notes = gate(rows, {"floor": 5, "share": 0.005})

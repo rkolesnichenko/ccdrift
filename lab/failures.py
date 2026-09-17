@@ -60,26 +60,30 @@ def replay(counts: pd.DataFrame, rule: Callable[[pd.DataFrame, dict[str, Any], d
 
 def plant(counts: pd.DataFrame, requests: int = 0, share: float = 0.0) -> pd.DataFrame:
     """The counts with a bad day at the end: a copy of the last day carrying `requests`
-    failed requests, or `share` of its responses stopping at the token limit."""
+    failed requests, or `share` of its responses stopping at the token limit. Planting
+    only ever makes the day worse: `share` raises `truncated` to what it should reach,
+    never lowers it."""
     planted = counts.copy()
-    last = len(planted) - 1
+    last = planted.index[-1]
     if requests:
         planted.loc[last, "overloaded"] = int(planted.loc[last, "overloaded"]) + requests
         planted.loc[last, "requests"] = int(planted.loc[last, "requests"]) + requests
     if share:
-        planted.loc[last, "truncated"] = round(int(planted.loc[last, "responses"]) * share)
+        planted.loc[last, "truncated"] = max(int(planted.loc[last, "truncated"]),
+                                             round(int(planted.loc[last, "responses"]) * share))
     return planted
 
 
 def _rows(counts: pd.DataFrame, days: int, rule, grid, names, planted) -> list[dict[str, Any]]:
     """One row per setting in `grid`: the days it would alert on over the real history,
-    and whether it alerts on the planted bad day."""
+    and whether it alerts on the planted bad day itself."""
     budget = ALERT_BUDGET * max(1, days / BUDGET_DAYS)
+    planted_day = str(planted["day"].iloc[-1])
     rows = []
     for setting in grid:
         kwargs = dict(zip(names, setting))
         alerts = replay(counts, lambda c, state, today: rule(c, state, today, **kwargs))
-        caught = bool(replay(planted, lambda c, state, today: rule(c, state, today, **kwargs)))
+        caught = planted_day in replay(planted, lambda c, state, today: rule(c, state, today, **kwargs))
         rows.append({**kwargs, "alerts": len(alerts), "days": days, "on": ", ".join(alerts),
                      "catches": caught, "passes": len(alerts) <= budget and caught})
     return rows
