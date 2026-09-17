@@ -25,15 +25,17 @@ MAX_P0 = 0.025
 THRESHOLD: Optional[float] = 4.0
 
 
-def clamp_rate(rate: float) -> float:
-    return min(max(rate, MIN_P0), MAX_P0)
+def clamp_rate(rate: float, high: float = MAX_P0) -> float:
+    return min(max(rate, MIN_P0), high)
 
 
-def alarm_runs(misses: Sequence[bool], base_rate: float, h: float, p1: float = P1) -> list[tuple[int, int]]:
+def alarm_runs(misses: Sequence[bool], base_rate: float, h: float, p1: float = P1,
+               high: float = MAX_P0) -> list[tuple[int, int]]:
     """(first, alarm) for each alarm of the CUSUM for misses at `p1` against
-    `base_rate`: the alarm is the position where the sum passes h, `first` the position
-    after the sum last stood at 0. The sum restarts from 0 after each alarm."""
-    p0 = clamp_rate(base_rate)
+    `base_rate`, held within [MIN_P0, high]: the alarm is the position where the sum
+    passes h, `first` the position after the sum last stood at 0. The sum restarts from
+    0 after each alarm."""
+    p0 = clamp_rate(base_rate, high)
     on_miss, on_hit = math.log(p1 / p0), math.log((1 - p1) / (1 - p0))
     total = 0.0
     first = 0
@@ -72,7 +74,7 @@ RECENT_HOURS = 24    # an alarm this recent is news
 QUIET_DAYS = 7       # at most one warning in this many days
 
 
-def _rise_first(runs: list[tuple[int, int]]) -> int:
+def rise_first(runs: list[tuple[int, int]]) -> int:
     """The earliest `first` of the alarms chained back from the last one: the CUSUM's
     reset after an alarm is bookkeeping, not the sum standing at 0, so alarms whose
     later `first` is the earlier one's alarm + 1 are one continuous rise."""
@@ -123,7 +125,7 @@ def early_warning(responses: pd.DataFrame, incidents: Sequence[dict], state: dic
     at = stretch["timestamp"][alarm].to_pydatetime()
     if now - at > timedelta(hours=RECENT_HOURS):
         return None
-    run = stretch.iloc[_rise_first(runs):alarm + 1]
+    run = stretch.iloc[rise_first(runs):alarm + 1]
     main = responses[responses["main_thread"].astype(bool) & outside_sdk(responses)]
     warning = {"at": at.isoformat(timespec="seconds"),
                "since": run["timestamp"].iloc[0].to_pydatetime().isoformat(timespec="seconds"),
