@@ -105,6 +105,22 @@ def test_one_spell_of_failures_alerts_once_and_an_old_day_never_does(tmp_path):
     assert failing_requests(counts, state_with(), date(2026, 9, 30)) == []
 
 
+def test_a_worse_burst_a_fortnight_later_alerts_again(tmp_path):
+    # 2026-09-07 alerts on its own. 2026-09-21, a fortnight later, more than doubles it
+    # and alerts again: the suppression window is now the 3-day spell, not the 14-day
+    # comparison window, so a burst outside the spell is judged fresh. 2026-09-28
+    # doesn't clear the ratio against 2026-09-21's burst and stays silent.
+    counts = counts_of(tmp_path, [{}] * 6 + [{"errors": 5}] + [{}] * 13 + [{"errors": 10}]
+                       + [{}] * 6 + [{"errors": 15}])
+    state = state_with()
+    first = failing_requests(counts[counts["day"] < "2026-09-08"], state, date(2026, 9, 8))
+    assert [e["since"] for e in first] == ["2026-09-07"]
+    second = failing_requests(counts[counts["day"] < "2026-09-22"], state, date(2026, 9, 22))
+    assert [e["since"] for e in second] == ["2026-09-21"]
+    third = failing_requests(counts[counts["day"] < "2026-09-29"], state, date(2026, 9, 29))
+    assert third == []
+
+
 def test_a_day_alerts_when_responses_stop_at_the_token_limit_far_more_than_before(tmp_path):
     counts = counts_of(tmp_path, [{}] * 6 + [{"truncated": 5}])
     state = state_with()

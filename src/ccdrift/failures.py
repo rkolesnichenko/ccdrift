@@ -29,6 +29,7 @@ ACTIVE_RESPONSES = 50  # main-thread responses for a day to count as active
 BEFORE_DAYS = 14
 MIN_BEFORE_DAYS = 5
 RECENT_DAYS = 14
+SPELL_DAYS = 3         # days after a reported episode that belong to the same spell
 
 
 def judged_failures(failures: pd.DataFrame, today: date) -> pd.DataFrame:
@@ -83,9 +84,11 @@ def _judged_days(counts: pd.DataFrame, state_key: str, state: dict[str, Any], to
         before = active[(days < day) & (days >= earliest)]
         if len(before) < MIN_BEFORE_DAYS or not hit(active.loc[i], before):
             continue
-        # One spell of failures alerts once: a day already covered by an episode
-        # reported for a day within BEFORE_DAYS before it is left alone.
-        if any(episode["since"] >= earliest for episode in state[state_key]):
+        # One spell of failures alerts once: a day within SPELL_DAYS of a reported
+        # episode belongs to it. A later burst is judged on its own, and the ratio
+        # test keeps one that isn't worse from alerting again.
+        spell = (date.fromisoformat(day) - timedelta(days=SPELL_DAYS)).isoformat()
+        if any(episode["since"] >= spell for episode in state[state_key]):
             continue
         found.append((active.loc[i], before))
     return found
