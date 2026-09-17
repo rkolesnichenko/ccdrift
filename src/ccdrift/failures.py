@@ -77,13 +77,16 @@ def failure_counts(failures: pd.DataFrame, turns: pd.DataFrame) -> pd.DataFrame:
 
 def _judged_days(counts: pd.DataFrame, state_key: str, state: dict[str, Any], today: date,
                  hit: Callable[[pd.Series, pd.DataFrame], bool], quiet_days: bool = False,
+                 ongoing: Optional[Callable[[dict[str, Any], pd.Series, pd.DataFrame], bool]] = None,
                  ) -> Iterator[tuple[pd.Series, pd.DataFrame]]:
     """The days within RECENT_DAYS that `hit` accepts, each with the active days before it
     that `hit` judged it against, skipping those a reported episode already covers.
     `quiet_days` says whether a day too quiet to be active may be judged: the harder the
     API fails, the fewer responses that day holds, so the worst day of an outage can be
     too quiet to count. The days before are the active ones either way — a quiet day is
-    judged, never a baseline.
+    judged, never a baseline. `ongoing(episode, row, before)` says whether a day merely
+    carries on what `episode` already reported; such a day is skipped however long ago the
+    episode was, so one lasting regression alerts once rather than every SPELL_DAYS.
     A generator on purpose: a rule records each episode as it takes it, so the next day's
     suppression test sees it, and one run over a fortnight — the first check after an
     upgrade, or after days with the machine off — alerts once per spell, just as a
@@ -108,6 +111,9 @@ def _judged_days(counts: pd.DataFrame, state_key: str, state: dict[str, Any], to
         # test keeps one that isn't worse from alerting again.
         spell = (date.fromisoformat(day) - timedelta(days=SPELL_DAYS)).isoformat()
         if any(episode["since"] >= spell for episode in state[state_key]):
+            continue
+        if ongoing is not None and any(ongoing(episode, candidates.loc[i], before)
+                                       for episode in state[state_key]):
             continue
         yield candidates.loc[i], before
 
@@ -134,23 +140,58 @@ def failing_requests(counts: pd.DataFrame, state: dict[str, Any], today: date,
     return new
 
 
+def _cut_shares(frame: pd.DataFrame) -> pd.Series:
+    """The share of each day's responses that stopped at the token limit or refused."""
+    return (frame["truncated"] + frame["refused"]) / frame["responses"]
+
+
+def _worst_share(frame: pd.DataFrame) -> float:
+    """The worst of those shares, 0.0 over no days at all."""
+    return float(_cut_shares(frame).max()) if len(frame) else 0.0
+
+
+def _usual_days(before: pd.DataFrame, share: float) -> pd.DataFrame:
+    """The days before a candidate that stand for its usual level: `before` without the
+    unbroken run of days at or above `share` that ends at its latest day. A day inside the
+    same run of bad days is the regression, not the usual level — the idea
+    incidents.exclusions applies to the cache metric, in the small. Without it a
+    regression that began on a day too small for the floor would set a bar the days
+    carrying it on could never clear, so it would never be reported at all."""
+    keep = len(before)
+    if keep:
+        shares = _cut_shares(before)
+        while keep and float(shares.iloc[keep - 1]) >= share:
+            keep -= 1
+    return before.iloc[:keep]
+
+
 def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
               floor: int = CUT_FLOOR, share: float = CUT_SHARE) -> list[dict[str, Any]]:
     """Days where at least `floor` responses stopped at the token limit or refused, on at
-    least `share` of the day's responses and CUT_RATIO times the worst share of the
-    active days before them (a quiet day counting as CUT_USUAL); each is recorded in
-    state["cut_short"], once per spell. Only active days are judged: this rule is a share
-    of a day's responses, which a day too quiet to be active can't support. The lab tries
-    other floors and shares; the check keeps the defaults."""
+    least `share` of the day's responses and CUT_RATIO times the worst share of the active
+    days before them that stand for the usual level (see _usual_days; a clean day counting
+    as CUT_USUAL); each is recorded in state["cut_short"], once per run. Only active days
+    are judged: this rule is a share of a day's responses, which a day too quiet to be
+    active can't support. The lab tries other floors and shares; the check keeps the
+    defaults."""
     def hit(row: pd.Series, before: pd.DataFrame) -> bool:
         cut = int(row["truncated"] + row["refused"])
         today_share = cut / int(row["responses"])
-        usual = max(CUT_USUAL, ((before["truncated"] + before["refused"]) / before["responses"]).max())
+        usual = max(CUT_USUAL, _worst_share(_usual_days(before, share)))
         return cut >= floor and today_share >= share and today_share >= CUT_RATIO * usual
 
+    def ongoing(episode: dict[str, Any], row: pd.Series, before: pd.DataFrame) -> bool:
+        """Whether this day only carries on the regression `episode` reported: every
+        judged day from that episode's day to this one stayed at or above `share`. One
+        regression is one alert, however long it lasts. A run that outlives BEFORE_DAYS
+        leaves `before` and may be reported again — a second word after a fortnight is
+        better than silence."""
+        carried = before[before["day"].astype(str) >= episode["since"]]
+        return bool(len(carried)) and bool((_cut_shares(carried) >= share).all())
+
     new = []
-    for row, before in _judged_days(counts, "cut_short", state, today, hit):
-        before_share = float(((before["truncated"] + before["refused"]) / before["responses"]).max())
+    for row, before in _judged_days(counts, "cut_short", state, today, hit, ongoing=ongoing):
+        before_share = _worst_share(_usual_days(before, share))
         episode = {"since": str(row["day"]), "days": [str(row["day"])],
                    "cut": int(row["truncated"] + row["refused"]), "truncated": int(row["truncated"]),
                    "refused": int(row["refused"]), "responses": int(row["responses"]),

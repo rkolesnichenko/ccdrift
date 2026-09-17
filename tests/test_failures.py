@@ -172,6 +172,58 @@ def test_a_day_alerts_when_responses_stop_at_the_token_limit_far_more_than_befor
     assert cut_short(few, state_with(), date(2026, 9, 8)) == []
 
 
+def cut_days(tmp_path, days, today=date(2026, 10, 1)):
+    """One CLI main-thread session a day from Sep 1, each day `(responses, cut)`: that
+    many main-thread responses a minute apart, the first `cut` of them stopping at the
+    token limit. Days differ in size here, which is the whole point: a share of a small
+    day is not the same evidence as a share of a big one."""
+    for d, (responses, cut) in enumerate(days):
+        records = []
+        for k in range(responses):
+            ts = at(d * DAY + 60 * k)
+            records += [prompt(ts, sid=f"c{d}"),
+                        line(f"c{d}-{k}", text(40), ts=ts, sid=f"c{d}", version="2.1.226", entrypoint="cli",
+                             stop_reason="max_tokens" if k < cut else "end_turn")]
+        write(tmp_path / "logs" / f"c{d}.jsonl", records)
+    tables = parse_all(tmp_path / "logs")
+    return failure_counts(judged_failures(tables.failures, today), judged_turns(tables.responses, today))
+
+
+def test_a_run_that_starts_too_quietly_alerts_on_its_first_day_over_the_floor(tmp_path):
+    # The shape the owner's logs would have taken: a release truncates about 1% of
+    # responses from 2026-09-06, but that day holds only 356 responses, so its 4 cut short
+    # are under the floor and it can't be reported. 2026-09-07 is the first day that can
+    # be — and only because the day before it belongs to the same run and is left out of
+    # the usual level it is compared with. Judged against 1.12%, its 1.04% would have to
+    # reach 3.37%, and the regression would never be reported at all.
+    counts = cut_days(tmp_path, [(60, 0)] * 5 + [(356, 4), (579, 6)])
+    episodes = cut_short(counts, state_with(), date(2026, 9, 8))
+    assert [(e["since"], e["cut"], e["responses"], e["before_share"]) for e in episodes] == [
+        ("2026-09-07", 6, 579, 0.0)]
+
+
+def test_the_days_that_carry_a_reported_run_on_stay_silent(tmp_path):
+    # 2026-09-07 is reported; 09-08 to 09-12 hold the same regression at the same level,
+    # and the spell window covers only the first three of them. Every one of them is a day
+    # the run carries on, so none is reported again.
+    counts = cut_days(tmp_path, [(60, 0)] * 5 + [(200, 2)] + [(200, 5)] * 6)
+    state = state_with()
+    assert [e["since"] for e in cut_short(counts, state, date(2026, 9, 13))] == ["2026-09-07"]
+    assert [e["since"] for e in state["cut_short"]] == ["2026-09-07"]
+    assert cut_short(counts, state, date(2026, 9, 13)) == []
+
+
+def test_a_fresh_run_alerts_again_once_the_level_has_been_back_to_normal(tmp_path):
+    # The check reports 2026-09-06 the morning after it; the fortnight that follows is
+    # clean, so 2026-09-21 is a new regression rather than the old one carrying on, and
+    # the run it starts is reported too.
+    counts = cut_days(tmp_path, [(60, 0)] * 5 + [(200, 5)] + [(60, 0)] * 14 + [(200, 5)])
+    state = state_with()
+    first = cut_short(counts[counts["day"] < "2026-09-07"], state, date(2026, 9, 7))
+    assert [e["since"] for e in first] == ["2026-09-06"]
+    assert [e["since"] for e in cut_short(counts, state, date(2026, 9, 22))] == ["2026-09-21"]
+
+
 def test_the_days_an_alert_compares_with_are_the_active_ones(tmp_path):
     # 5 quiet active days, then the alerting day; a day within the 14 days before it has
     # far more failures than any of them but too few responses to count, and must be
