@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from ccdrift.changelog import changelog_path, days_before, load_changelog, new_versions, note_lines, release_notes
+from ccdrift.changelog import changelog_path, days_before, load_changelog, note_lines, note_versions, release_notes
 from ccdrift.detector import DetectorConfig
 from ccdrift.digest import digest_due, digest_week, weekly_digest
 from ccdrift.early import early_message, early_warning
@@ -110,21 +110,13 @@ def history_start(incidents: list[dict[str, Any]], today: date) -> str:
     return days_before(min([today.isoformat(), *starts]), HISTORY_DAYS)
 
 
-def _note_versions(turns: pd.DataFrame, named: list[str], first_day: str, last_day: str) -> list[str]:
-    """The versions whose release notes an alert quotes: those its message names
-    ("2.1.267 (since 09-10)"), then the others first seen from `first_day` to
-    `last_day`, newest first."""
-    new = new_versions(turns, first_day, last_day)
-    return list(dict.fromkeys([text.split(" ")[0] for text in named] + new[::-1]))
-
-
 def _change_notes(turns: pd.DataFrame, changelog: dict[str, list[str]], change: dict[str, Any],
                   topic: str) -> tuple[list[str], list[str]]:
     """For a change seen on `change["days"]` from `change["since"]`: the versions behind
     those days, which its message names, and the log lines quoting release notes on
     `topic` from those and the other versions first seen from a week before it."""
     versions = versions_text(turns, change["days"])
-    quoted = _note_versions(turns, versions, days_before(change["since"], 7), change["days"][-1])
+    quoted = note_versions(turns, versions, days_before(change["since"], 7), change["days"][-1])
     return versions, note_lines(release_notes(changelog, quoted, topic))
 
 
@@ -156,8 +148,8 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
                     # As its flag alert would have: versions first seen from a week before
                     # the incident through its first RECOVERY_BINS days.
                     first_days = [day for day in judged_days if day >= incident["start"]][:RECOVERY_BINS]
-                    quoted = _note_versions(turns, incident["versions"], days_before(incident["start"], 7),
-                                            first_days[-1])
+                    quoted = note_versions(turns, incident["versions"], days_before(incident["start"], 7),
+                                           first_days[-1])
                     notes += release_notes(changelog, quoted, TOPIC_OF[incident["metric"]])
             alerts.append(("history", "ccdrift: past incidents found",
                            history_message(found, str(turns["day"].min())), note_lines(notes)))
@@ -166,7 +158,7 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
         notes = []
         if event.kind != "persistent" and event.days:
             first = days_before(event.incident["start"], 7) if event.kind == "flag" else event.incident["start"]
-            notes = release_notes(changelog, _note_versions(turns, named, first, max(event.days)),
+            notes = release_notes(changelog, note_versions(turns, named, first, max(event.days)),
                                   TOPIC_OF[event.incident["metric"]])
         alerts.append((kind, title, message, details + note_lines(notes)))
     warning = early_warning(df, incidents, state, now)
@@ -176,7 +168,7 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
         loop = loop_warning(df, stream, state, now)
         if loop:
             since, alarm_day = loop["since"][:10], loop["at"][:10]
-            quoted = _note_versions(turns, loop["versions"], days_before(since, 7), alarm_day)
+            quoted = note_versions(turns, loop["versions"], days_before(since, 7), alarm_day)
             alerts.append((LOOP_KINDS[stream], f"ccdrift: {LOOP_NAMES[stream]}", loop_message(loop, now),
                            note_lines(release_notes(changelog, quoted, "cache"))))
     # `ccdrift status` reads only the state file, so it shows the cost and versions

@@ -72,6 +72,14 @@ def new_versions(turns: pd.DataFrame, first_day: str, last_day: str) -> list[str
     return sorted((str(v) for v, day in first_seen.items() if first_day <= day <= last_day), key=version_key)
 
 
+def note_versions(turns: pd.DataFrame, named: Sequence[str], first_day: str, last_day: str) -> list[str]:
+    """The versions whose release notes an alert quotes: those its message names
+    ("2.1.267 (since 09-10)"), then the others first seen from `first_day` to
+    `last_day`, newest first."""
+    new = new_versions(turns, first_day, last_day)
+    return list(dict.fromkeys([text.split(" ")[0] for text in named] + new[::-1]))
+
+
 def release_notes(changelog: dict[str, list[str]], versions: Sequence[str],
                   topics: Union[str, Sequence[str]], limit: int = 5) -> list[tuple[str, str]]:
     """Up to `limit` (version, line) pairs from `versions`, in that order, whose text
