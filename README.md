@@ -122,8 +122,8 @@ ccdrift incident dismiss cache 2026-09-14           a false alarm: its days rejo
 ## Status line
 
 `ccdrift status --short` prints one line when something needs attention, and nothing
-otherwise: a failing check, no check for 3 days, an open incident, failing hooks, cache misses
-rising, or tool-loop cache misses rising.
+otherwise: a failing check, no check for 3 days, an open incident, failing hooks, cache
+misses rising, or tool-loop cache misses rising.
 
 ```console
 $ ccdrift status --short
@@ -172,8 +172,8 @@ ccdrift schedule status
 3 or more sessions, where automatic compaction started, and up to 2 release note lines
 about caching, Haiku and default models, effort, the system prompt and tool
 definitions, hooks, or subagent models. `ccdrift report` also shows stop-hook runs,
-the models subagents ran on, and tool-loop cache misses on the main thread and in subagents, which
-`report --by version` shows as a share per version.
+the models subagents ran on, and tool-loop cache misses on the main thread and in
+subagents, which `report --by version` shows as a share per version.
 
 `report --json` holds aggregates only: no paths, session ids or project names.
 
