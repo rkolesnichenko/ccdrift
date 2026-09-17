@@ -10,6 +10,8 @@ your usage limits:
   Code resends the conversation more often. ccdrift caught a real regression this way
   (Claude Code 2.1.233–2.1.258, August 2026) and follows such a regression until it's
   fixed.
+- **Tool-loop turns start missing the cache** on the main thread and in subagents: each
+  miss writes the whole conversation to the cache again.
 - **Haiku appears on the main thread**, where your chosen model normally answers.
 - **A setting Claude Code picks changes:** the main thread moves between the 1-hour
   and 5-minute prompt cache, or its effort level changes.
@@ -88,6 +90,8 @@ set this in `~/.claude/settings.json`:
 | **ccdrift: back to normal** | The metric has been back inside the cutoff, 3 days pooled, on 3 days in a row. | Nothing. `ccdrift incident list` keeps the record. |
 | **ccdrift: change persists** | The metric hasn't recovered 30 days after the incident started. ccdrift now treats the new level as normal. | Check whether you changed something: hooks, MCP servers, model. |
 | **ccdrift: cache misses rising** | Several of the latest new-prompt turns missed the cache, far above your usual rate, within the last day. | Nothing yet. The daily verdict follows within a few days; `ccdrift report` shows the days. |
+| **ccdrift: tool-loop cache misses rising** | Several of the latest main-thread turns inside the tool loop missed the cache, far above your usual rate, within the last day. | Nothing yet. `ccdrift report` shows loop misses per day; the weekly summary shows whether it lasts. |
+| **ccdrift: subagent cache misses rising** | The same, for turns inside subagents. | Nothing yet. `ccdrift report` shows subagent misses per day; the weekly summary shows whether it lasts. |
 | **ccdrift: setting changed** | The cache tier or effort level a model usually gets on the main thread changed, 2 days in a row. | If you didn't change it, Claude Code's default did. |
 | **ccdrift: session start changed** | New sessions start with at least 25% more or less context than the 10 before, on 3 sessions in a row. | `ccdrift report --by version` shows the session start size per version. Your MCP servers, plugins or CLAUDE.md can cause it too. |
 | **ccdrift: hooks failing** | Stop hooks failed on at least half their runs on 2 active days in a row, after 2 quiet weeks. | Run your hooks by hand; a Claude Code update may have changed their input. |
@@ -118,8 +122,8 @@ ccdrift incident dismiss cache 2026-09-14           a false alarm: its days rejo
 ## Status line
 
 `ccdrift status --short` prints one line when something needs attention, and nothing
-otherwise: a failing check, no check for 3 days, an open incident, failing hooks, or
-cache misses rising.
+otherwise: a failing check, no check for 3 days, an open incident, failing hooks, cache misses
+rising, or tool-loop cache misses rising.
 
 ```console
 $ ccdrift status --short
@@ -134,9 +138,9 @@ fields and early warnings.
 ## Alerts elsewhere
 
 `--exec` runs a command through the shell for each alert, with `CCDRIFT_ALERT` (`flag`,
-`recovered`, `persistent`, `early`, `setting`, `context`, `hooks`, `fields`,
-`blank_cache`, `digest` or `failed`), `CCDRIFT_TITLE` and `CCDRIFT_MESSAGE` set. For
-example, to send alerts to [ntfy](https://ntfy.sh):
+`recovered`, `persistent`, `early`, `loop`, `subagent_loop`, `setting`, `context`,
+`hooks`, `fields`, `blank_cache`, `digest` or `failed`), `CCDRIFT_TITLE` and
+`CCDRIFT_MESSAGE` set. For example, to send alerts to [ntfy](https://ntfy.sh):
 
 ```sh
 ccdrift schedule install --exec 'curl -s -d "$CCDRIFT_MESSAGE" https://ntfy.sh/your-topic'
@@ -167,8 +171,9 @@ ccdrift schedule status
 `report --by version` also shows each version's median session start size once it has
 3 or more sessions, where automatic compaction started, and up to 2 release note lines
 about caching, Haiku and default models, effort, the system prompt and tool
-definitions, hooks, or subagent models. `ccdrift report` also shows stop-hook runs and
-the models subagents ran on.
+definitions, hooks, or subagent models. `ccdrift report` also shows stop-hook runs,
+the models subagents ran on, and tool-loop cache misses on the main thread and in subagents, which
+`report --by version` shows as a share per version.
 
 `report --json` holds aggregates only: no paths, session ids or project names.
 
@@ -200,6 +205,17 @@ regression's rate. It warns when the sum passes h = 4 (measured in
 [lab/early_warning.py](lab/early_warning.py)) within the last day, at most once a
 week, and not while a cache incident is open. It needs 200 or more new-prompt turns in
 those 14 days, so it stays quiet for the first three weeks or so of history.
+
+A tool-loop turn is a response that doesn't open with a prompt, doesn't follow a
+compaction and comes within 5 minutes of the previous response in its transcript. It
+misses the cache when it reads less than half of what that response had cached.
+
+Every run follows these turns one by one on the main thread and in subagents, each
+apart, with the same kind of CUSUM against the usual miss rate of the 14 days before the
+last week (at least 1,000 turns): on the main thread against 2% with h = 3, and in
+subagents against 5% with h = 4 (measured in [lab/loop_cache.py](lab/loop_cache.py)). It
+warns when the sum passes h within the last day, at most once a week per stream, and
+also while a cache incident is open.
 
 A session's start is the prompt size (input plus cache tokens) of its first response.
 The latest 3 sessions are compared with the 10 before them: a change is at least 25%,
