@@ -36,9 +36,23 @@ def _count(n: int, noun: str) -> str:
     return f"no {noun}s" if n == 0 else f"{n} {noun}{'' if n == 1 else 's'}"
 
 
-def weekly_digest(turns: pd.DataFrame, state: dict[str, Any], week_start: date) -> str:
-    """One line on the judged turns of the week from `week_start`, the open incidents,
-    the setting changes reported that week, and the days the check ran."""
+def _loop_part(loops: Optional[pd.DataFrame], days: list[str]) -> str:
+    """"tool-loop misses 2 of 1,880, subagent 36 of 13,400" over `days` of `loops`
+    (loops.loop_counts by day)."""
+    week = loops[loops.index.isin(days)].sum() if loops is not None and not loops.empty else {}
+    parts = []
+    for prefix, found, missing in (("loop", "tool-loop misses", "no tool-loop turns"),
+                                   ("subagent_loop", "subagent", "no subagent loop turns")):
+        turns, misses = int(week.get(f"{prefix}_turns", 0)), int(week.get(f"{prefix}_misses", 0))
+        parts.append(f"{found} {misses:,} of {turns:,}" if turns else missing)
+    return ", ".join(parts)
+
+
+def weekly_digest(turns: pd.DataFrame, state: dict[str, Any], week_start: date,
+                  loops: Optional[pd.DataFrame] = None) -> str:
+    """One line on the judged turns of the week from `week_start`, its tool-loop misses
+    from `loops` (loops.loop_counts by day), the open incidents, the setting changes
+    reported that week, and the days the check ran."""
     days = [(week_start + timedelta(days=i)).isoformat() for i in range(7)]
     week = turns[turns["day"].astype(str).isin(days)] if not turns.empty else turns
     parts = []
@@ -57,6 +71,7 @@ def weekly_digest(turns: pd.DataFrame, state: dict[str, Any], week_start: date) 
                          f"({prompts['is_miss'].astype(bool).mean():.1%} misses)")
         haiku = float(week["is_haiku"].mean())
         parts.append("no Haiku" if haiku == 0 else f"Haiku {haiku:.1%} of responses")
+        parts.append(_loop_part(loops, days))
     parts.append(_count(sum(1 for i in state["incidents"] if i["status"] == "open"), "open incident"))
     parts.append(_count(sum(1 for c in state["settings"] if c["reported_on"] in days), "setting change"))
     ran = len(set(state.get("runs", [])) & set(days))

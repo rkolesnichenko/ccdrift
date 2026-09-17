@@ -41,7 +41,7 @@ def test_a_quiet_week_reads_as_one_line():
              "settings": [{"reported_on": "2026-09-16"}, {"reported_on": "2026-09-10"}]}
     assert weekly_digest(week_turns(), state, date(2026, 9, 14)) == (
         "Week of 09-14: 70 responses on 2.1.261–2.1.270; cache ratio 0.976 (1.4% misses); no Haiku; "
-        "no open incidents; 1 setting change; check ran on 7 of 7 days.")
+        "no tool-loop turns, no subagent loop turns; no open incidents; 1 setting change; check ran on 7 of 7 days.")
 
 
 def test_the_digest_counts_haiku_open_incidents_and_missed_runs():
@@ -49,7 +49,15 @@ def test_the_digest_counts_haiku_open_incidents_and_missed_runs():
              "settings": [{"reported_on": "2026-09-15"}, {"reported_on": "2026-09-19"}]}
     assert weekly_digest(week_turns(haiku=1), state, date(2026, 9, 14)) == (
         "Week of 09-14: 70 responses on 2.1.261–2.1.270; cache ratio 0.976 (1.4% misses); Haiku 1.4% of responses; "
-        "1 open incident; 2 setting changes; check ran on 2 of 7 days.")
+        "no tool-loop turns, no subagent loop turns; 1 open incident; 2 setting changes; check ran on 2 of 7 days.")
+
+
+def test_the_digest_counts_the_weeks_tool_loop_misses():
+    loops = pd.DataFrame({"loop_turns": [900, 980, 5000], "loop_misses": [1, 1, 9],
+                          "subagent_loop_turns": [6400, 7000, 0], "subagent_loop_misses": [30, 6, 0]},
+                         index=["2026-09-14", "2026-09-20", "2026-09-21"])
+    assert "; no Haiku; tool-loop misses 2 of 1,880, subagent 36 of 13,400; " in weekly_digest(
+        week_turns(), new_state(), date(2026, 9, 14), loops)
 
 
 def test_a_week_without_responses_says_so():

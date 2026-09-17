@@ -20,6 +20,7 @@ from ccdrift.history import load_history
 from ccdrift.hooks import failure_message, hook_failures, judged_hook_runs
 from ccdrift.incidents import describe, incident_cost, incident_versions, update_incidents, versions_text
 from ccdrift.logs import judged_turns, no_transcripts_message
+from ccdrift.loops import loop_counts
 from ccdrift.notify import notify, run_exec
 from ccdrift.sessions import context_alerts, context_message, session_starts
 from ccdrift.settings import change_message, setting_changes
@@ -180,7 +181,8 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     week_start = digest_due(state, now) if digest else None
     if week_start is not None:
         state["digest_week"] = digest_week(now)
-        alerts.append(("digest", "ccdrift: weekly summary", weekly_digest(turns, state, week_start), []))
+        alerts.append(("digest", "ccdrift: weekly summary",
+                       weekly_digest(turns, state, week_start, loop_counts(df, today)), []))
     return alerts
 
 
