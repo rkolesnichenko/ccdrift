@@ -1,5 +1,5 @@
-"""The daily check's state file: the incidents it follows, the setting changes and
-blank-cache stretches it reported, and how its last run went."""
+"""The daily check's state file: the incidents it follows, the setting changes, failure
+days and blank-cache stretches it reported, and how its last run went."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def make_private(path: Path) -> None:
 def new_state() -> dict[str, Any]:
     return {"version": STATE_VERSION, "incidents": [], "settings": [], "blank_cache": [], "reported": {},
             "field_gaps": [], "hook_failures": [], "context_changes": [], "early_warnings": [], "loop_warnings": [],
-            "runs": []}
+            "failed_requests": [], "cut_short": [], "runs": []}
 
 
 def load_state(path: Path) -> dict[str, Any]:

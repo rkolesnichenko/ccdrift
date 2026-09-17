@@ -78,6 +78,28 @@ def version_key(version: str) -> tuple:
     return (0, *((0, int(part), "") if part.isdigit() else (1, 0, part) for part in re.split(r"[.+-]", version)))
 
 
+# What each kind of failed request is called after a count: "7 overloaded".
+FAILURE_WORDS = {"overloaded": "overloaded", "stream": "cut off mid-stream", "retry": "retried",
+                 "other": "of another kind", "slept": "while the Mac slept"}
+
+
+def kinds_text(kinds: dict[str, int]) -> str:
+    """"7 overloaded, 2 retried", the most first."""
+    ordered = sorted(((kind, count) for kind, count in kinds.items() if count), key=lambda item: (-item[1], item[0]))
+    return ", ".join(f"{count} {FAILURE_WORDS[kind]}" for kind, count in ordered)
+
+
+def failure_line(episode: dict[str, Any]) -> str:
+    named = kinds_text(episode["kinds"])
+    return (f"requests failing on {episode['since']}: {episode['requests']}"
+            f"{f' ({named})' if named else ''}, at most {episode['before']} a day before")
+
+
+def cut_short_line(episode: dict[str, Any]) -> str:
+    return (f"responses cut short on {episode['since']}: {episode['cut']} of {episode['responses']:,} "
+            "main-thread responses")
+
+
 def context_change_line(change: dict[str, Any]) -> str:
     return f"session start ~{approx(change['from'])} -> ~{approx(change['to'])} tokens from {change['since']}"
 
