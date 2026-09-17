@@ -3,14 +3,16 @@
 import pandas as pd
 
 from ccdrift.failures import FAILURE_DAY_COLUMNS, cut_short, failing_requests
-from lab.failures import cut_rows, gate, plant, plant_days, replay, request_rows
+from lab.failures import cut_rows, gate, plant, plant_days, plant_run, replay, request_rows, run_days
 from tests.helpers import nth_day
 
 
 def counts_of(rows, responses=1000):
     """rows: (failed requests, responses cut short) per day, one day each from Sep 1. A
-    day holds `responses` responses, enough that a planted 1% is over the floor."""
-    return pd.DataFrame([{"day": nth_day(i), "responses": responses, "requests": requests, "truncated": cut,
+    day holds `responses` responses — one number for every day, or one per day — 1000 by
+    default, enough that a planted 1% is over the floor."""
+    sizes = list(responses) if isinstance(responses, (list, tuple)) else [responses] * len(rows)
+    return pd.DataFrame([{"day": nth_day(i), "responses": sizes[i], "requests": requests, "truncated": cut,
                           "refused": 0, "overloaded": requests, "stream": 0, "other": 0, "retry": 0, "slept": 0}
                          for i, (requests, cut) in enumerate(rows)], columns=FAILURE_DAY_COLUMNS)
 
@@ -32,6 +34,29 @@ def test_planting_a_bad_day_makes_the_day_it_names_fail_or_cut_short():
     # asks for keeps its own count.
     already = counts_of([(0, 0)] * 6 + [(0, 50)])
     assert int(plant(already, nth_day(6), share=0.01)["truncated"].iloc[-1]) == 50
+
+
+def test_a_planted_run_lasts_three_days_and_is_caught_when_any_of_them_alerts():
+    # A release that truncates responses keeps doing it until it is fixed, so the cut
+    # gate plants a run. Here the run opens on a day too quiet to be judged at all, and
+    # the day after it is the one that alerts — the run is still caught.
+    counts = counts_of([(0, 0)] * 8, responses=[1000] * 6 + [40, 1000])
+    assert run_days(counts, nth_day(6)) == [nth_day(6), nth_day(7)]
+    planted = plant_run(counts, nth_day(6), share=0.01)
+    assert [int(value) for value in planted["truncated"]] == [0] * 6 + [0, 10]
+    assert replay(planted, cut_short) == [nth_day(7)]
+    row = next(row for row in cut_rows(counts, days=8) if (row["floor"], row["share"]) == (5, 0.005))
+    assert (row["caught"], row["plants"]) == (2, 2)
+
+
+def test_a_setting_no_day_of_the_planted_run_reaches_is_not_credited_with_catching_it():
+    # A 1% run on 400-response days is 4 responses a day, under a floor of 5 on every day
+    # of it, so that setting catches nothing; a floor of 3 catches the same runs.
+    rows = cut_rows(counts_of([(0, 0)] * 8, responses=400), days=8)
+    strict = next(row for row in rows if (row["floor"], row["share"]) == (5, 0.005))
+    loose = next(row for row in rows if (row["floor"], row["share"]) == (3, 0.005))
+    assert (strict["caught"], strict["plants"], strict["passes"]) == (0, 3, False)
+    assert (loose["caught"], loose["plants"]) == (3, 3)
 
 
 def test_a_burst_is_planted_on_the_last_judgeable_days_oldest_first():

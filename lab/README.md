@@ -40,7 +40,8 @@ uv run --group lab python -m lab.loop_cache --incident 2026-08-16..2026-09-04
 # G7: do built-in subagents keep one model?
 uv run --group lab python -m lab.subagent_models
 
-# G10 and G11: do the failure rules stay quiet on a real history and catch a planted burst?
+# G10 and G11: do the failure rules stay quiet on a real history and catch a planted
+# burst — a single bad day for G10, a three-day run of them for G11?
 uv run --group lab python -m lab.failures
 ```
 

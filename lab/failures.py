@@ -7,15 +7,20 @@ high enough to stay quiet and low enough to catch a bad release.
 
 Both gates replay the rules day by day over the logs, as the daily check would have run
 them, with one state carried along, and then once more for each of the last PLANT_DAYS
-judgeable days, over a copy of the counts with failures planted in that one day. Planting
+judgeable days, over a copy of the counts with failures planted from that day on. Planting
 only on the corpus's last day made a verdict turn on how busy that day happened to be: a
 quiet Sunday at the end of the logs flipped a PASS to a FAIL with no change to the rule.
+
+Each gate plants the shape its own trouble takes. An overload is a day, so G10 plants a
+single bad day; a release that truncates responses keeps doing it until someone fixes it,
+so G11 plants a run of PLANT_RUN days and asks whether ccdrift says so within the run.
 
 - G10 (requests failing) passes when the settings alert at most ALERT_BUDGET times per
   BUDGET_DAYS days of history, and alert on every day planted with PLANTED_REQUESTS
   failures.
-- G11 (responses cut short) passes the same way, with PLANTED_SHARE of a day's responses
-  stopping at the token limit.
+- G11 (responses cut short) passes the same way, with PLANTED_SHARE of each planted day's
+  responses stopping at the token limit, counting a run as caught when any day of it
+  alerts.
 
 Run from the repo root:
 
@@ -47,6 +52,9 @@ BUDGET_DAYS = 30
 PLANTED_REQUESTS = 10   # failed requests a bad release would bring in a day
 PLANTED_SHARE = 0.01    # of a day's responses stopping at the token limit
 PLANT_DAYS = 5          # days a burst is planted on in turn, one replay each
+PLANT_RUN = 3           # days a planted run lasts: a bad release truncates responses
+                        # until it is fixed, so the cut gate plants three days in a row
+                        # and asks whether ccdrift says so within them
 GATES = {"requests": "G10", "cut": "G11"}
 
 
@@ -82,6 +90,27 @@ def plant(counts: pd.DataFrame, day: str, requests: int = 0, share: float = 0.0)
     return planted
 
 
+def run_days(counts: pd.DataFrame, day: str, how_many: int = PLANT_RUN) -> list[str]:
+    """`day` and the next `how_many` - 1 days the frame holds — the days a planted run
+    covers, and the days any of which alerting means the run was caught."""
+    days = [str(one) for one in counts["day"].astype(str)]
+    if str(day) not in days:
+        raise KeyError(f"{day} is not one of the counted days")
+    start = days.index(str(day))
+    return days[start:start + how_many]
+
+
+def plant_run(counts: pd.DataFrame, day: str, share: float) -> pd.DataFrame:
+    """The counts with a run of bad days from `day`: each day of run_days(counts, day)
+    with `share` of its responses stopping at the token limit. A release that truncates
+    responses does it until someone fixes it, so this, not a single bad day, is the shape
+    the cut-short rule has to catch; each day is still only ever made worse."""
+    planted = counts
+    for one in run_days(counts, day):
+        planted = plant(planted, one, share=share)
+    return planted
+
+
 def plant_days(counts: pd.DataFrame, how_many: int = PLANT_DAYS) -> list[str]:
     """The last `how_many` active days a rule could judge a burst on — at least
     MIN_BEFORE_DAYS active days within the BEFORE_DAYS before them — oldest first. A gate
@@ -96,20 +125,25 @@ def plant_days(counts: pd.DataFrame, how_many: int = PLANT_DAYS) -> list[str]:
     return judgeable[-how_many:]
 
 
-def _rows(counts: pd.DataFrame, days: int, rule, grid, names, planted: dict[str, Any]) -> list[dict[str, Any]]:
+def _rows(counts: pd.DataFrame, days: int, rule, grid, names,
+          planted: Callable[[str], tuple[pd.DataFrame, list[str]]]) -> list[dict[str, Any]]:
     """One row per setting in `grid`: the days it would alert on over the real history,
-    and how many of the planted bursts it catches — `planted` is what plant() puts in a
-    day, and each of plant_days(counts) carries it in turn, one replay each. A setting
-    catches a plant only when the planted day itself alerts."""
+    and how many of the planted bursts it catches. `planted(day)` gives the counts with a
+    burst starting on that day and the days whose alerting means it was caught — the day
+    itself for G10, the whole run for G11 — and each day of plant_days(counts) carries one
+    in turn, one replay each. A setting catches a plant only when a day of the plant
+    itself alerts."""
     budget = ALERT_BUDGET * max(1, days / BUDGET_DAYS)
     plants = plant_days(counts)
     rows = []
     for setting in grid:
         kwargs = dict(zip(names, setting))
         alerts = replay(counts, lambda c, state, today: rule(c, state, today, **kwargs))
-        caught = sum(day in replay(plant(counts, day, **planted),
-                                   lambda c, state, today: rule(c, state, today, **kwargs))
-                     for day in plants)
+        caught = 0
+        for day in plants:
+            bad, within = planted(day)
+            found = replay(bad, lambda c, state, today: rule(c, state, today, **kwargs))
+            caught += any(one in found for one in within)
         rows.append({**kwargs, "alerts": len(alerts), "days": days, "on": ", ".join(alerts),
                      "caught": caught, "plants": len(plants),
                      "passes": bool(plants) and caught == len(plants) and len(alerts) <= budget})
@@ -117,13 +151,19 @@ def _rows(counts: pd.DataFrame, days: int, rule, grid, names, planted: dict[str,
 
 
 def request_rows(counts: pd.DataFrame, days: int) -> list[dict[str, Any]]:
+    """G10's grid, each setting judged against a single planted bad day: an overload is a
+    day, not a spell."""
     grid = [(floor, ratio) for floor in REQUEST_FLOOR_GRID for ratio in REQUEST_RATIO_GRID]
-    return _rows(counts, days, failing_requests, grid, ("floor", "ratio"), {"requests": PLANTED_REQUESTS})
+    return _rows(counts, days, failing_requests, grid, ("floor", "ratio"),
+                 lambda day: (plant(counts, day, requests=PLANTED_REQUESTS), [day]))
 
 
 def cut_rows(counts: pd.DataFrame, days: int) -> list[dict[str, Any]]:
+    """G11's grid, each setting judged against a planted run of PLANT_RUN bad days, caught
+    when ccdrift alerts on any day of the run."""
     grid = [(floor, share) for floor in CUT_FLOOR_GRID for share in CUT_SHARE_GRID]
-    return _rows(counts, days, cut_short, grid, ("floor", "share"), {"share": PLANTED_SHARE})
+    return _rows(counts, days, cut_short, grid, ("floor", "share"),
+                 lambda day: (plant_run(counts, day, PLANTED_SHARE), run_days(counts, day)))
 
 
 def gate(rows: list[dict[str, Any]], chosen: dict[str, Any]) -> tuple[bool, list[str]]:
