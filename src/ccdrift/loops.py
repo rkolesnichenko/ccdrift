@@ -22,7 +22,7 @@ from ccdrift.texts import approx, clock_text
 STREAMS = ("main", "subagent")
 LoopSetting = namedtuple("LoopSetting", "p1 h min_sessions")
 LOOP_SETTINGS: dict[str, Optional[LoopSetting]] = {"main": LoopSetting(p1=0.02, h=3.0, min_sessions=1),
-                                                   "subagent": LoopSetting(p1=0.05, h=4.0, min_sessions=1)}
+                                                   "subagent": LoopSetting(p1=0.05, h=5.0, min_sessions=1)}
 
 LOOP_COLUMNS = ["timestamp", "day", "session_id", "version", "cache_creation", "is_loop_miss"]
 
