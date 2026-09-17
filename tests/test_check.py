@@ -133,6 +133,7 @@ def test_a_back_to_normal_alert_quotes_the_version_it_names_first(tmp_path, sent
     (tmp_path / "cfg" / "cache" / "changelog.md").write_text(
         "## 2.1.259\n\n- Search subagents run on Sonnet again instead of Haiku\n\n"
         "## 2.1.233\n\n- Search subagents now run on the Haiku model\n")
+    ran_before(tmp_path)
     run_check(logs, tmp_path / "state.json", today=date(2026, 9, 18))
     capsys.readouterr()
     run_check(logs, tmp_path / "state.json", today=date(2026, 9, 23))
@@ -389,10 +390,12 @@ def test_alerts_quote_release_notes_on_their_topic_from_new_versions(tmp_path, s
     (tmp_path / "cfg" / "cache").mkdir(parents=True)
     (tmp_path / "cfg" / "cache" / "changelog.md").write_text(
         "## 2.1.233\n\n- Search subagents now run on the Haiku model\n- Added a theme picker\n")
-    run_check(logs, tmp_path / "state.json", today=date(2026, 9, 18))
+    ran_before(tmp_path)
+    run_check(logs, tmp_path / "state.json", notify_user=True, today=date(2026, 9, 18))
     out = capsys.readouterr().out
     assert "    release notes 2.1.233: Search subagents now run on the Haiku model" in out.splitlines()
     assert "theme picker" not in out
+    assert sent == ["ccdrift flag"]
 
 
 def test_alerts_quote_the_version_they_name_first_then_other_new_versions_newest_first(tmp_path, sent, capsys):
@@ -522,6 +525,7 @@ def test_the_first_check_replays_its_history_and_says_once_what_it_found(tmp_pat
     main_thread_days(tmp_path / "logs", OLD_REGRESSION)
     (tmp_path / "cache").mkdir()
     (tmp_path / "cache" / "changelog.md").write_text(
+        "## 2.1.259\n\n- Search subagents run on Sonnet again instead of Haiku\n\n"
         "## 2.1.233\n\n- Search subagents now run on the Haiku model\n- Added a theme picker\n")
     kinds = tmp_path / "kinds.txt"
     check_logs(tmp_path, today=date(2026, 10, 10), exec_command=f'echo "$CCDRIFT_ALERT" >> "{kinds}"')
@@ -534,6 +538,7 @@ def test_the_first_check_replays_its_history_and_says_once_what_it_found(tmp_pat
             "2026-09-20, ~36 extra Haiku responses, on Claude Code 2.1.233 (since 09-15). `ccdrift incident list` "
             "has the details; `ccdrift incident dismiss` puts a false alarm's days back in the baseline.") in out
     assert "    release notes 2.1.233: Search subagents now run on the Haiku model" in out
+    assert not any(text.startswith("    release notes 2.1.259") for text in out)
     assert [(i["start"], i["status"], i["source"], i["opened_on"], i["closed_on"])
             for i in load_state(tmp_path / "state.json")["incidents"]] == [
         ("2026-09-15", "recovered", "replay", "2026-09-18", "2026-09-23")]
