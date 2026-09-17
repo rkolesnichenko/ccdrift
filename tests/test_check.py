@@ -11,12 +11,14 @@ import pandas as pd
 import pytest
 
 import ccdrift.check
+import ccdrift.loops
 from ccdrift.check import blank_cache_stretch, run_check
 from ccdrift.incidents import add_incident, close_incident
+from ccdrift.loops import LoopSetting
 from ccdrift.state import load_state, new_state, save_state
 from ccdrift.status import status_report
 from tests.helpers import (DAY, at, busy_days, damage_responses_table, hook_days_logs, line, main_thread_days,
-                           nth_day, prompt, text, write)
+                           nth_day, prompt, text, tool_loop_days, write)
 
 
 @pytest.fixture
@@ -455,6 +457,46 @@ def test_check_warns_within_a_day_when_new_prompts_start_missing_the_cache(tmp_p
     assert ("ccdrift: cache misses rising: 10 of the last 10 new-prompt turns missed the cache (usually 0.0%), "
             "since 09-21 10:50, on Claude Code 2.1.226 (since 09-01). The daily check confirms or clears it "
             "within a few days.") in capsys.readouterr().out
+
+
+@pytest.fixture
+def loop_settings(monkeypatch):
+    """The settings lab gates G8 and G9 could record, whatever they did record."""
+    for stream in ("main", "subagent"):
+        monkeypatch.setitem(ccdrift.loops.LOOP_SETTINGS, stream, LoopSetting(p1=0.02, h=3, min_sessions=1))
+
+
+def test_check_warns_when_tool_loop_turns_start_missing_the_cache(tmp_path, sent, capsys, loop_settings):
+    # Ten misses in a row from 11:31 on Sep 21 pass h = 3 at the second; an hour later
+    # the check stays quiet.
+    tool_loop_days(tmp_path / "logs", 21, misses=10)
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "cache" / "changelog.md").write_text(
+        "## 2.1.226\n\n- Fixed prompt cache misses after a tool call\n- Added a theme picker\n")
+    check_logs(tmp_path, today=date(2026, 9, 22))
+    check_logs(tmp_path, today=date(2026, 9, 22), now=datetime(2026, 9, 22, 10, 0, tzinfo=timezone.utc))
+    assert sent == ["ccdrift: tool-loop cache misses rising"]
+    out = capsys.readouterr().out.splitlines()
+    assert ("[check 2026-09-22 09:00] ccdrift: tool-loop cache misses rising: 10 of the last 10 tool-loop turns "
+            "missed the cache (usually 0.00%), since 09-21 11:31, in 1 session, rewriting ~110k tokens, on Claude "
+            "Code 2.1.226 (since 09-01). The weekly summary shows whether it lasts.") in out
+    assert "    release notes 2.1.226: Fixed prompt cache misses after a tool call" in out
+
+
+def test_check_warns_about_subagent_loop_misses_while_a_cache_incident_is_open(tmp_path, sent, capsys,
+                                                                               loop_settings):
+    # An incident on new prompts doesn't say whether tool loops miss too.
+    tool_loop_days(tmp_path / "logs", 21)
+    tool_loop_days(tmp_path / "logs", 21, misses=10, subagent=True)
+    state = new_state()
+    add_incident(state["incidents"], "cache_ratio", "2026-09-21", "2026-09-21", date(2026, 9, 22))
+    state["incidents"][0].update(end=None, status="open", source="check")
+    save_state(tmp_path / "state.json", state)
+    kinds = tmp_path / "kinds.txt"
+    check_logs(tmp_path, today=date(2026, 9, 22), exec_command=f'echo "$CCDRIFT_ALERT" >> "{kinds}"')
+    assert sent == ["ccdrift: subagent cache misses rising"]
+    assert kinds.read_text() == "subagent_loop\n"
+    assert [w["stream"] for w in load_state(tmp_path / "state.json")["loop_warnings"]] == ["subagent"]
 
 
 LOCAL = timezone(timedelta(hours=3))

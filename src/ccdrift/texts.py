@@ -16,6 +16,9 @@ SHORT_NAMES = {"cache_ratio": "cache", "haiku_fraction": "haiku"}
 MOVES = {"cache_ratio": "down", "haiku_fraction": "up"}
 PERSISTENT_DAYS = 30
 
+# What a tool-loop warning of each stream (see ccdrift.loops) says is happening.
+LOOP_NAMES = {"main": "tool-loop cache misses rising", "subagent": "subagent cache misses rising"}
+
 SETTING_NAMES = {"cache_tier": "cache tier", "effort": "effort", "speed": "speed", "service_tier": "service tier"}
 TIER_NAMES = {"1h": "1-hour", "5m": "5-minute"}
 

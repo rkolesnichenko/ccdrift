@@ -185,6 +185,28 @@ def main_thread_days(path, days, per_day=60, first_day=0):
         write(path / f"s{d}.jsonl", records)
 
 
+def tool_loop_days(path, days, per_day=100, misses=0, subagent=False):
+    """One CLI session a day from Sep 1 on 2.1.226, on the main thread or in a subagent
+    of it: a prompt, then `per_day` turns a minute apart, each after a tool result and
+    reading back what the one before had cached, with a second prompt halfway. The last
+    `misses` turns of the last day miss the cache, reading nothing."""
+    for d in range(days):
+        records, cached = [], 0
+        for k in range(per_day + 1):
+            ts = at(d * DAY + 60 * k)
+            opens = k in (0, per_day // 2)
+            records.append(prompt(ts, sid=f"s{d}", sidechain=subagent) if opens
+                           else tool_result(ts, sid=f"s{d}", sidechain=subagent))
+            missed = d == days - 1 and k > per_day - misses
+            read = 0 if k == 0 or missed else cached
+            written = 1000 if k == 0 else 100 + (cached if missed else 0)
+            records.append(line(f"{'a' if subagent else 'm'}{d}-{k}", text(40), ts=ts, sid=f"s{d}",
+                                sidechain=subagent, cache_read=read, cache_creation=written, version="2.1.226",
+                                entrypoint="cli"))
+            cached = read + written
+        write(path / (f"s{d}/subagents/agent-a.jsonl" if subagent else f"s{d}.jsonl"), records)
+
+
 def hook_days_logs(path, failing_days, days, per_day=10):
     """`per_day` stop-hook summaries a day from Sep 1 in one transcript; on the day
     indexes in `failing_days` every hook reports an error."""

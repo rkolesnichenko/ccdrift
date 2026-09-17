@@ -20,14 +20,18 @@ from ccdrift.history import load_history
 from ccdrift.hooks import failure_message, hook_failures, judged_hook_runs
 from ccdrift.incidents import describe, incident_cost, incident_versions, update_incidents, versions_text
 from ccdrift.logs import judged_turns, no_transcripts_message
-from ccdrift.loops import loop_counts
+from ccdrift.loops import STREAMS, loop_counts, loop_message, loop_warning
 from ccdrift.notify import notify, run_exec
 from ccdrift.sessions import context_alerts, context_message, session_starts
 from ccdrift.settings import change_message, setting_changes
 from ccdrift.state import ccdrift_home, load_state, record_run, save_state, state_lock
+from ccdrift.texts import LOOP_NAMES
 
 # kind, title, message, and lines for the log only
 Alert = tuple[str, str, str, list[str]]
+
+# The alert kind of a tool-loop warning for each stream.
+LOOP_KINDS = {"main": "loop", "subagent": "subagent_loop"}
 
 # Which release notes explain an alert about each metric or setting.
 TOPIC_OF = {"cache_ratio": "cache", "haiku_fraction": "haiku", "cache_tier": "cache", "effort": "effort",
@@ -147,6 +151,13 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     warning = early_warning(df, incidents, state, now)
     if warning:
         alerts.append(("early", "ccdrift: cache misses rising", early_message(warning, now), []))
+    for stream in STREAMS:
+        loop = loop_warning(df, stream, state, now)
+        if loop:
+            since, alarm_day = loop["since"][:10], loop["at"][:10]
+            quoted = _note_versions(turns, loop["versions"], days_before(since, 7), alarm_day)
+            alerts.append((LOOP_KINDS[stream], f"ccdrift: {LOOP_NAMES[stream]}", loop_message(loop, now),
+                           note_lines(release_notes(changelog, quoted, "cache"))))
     # `ccdrift status` reads only the state file, so it shows the cost and versions
     # saved here: for open incidents, and for incidents added or closed by hand, which
     # start without a cost or keep the one from before they were closed. describe()
