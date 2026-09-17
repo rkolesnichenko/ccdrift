@@ -422,7 +422,10 @@ def frame(rows) -> pd.DataFrame:
     # sessionId but write their own file and keep their own cache prefix.
     transcript = ["source_file", "is_sidechain"]
     df = df.sort_values(transcript + ["timestamp"], kind="stable").reset_index(drop=True)
-    df["gap_seconds"] = df.groupby(transcript)["timestamp"].diff().dt.total_seconds()
+    grouped = df.groupby(transcript)
+    df["gap_seconds"] = grouped["timestamp"].diff().dt.total_seconds()
+    # What the response before had cached, which a tool-loop turn should read back.
+    df["prev_cached"] = grouped["cache_read"].shift() + grouped["cache_creation"].shift()
     df = _with_day(df)
     return add_ratios(df)
 
@@ -540,6 +543,18 @@ def judged_subagent_turns(df: pd.DataFrame, today: date) -> pd.DataFrame:
 CACHE_TTL_SECONDS = 3600
 SUBAGENT_CACHE_TTL_SECONDS = 300
 
+# Tool-loop turns: those that don't open with a prompt and don't follow a
+# compaction. Each should read back everything the response before it in its
+# transcript had cached, so one that reads under half of that rewrote the
+# conversation. In real logs (Aug 6 - Sep 16, 2026) such a miss read only the
+# system prompt and tools, 4-12% of what was cached; the rule agreed with the
+# new-prompt rule below on every main-thread loop turn, while 7 subagent turns
+# that added more input than they read counted as misses by that rule alone.
+# Subagents keep a 5-minute cache (62 of 79 turns 5-10 minutes apart missed);
+# no main-thread turn 5-60 minutes apart missed (147), so one gap serves both.
+LOOP_GAP_SECONDS = 300
+LOOP_MISS_SHARE = 0.5
+
 # A prompt turn misses the cache when it reads under half its input from it.
 # Misses are all-or-nothing: in real logs cutoffs of 0.3, 0.5 and 0.8 selected
 # 2.82%, 2.82% and 2.88% of prompt turns.
@@ -558,6 +573,11 @@ def add_ratios(df: pd.DataFrame) -> pd.DataFrame:
                                & (df["gap_seconds"] <= CACHE_TTL_SECONDS))
     df["prompt_cache_read_ratio"] = df["cache_read_ratio"].where(df["prompt_within_ttl"])
     df["is_miss"] = df["prompt_within_ttl"] & (df["cache_read_ratio"] < MISS_RATIO)
+    if "prev_cached" in df:
+        tokens = df["cache_read"] + df["cache_creation"]
+        df["loop_turn"] = (~df["new_prompt"] & ~df["after_compaction"] & (df["gap_seconds"] <= LOOP_GAP_SECONDS)
+                           & (tokens > 0) & (df["prev_cached"] > 0))
+        df["is_loop_miss"] = df["loop_turn"] & (df["cache_read"] < LOOP_MISS_SHARE * df["prev_cached"])
     if "cache_1h" in df:
         writes = df["cache_1h"] + df["cache_5m"]
         tier = pd.Series([None] * len(df), index=df.index, dtype=object)

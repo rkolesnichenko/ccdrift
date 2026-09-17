@@ -131,6 +131,47 @@ def test_idle_gap_is_measured_within_one_transcript(tmp_path):
     assert df.loc[~df["is_sidechain"], "gap_seconds"].dropna().tolist() == [1200]
 
 
+def test_tool_loop_turns_are_judged_against_what_the_response_before_had_cached(tmp_path):
+    # A tool-loop turn should read back everything the response before it cached.
+    # Prompts, compactions, pauses past 5 minutes and responses without cache token
+    # counts (on the turn or the one before) aren't judged.
+    write(tmp_path / "s1.jsonl", [
+        prompt(at(0)),        line("m1", text(40), ts=at(0),   cache_read=0,    cache_creation=1000),
+        tool_result(at(10)),  line("m2", text(40), ts=at(10),  cache_read=1000, cache_creation=0),
+        tool_result(at(20)),  line("m3", text(40), ts=at(20),  cache_read=500,  cache_creation=600),
+        tool_result(at(30)),  line("m4", text(40), ts=at(30),  cache_read=549,  cache_creation=700),
+        tool_result(at(330)), line("m5", text(40), ts=at(330), cache_read=1249, cache_creation=0),
+        tool_result(at(631)), line("m6", text(40), ts=at(631), cache_read=0,    cache_creation=1300),
+        prompt(at(640)),      line("m7", text(40), ts=at(640), cache_read=0,    cache_creation=1300),
+        compact_boundary(at(645)),
+        tool_result(at(650)), line("m8", text(40), ts=at(650), cache_read=0,    cache_creation=500),
+        tool_result(at(660)), line("m9", text(40), ts=at(660)),
+        tool_result(at(670)), line("m10", text(40), ts=at(670), cache_read=0,   cache_creation=500),
+    ])
+    df = parse_source(tmp_path)
+    assert df["loop_turn"].tolist() == [False, True, True, True, True, False, False, False, False, False]
+    # m3 reads exactly half of the 1,000 tokens cached before it; m4 reads 549 of 1,100.
+    assert df["is_loop_miss"].tolist() == [False, False, False, True, False, False, False, False, False, False]
+
+
+def test_a_tool_loop_turn_is_judged_against_the_response_before_it_in_its_own_transcript(tmp_path):
+    # A subagent keeps its own cache prefix, so what the main thread should read back is
+    # what its own previous response cached, not the subagent's that ran in between.
+    write(tmp_path / "s1.jsonl", [
+        prompt(at(0)),       line("m1", text(40), ts=at(0),  cache_read=0,    cache_creation=1000),
+        tool_result(at(60)), line("m2", text(40), ts=at(60), cache_read=1000, cache_creation=50),
+    ])
+    write(tmp_path / "s1" / "subagents" / "agent-a.jsonl", [
+        prompt(at(10), sidechain=True),
+        line("a1", text(40), ts=at(10), cache_read=0, cache_creation=200, sidechain=True),
+        tool_result(at(20), sidechain=True),
+        line("a2", text(40), ts=at(20), cache_read=90, cache_creation=300, sidechain=True),
+    ])
+    df = parse_source(tmp_path).sort_values("timestamp")
+    assert df["prev_cached"].fillna(-1).tolist() == [-1, -1, 200, 1000]
+    assert df["is_loop_miss"].tolist() == [False, False, True, False]
+
+
 def test_responses_carry_the_version_entrypoint_and_settings_claude_code_logged(tmp_path):
     write(tmp_path / "s1.jsonl", [
         line("m1", thinking(40), ts=at(0)),
