@@ -93,11 +93,15 @@ def no_response_stub(ts, sid="s1"):
                         "content": [{"type": "text", "text": "No response requested."}]}}
 
 
-def retry_record(ts, sid="s1", version=None):
-    """The system record Claude Code writes when it retries a request by itself."""
+def retry_record(ts, sid="s1", version=None, attempt=1):
+    """The system record Claude Code writes when it retries a request by itself: one per
+    attempt, `attempt` saying which of them this is. `attempt=None` leaves the number
+    out, as transcripts older than it did."""
     rec = {"type": "system", "subtype": "api_error", "level": "error", "timestamp": ts, "sessionId": sid,
-           "uuid": f"retry-{sid}-{ts}", "source": "request_retry", "retryAttempt": 1, "maxRetries": 10,
+           "uuid": f"retry-{sid}-{ts}", "source": "request_retry", "maxRetries": 10,
            "retryInMs": 567, "error": {"message": "Connection error.", "connection": {"code": "ECONNRESET"}}}
+    if attempt is not None:
+        rec["retryAttempt"] = attempt
     if version is not None:
         rec.update(version=version, entrypoint="cli", isSidechain=False)
     return rec

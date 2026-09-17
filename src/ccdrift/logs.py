@@ -62,6 +62,7 @@ CANDIDATES: dict[str, list[str]] = {
     "stop_reason":       ["message.stop_reason"],
     "is_api_error":      ["isApiErrorMessage"],
     "api_error_status":  ["apiErrorStatus"],
+    "retry_attempt":     ["retryAttempt"],
     "compact_trigger":   ["compactMetadata.trigger"],
     "compact_pre_tokens": ["compactMetadata.preTokens"],
 }
@@ -309,8 +310,13 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                     })
                 elif subtype == "api_error":
                     # A request Claude Code retried by itself; its error message and
-                    # connection details aren't kept, only that it happened.
-                    parsed.failures.setdefault(key, {**_record(obj, key, rel), "kind": "retry", "status": None})
+                    # connection details aren't kept, only that it happened. Claude Code
+                    # writes one record per attempt ("retryAttempt of maxRetries"), so
+                    # only the first is kept: one failure per request, not per attempt.
+                    # Older transcripts log no attempt number, and those still count.
+                    attempt = field_get(obj, "retry_attempt")
+                    if attempt is None or _num(attempt) == 1:
+                        parsed.failures.setdefault(key, {**_record(obj, key, rel), "kind": "retry", "status": None})
                 elif subtype == "stop_hook_summary":
                     infos = field_get(obj, "hook_infos")
                     durations = [_num(i["durationMs"]) for i in infos if isinstance(i, dict)

@@ -82,6 +82,20 @@ def version_key(version: str) -> tuple:
 FAILURE_WORDS = {"overloaded": "overloaded", "stream": "cut off mid-stream", "retry": "retried",
                  "other": "of another kind", "slept": "while the Mac slept"}
 
+# The window a failure rule judges a day against (ccdrift.failures reads it from here, so
+# there is one number and the status line can name it without importing pandas).
+BEFORE_DAYS = 14
+
+
+def before_text(most: Any) -> str:
+    """What a failure alert compared a day with: "against at most 3 a day on the days
+    judged in the 14 before", or "against none" when nothing happened on them. The days
+    judged, not the days that passed — only active days are baselines, so "in the 14 days
+    before" would be false about a history holding quiet days."""
+    if not most:
+        return f"against none on the days judged in the {BEFORE_DAYS} before"
+    return f"against at most {most} a day on the days judged in the {BEFORE_DAYS} before"
+
 
 def kinds_text(kinds: dict[str, int]) -> str:
     """"7 overloaded, 2 retried", the most first."""
@@ -92,7 +106,7 @@ def kinds_text(kinds: dict[str, int]) -> str:
 def failure_line(episode: dict[str, Any]) -> str:
     named = kinds_text(episode["kinds"])
     return (f"requests failing on {episode['since']}: {episode['requests']}"
-            f"{f' ({named})' if named else ''}, at most {episode['before']} a day before")
+            f"{f' ({named})' if named else ''}, {before_text(episode['before'])}")
 
 
 def cut_short_line(episode: dict[str, Any]) -> str:

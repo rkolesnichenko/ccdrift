@@ -6,11 +6,14 @@ day is judged against the days before it, and the question is whether the floors
 high enough to stay quiet and low enough to catch a bad release.
 
 Both gates replay the rules day by day over the logs, as the daily check would have run
-them, with one state carried along, and then again over a copy of the last active day
-with failures planted in it.
+them, with one state carried along, and then once more for each of the last PLANT_DAYS
+judgeable days, over a copy of the counts with failures planted in that one day. Planting
+only on the corpus's last day made a verdict turn on how busy that day happened to be: a
+quiet Sunday at the end of the logs flipped a PASS to a FAIL with no change to the rule.
 
 - G10 (requests failing) passes when the settings alert at most ALERT_BUDGET times per
-  BUDGET_DAYS days of history, and alert on a day carrying PLANTED_REQUESTS failures.
+  BUDGET_DAYS days of history, and alert on every day planted with PLANTED_REQUESTS
+  failures.
 - G11 (responses cut short) passes the same way, with PLANTED_SHARE of a day's responses
   stopping at the token limit.
 
@@ -28,8 +31,9 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from ccdrift.failures import (CUT_FLOOR, CUT_SHARE, FAILURE_DAY_COLUMNS, REQUEST_FLOOR, REQUEST_RATIO, cut_short,
-                              failing_requests, failure_counts, judged_failures)
+from ccdrift.failures import (ACTIVE_RESPONSES, BEFORE_DAYS, CUT_FLOOR, CUT_SHARE, FAILURE_DAY_COLUMNS,
+                              MIN_BEFORE_DAYS, REQUEST_FLOOR, REQUEST_RATIO, cut_short, failing_requests,
+                              failure_counts, judged_failures)
 from ccdrift.logs import default_source, judged_turns, parse_all
 from ccdrift.state import new_state
 
@@ -42,6 +46,7 @@ ALERT_BUDGET = 1        # alerts allowed per BUDGET_DAYS days of history
 BUDGET_DAYS = 30
 PLANTED_REQUESTS = 10   # failed requests a bad release would bring in a day
 PLANTED_SHARE = 0.01    # of a day's responses stopping at the token limit
+PLANT_DAYS = 5          # days a burst is planted on in turn, one replay each
 GATES = {"requests": "G10", "cut": "G11"}
 
 
@@ -58,46 +63,67 @@ def replay(counts: pd.DataFrame, rule: Callable[[pd.DataFrame, dict[str, Any], d
     return alerts
 
 
-def plant(counts: pd.DataFrame, requests: int = 0, share: float = 0.0) -> pd.DataFrame:
-    """The counts with a bad day at the end: a copy of the last day carrying `requests`
-    failed requests, or `share` of its responses stopping at the token limit. Planting
-    only ever makes the day worse: `share` raises `truncated` to what it should reach,
-    never lowers it."""
+def plant(counts: pd.DataFrame, day: str, requests: int = 0, share: float = 0.0) -> pd.DataFrame:
+    """The counts with `day` made worse: that day carrying `requests` more failed
+    requests, or `share` of its responses stopping at the token limit. Planting only ever
+    makes the day worse: `share` raises `truncated` to what it should reach, never lowers
+    it."""
     planted = counts.copy()
-    last = planted.index[-1]
+    where = planted.index[planted["day"].astype(str) == str(day)]
+    if len(where) != 1:
+        raise KeyError(f"{day} is not one of the counted days")
+    bad = where[0]
     if requests:
-        planted.loc[last, "overloaded"] = int(planted.loc[last, "overloaded"]) + requests
-        planted.loc[last, "requests"] = int(planted.loc[last, "requests"]) + requests
+        planted.loc[bad, "overloaded"] = int(planted.loc[bad, "overloaded"]) + requests
+        planted.loc[bad, "requests"] = int(planted.loc[bad, "requests"]) + requests
     if share:
-        planted.loc[last, "truncated"] = max(int(planted.loc[last, "truncated"]),
-                                             round(int(planted.loc[last, "responses"]) * share))
+        planted.loc[bad, "truncated"] = max(int(planted.loc[bad, "truncated"]),
+                                            round(int(planted.loc[bad, "responses"]) * share))
     return planted
 
 
-def _rows(counts: pd.DataFrame, days: int, rule, grid, names, planted) -> list[dict[str, Any]]:
+def plant_days(counts: pd.DataFrame, how_many: int = PLANT_DAYS) -> list[str]:
+    """The last `how_many` active days a rule could judge a burst on — at least
+    MIN_BEFORE_DAYS active days within the BEFORE_DAYS before them — oldest first. A gate
+    that planted only on the corpus's last day answered a question about that day (how
+    busy it was, and how close to a real failure day), not about the rule."""
+    days = [str(day) for day in counts[counts["responses"] >= ACTIVE_RESPONSES]["day"].astype(str)]
+    judgeable = []
+    for i, day in enumerate(days):
+        earliest = (date.fromisoformat(day) - timedelta(days=BEFORE_DAYS)).isoformat()
+        if sum(1 for before in days[:i] if before >= earliest) >= MIN_BEFORE_DAYS:
+            judgeable.append(day)
+    return judgeable[-how_many:]
+
+
+def _rows(counts: pd.DataFrame, days: int, rule, grid, names, planted: dict[str, Any]) -> list[dict[str, Any]]:
     """One row per setting in `grid`: the days it would alert on over the real history,
-    and whether it alerts on the planted bad day itself."""
+    and how many of the planted bursts it catches — `planted` is what plant() puts in a
+    day, and each of plant_days(counts) carries it in turn, one replay each. A setting
+    catches a plant only when the planted day itself alerts."""
     budget = ALERT_BUDGET * max(1, days / BUDGET_DAYS)
-    planted_day = str(planted["day"].iloc[-1])
+    plants = plant_days(counts)
     rows = []
     for setting in grid:
         kwargs = dict(zip(names, setting))
         alerts = replay(counts, lambda c, state, today: rule(c, state, today, **kwargs))
-        caught = planted_day in replay(planted, lambda c, state, today: rule(c, state, today, **kwargs))
+        caught = sum(day in replay(plant(counts, day, **planted),
+                                   lambda c, state, today: rule(c, state, today, **kwargs))
+                     for day in plants)
         rows.append({**kwargs, "alerts": len(alerts), "days": days, "on": ", ".join(alerts),
-                     "catches": caught, "passes": len(alerts) <= budget and caught})
+                     "caught": caught, "plants": len(plants),
+                     "passes": bool(plants) and caught == len(plants) and len(alerts) <= budget})
     return rows
 
 
 def request_rows(counts: pd.DataFrame, days: int) -> list[dict[str, Any]]:
     grid = [(floor, ratio) for floor in REQUEST_FLOOR_GRID for ratio in REQUEST_RATIO_GRID]
-    return _rows(counts, days, failing_requests, grid, ("floor", "ratio"),
-                 plant(counts, requests=PLANTED_REQUESTS))
+    return _rows(counts, days, failing_requests, grid, ("floor", "ratio"), {"requests": PLANTED_REQUESTS})
 
 
 def cut_rows(counts: pd.DataFrame, days: int) -> list[dict[str, Any]]:
     grid = [(floor, share) for floor in CUT_FLOOR_GRID for share in CUT_SHARE_GRID]
-    return _rows(counts, days, cut_short, grid, ("floor", "share"), plant(counts, share=PLANTED_SHARE))
+    return _rows(counts, days, cut_short, grid, ("floor", "share"), {"share": PLANTED_SHARE})
 
 
 def gate(rows: list[dict[str, Any]], chosen: dict[str, Any]) -> tuple[bool, list[str]]:
@@ -107,7 +133,8 @@ def gate(rows: list[dict[str, Any]], chosen: dict[str, Any]) -> tuple[bool, list
     if row is None:
         return False, ["the settings ccdrift ships aren't in the grid"]
     notes = [f"ships {chosen}: {row['alerts']} alert(s) over {row['days']} days"
-             + (f" on {row['on']}" if row["on"] else "") + f", planted burst caught: {row['catches']}"]
+             + (f" on {row['on']}" if row["on"] else "")
+             + f", planted bursts caught: {row['caught']} of {row['plants']}"]
     if not row["passes"]:
         smaller = [r for r in rows if r["passes"]]
         notes.append(f"passing settings: {[{k: r[k] for k in keys} for r in smaller]}" if smaller
@@ -135,7 +162,8 @@ def main(argv: list[str] | None = None) -> int:
     if counts.empty:
         print("no days to judge")
         return 1
-    print(f"{len(counts)} active days over {days} days, "
+    print(f"{len(counts)} days counted over {days} days, "
+          f"{int((counts['responses'] >= ACTIVE_RESPONSES).sum())} of them active, "
           f"{int(counts['requests'].sum())} failed requests, "
           f"{int(counts['slept'].sum())} while asleep, "
           f"{int(counts['truncated'].sum() + counts['refused'].sum())} responses cut short")
@@ -143,10 +171,10 @@ def main(argv: list[str] | None = None) -> int:
     cuts = cut_rows(counts, days)
     for row in requests:
         print(f"{GATES['requests']} floor={row['floor']:<3} ratio={row['ratio']:<2} alerts={row['alerts']} "
-              f"catches={row['catches']}  {row['on']}")
+              f"caught={row['caught']}/{row['plants']}  {row['on']}")
     for row in cuts:
         print(f"{GATES['cut']} floor={row['floor']:<3} share={row['share']:<6} alerts={row['alerts']} "
-              f"catches={row['catches']}  {row['on']}")
+              f"caught={row['caught']}/{row['plants']}  {row['on']}")
     passed = True
     for name, rows, chosen in (("requests", requests, {"floor": REQUEST_FLOOR, "ratio": REQUEST_RATIO}),
                                ("cut", cuts, {"floor": CUT_FLOOR, "share": CUT_SHARE})):

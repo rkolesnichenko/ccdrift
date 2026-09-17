@@ -6,12 +6,14 @@ alerts when it stands well above the days before it."""
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Iterator, Optional, Sequence
 
 import pandas as pd
 
 from ccdrift.logs import outside_sdk
-from ccdrift.texts import kinds_text
+# BEFORE_DAYS, the window a day is judged against, lives in texts with before_text: the
+# status line names it too, and nothing that only prints should have to import pandas.
+from ccdrift.texts import BEFORE_DAYS, before_text, kinds_text
 
 # Every kind parse_file records, and those a rule counts: a banner blaming the user's
 # own Mac for going to sleep is no drift, so it is reported but never alerts.
@@ -26,8 +28,7 @@ CUT_SHARE = 0.005      # of that day's main-thread responses
 CUT_RATIO = 3          # times the worst share of the days before, floored at CUT_USUAL
 CUT_USUAL = 0.001      # the share a quiet day is taken to have, so one cut day can't mask the next
 ACTIVE_RESPONSES = 50  # main-thread responses for a day to count as active
-BEFORE_DAYS = 14
-MIN_BEFORE_DAYS = 5
+MIN_BEFORE_DAYS = 5    # judged days to compare with, among the BEFORE_DAYS before
 RECENT_DAYS = 14
 SPELL_DAYS = 3         # days after a reported episode that belong to the same spell
 
@@ -41,48 +42,66 @@ def judged_failures(failures: pd.DataFrame, today: date) -> pd.DataFrame:
 
 
 def failure_counts(failures: pd.DataFrame, turns: pd.DataFrame) -> pd.DataFrame:
-    """Per day over the judged turns' days: main-thread responses, failures of each kind,
-    the counted ones together, and the responses that stopped at the token limit or
-    refused. Failures count wherever they happened — a request a subagent made is one
-    Claude Code made — while responses and cut-short responses stay main-thread, as every
-    other daily verdict is. A day without responses has no row, so it can neither alert
-    nor stand as a quiet day before one."""
-    if turns.empty:
+    """Per day over the judged turns' days and the judged failures' days together:
+    main-thread responses, failures of each kind, the counted ones together, and the
+    responses that stopped at the token limit or refused. Failures count wherever they
+    happened — a request a subagent made is one Claude Code made — while responses and
+    cut-short responses stay main-thread, as every other daily verdict is. A day whose
+    requests failed has few responses to show for them, and one whose requests all failed
+    has none: such a day still gets a row, so a rule can judge it, though only active days
+    are ever the baseline another day is judged against."""
+    turn_days = turns["day"].astype(str) if not turns.empty else pd.Series(dtype="object")
+    fail_days = failures["day"].astype(str) if not failures.empty else pd.Series(dtype="object")
+    index = pd.Index(sorted(set(turn_days) | set(fail_days)), name="day")
+    if index.empty:
         return pd.DataFrame(columns=FAILURE_DAY_COLUMNS)
-    day = turns["day"].astype(str)
+
+    def per_day(values: pd.Series, days: pd.Series) -> pd.Series:
+        """`values` summed per day of `days`, 0 on the days holding none of them."""
+        if days.empty:
+            return pd.Series(0, index=index, dtype=int)
+        return values.groupby(days).sum().reindex(index, fill_value=0)
+
     stop = turns["stop_reason"].astype("string") if "stop_reason" in turns else pd.Series(pd.NA, index=turns.index)
-    counts = pd.DataFrame({"responses": turns.groupby(day, sort=True).size(),
-                           "truncated": (stop == "max_tokens").groupby(day).sum(),
-                           "refused": (stop == "refusal").groupby(day).sum()})
+    counts = pd.DataFrame({"responses": per_day(pd.Series(1, index=turns.index), turn_days),
+                           "truncated": per_day(stop == "max_tokens", turn_days),
+                           "refused": per_day(stop == "refusal", turn_days)}, index=index)
     for kind in KINDS:
-        if failures.empty:
-            counts[kind] = 0
-            continue
-        chosen = failures[failures["kind"].astype(str) == kind]
-        counts[kind] = chosen.groupby(chosen["day"].astype(str)).size().reindex(counts.index, fill_value=0)
+        chosen = failures[failures["kind"].astype(str) == kind] if not failures.empty else failures
+        counts[kind] = (per_day(pd.Series(1, index=chosen.index), chosen["day"].astype(str))
+                        if not chosen.empty else 0)
     counts["requests"] = sum(counts[kind] for kind in COUNTED)
     counts = counts.rename_axis("day").reset_index()
     return counts[FAILURE_DAY_COLUMNS].astype({name: int for name in FAILURE_DAY_COLUMNS[1:]})
 
 
 def _judged_days(counts: pd.DataFrame, state_key: str, state: dict[str, Any], today: date,
-                 hit: Callable[[pd.Series, pd.DataFrame], bool]) -> list[tuple[pd.Series, pd.DataFrame]]:
-    """The active days within RECENT_DAYS that `hit` accepts, each with the active days
-    before it that `hit` judged it against, skipping those a reported episode already
-    covers."""
+                 hit: Callable[[pd.Series, pd.DataFrame], bool], quiet_days: bool = False,
+                 ) -> Iterator[tuple[pd.Series, pd.DataFrame]]:
+    """The days within RECENT_DAYS that `hit` accepts, each with the active days before it
+    that `hit` judged it against, skipping those a reported episode already covers.
+    `quiet_days` says whether a day too quiet to be active may be judged: the harder the
+    API fails, the fewer responses that day holds, so the worst day of an outage can be
+    too quiet to count. The days before are the active ones either way — a quiet day is
+    judged, never a baseline.
+    A generator on purpose: a rule records each episode as it takes it, so the next day's
+    suppression test sees it, and one run over a fortnight — the first check after an
+    upgrade, or after days with the machine off — alerts once per spell, just as a
+    day-by-day sequence of runs would."""
     if counts.empty:
-        return []
+        return
     active = counts[counts["responses"] >= ACTIVE_RESPONSES].reset_index(drop=True)
-    days = active["day"].astype(str)
+    active_days = active["day"].astype(str)
+    candidates = counts.reset_index(drop=True) if quiet_days else active
+    days = candidates["day"].astype(str)
     since = (today - timedelta(days=RECENT_DAYS)).isoformat()
-    found = []
-    for i in range(len(active)):
+    for i in range(len(candidates)):
         day = str(days[i])
         if day < since:
             continue
         earliest = (date.fromisoformat(day) - timedelta(days=BEFORE_DAYS)).isoformat()
-        before = active[(days < day) & (days >= earliest)]
-        if len(before) < MIN_BEFORE_DAYS or not hit(active.loc[i], before):
+        before = active[(active_days < day) & (active_days >= earliest)]
+        if len(before) < MIN_BEFORE_DAYS or not hit(candidates.loc[i], before):
             continue
         # One spell of failures alerts once: a day within SPELL_DAYS of a reported
         # episode belongs to it. A later burst is judged on its own, and the ratio
@@ -90,20 +109,21 @@ def _judged_days(counts: pd.DataFrame, state_key: str, state: dict[str, Any], to
         spell = (date.fromisoformat(day) - timedelta(days=SPELL_DAYS)).isoformat()
         if any(episode["since"] >= spell for episode in state[state_key]):
             continue
-        found.append((active.loc[i], before))
-    return found
+        yield candidates.loc[i], before
 
 
 def failing_requests(counts: pd.DataFrame, state: dict[str, Any], today: date,
                      floor: int = REQUEST_FLOOR, ratio: int = REQUEST_RATIO) -> list[dict[str, Any]]:
     """Days with at least `floor` failed requests, at least `ratio` times the busiest of
     the active days before them; each is recorded in state["failed_requests"], once per
-    spell. The lab tries other floors and ratios; the check keeps the defaults."""
+    spell. A day too quiet to be active is judged too: a day whose requests kept failing
+    has little else to show. The lab tries other floors and ratios; the check keeps the
+    defaults."""
     def hit(row: pd.Series, before: pd.DataFrame) -> bool:
         return row["requests"] >= floor and row["requests"] >= ratio * max(1, int(before["requests"].max()))
 
     new = []
-    for row, before in _judged_days(counts, "failed_requests", state, today, hit):
+    for row, before in _judged_days(counts, "failed_requests", state, today, hit, quiet_days=True):
         day = str(row["day"])
         episode = {"since": day, "days": [day], "requests": int(row["requests"]),
                    "kinds": {kind: int(row[kind]) for kind in COUNTED if int(row[kind])},
@@ -119,8 +139,9 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
     """Days where at least `floor` responses stopped at the token limit or refused, on at
     least `share` of the day's responses and CUT_RATIO times the worst share of the
     active days before them (a quiet day counting as CUT_USUAL); each is recorded in
-    state["cut_short"], once per spell. The lab tries other floors and shares; the check
-    keeps the defaults."""
+    state["cut_short"], once per spell. Only active days are judged: this rule is a share
+    of a day's responses, which a day too quiet to be active can't support. The lab tries
+    other floors and shares; the check keeps the defaults."""
     def hit(row: pd.Series, before: pd.DataFrame) -> bool:
         cut = int(row["truncated"] + row["refused"])
         today_share = cut / int(row["responses"])
@@ -146,8 +167,7 @@ def _on(versions: Sequence[str]) -> str:
 
 def requests_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
     named = kinds_text(episode["kinds"])
-    before = (f"against at most {episode['before']} a day in the {BEFORE_DAYS} days before" if episode["before"] > 0
-              else f"against none in the {BEFORE_DAYS} days before")
+    before = before_text(episode["before"])
     return (f"{episode['requests']} requests failed on {episode['since']}"
             f"{f' ({named})' if named else ''}, {before}{_on(versions)}. Claude Code retries these itself; a run "
             "of them points at the API or your connection, not your setup.")
@@ -156,8 +176,7 @@ def requests_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
 def cut_short_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
     what = "stopped at the token limit or refused" if episode["refused"] else "stopped at the token limit"
     share = episode["cut"] / episode["responses"] if episode["responses"] else 0.0
-    before = (f"against at most {episode['before_share']:.2%} a day in the {BEFORE_DAYS} days before"
-              if episode["before_share"] > 0 else f"against none in the {BEFORE_DAYS} days before")
+    before = before_text(f"{episode['before_share']:.2%}" if episode["before_share"] > 0 else None)
     return (f"{episode['cut']} of {episode['responses']:,} main-thread responses {what} on {episode['since']} "
             f"({share:.2%}), {before}{_on(versions)}. "
             "A Claude Code update may have changed the output limit.")
