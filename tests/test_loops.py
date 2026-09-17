@@ -88,9 +88,20 @@ def test_tool_loop_misses_rising_today_warn_once_saying_how_many_missed_and_what
                        "versions": ["2.1.280 (since 09-21)"], "reported_on": "2026-09-21"}
     assert loop_message(warning, NOW) == (
         "4 of the last 4 tool-loop turns missed the cache (usually 0.07%), since 10:00, in 4 sessions, rewriting "
-        "~800k tokens, on Claude Code 2.1.280 (since 09-21). The weekly summary shows whether it lasts.")
+        "~800k tokens, on Claude Code 2.1.280 (since 09-21). `ccdrift report` shows whether it lasts.")
     assert state["loop_warnings"] == [warning]
     assert loop_warning(loop_frame(RISING), "main", state, NOW, SETTING) is None
+
+
+def test_a_rise_that_mixes_hits_and_misses_counts_its_turns_but_only_the_misses_sessions_and_tokens():
+    # The usual 0.07% is held at 0.2%, so a miss adds ln(0.02/0.002) = 2.30 and a hit ln(0.98/0.998) = -0.018:
+    # the miss at 10:00 (turn 24, session s20-0) stands at 2.30, the hit at 10:05 (s20-1) at 2.28,
+    # and the miss at 10:10 (turn 26, s20-2) at 4.59, past h = 3. The rise runs over those 3 turns,
+    # whose 2 misses come from 2 sessions and wrote 400,000 tokens; the hit's 1,000 don't count.
+    warning = loop_warning(loop_frame({(2, 0), (20, 24), (20, 26)}), "main", new_state(), NOW, SETTING)
+    assert warning == {"stream": "main", "at": "2026-09-21T10:10:00+00:00", "since": "2026-09-21T10:00:00+00:00",
+                       "misses": 2, "turns": 3, "sessions": 2, "base_rate": 0.0007, "tokens": 400_000,
+                       "versions": ["2.1.280 (since 09-21)"], "reported_on": "2026-09-21"}
 
 
 def test_a_main_thread_warning_doesnt_silence_subagents():
@@ -127,4 +138,4 @@ def test_the_message_says_one_session_and_leaves_out_unknown_versions():
                "reported_on": "2026-09-21"}
     assert loop_message(warning, NOW) == (
         "1 of the last 3 subagent tool-loop turns missed the cache (usually 0.18%), since 09-20 23:40, in 1 session, "
-        "rewriting ~180k tokens. The weekly summary shows whether it lasts.")
+        "rewriting ~180k tokens. `ccdrift report` shows whether it lasts.")

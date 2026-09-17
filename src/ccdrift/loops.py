@@ -143,4 +143,4 @@ def loop_message(warning: dict[str, Any], now: datetime) -> str:
     sessions = f"{warning['sessions']} session{'' if warning['sessions'] == 1 else 's'}"
     return (f"{warning['misses']} of the last {warning['turns']} {STREAM_TURNS[warning['stream']]} missed the cache "
             f"(usually {warning['base_rate']:.2%}), since {clock_text(warning['since'], now)}, in {sessions}, "
-            f"rewriting ~{approx(warning['tokens'])} tokens{on}. The weekly summary shows whether it lasts.")
+            f"rewriting ~{approx(warning['tokens'])} tokens{on}. `ccdrift report` shows whether it lasts.")

@@ -479,7 +479,7 @@ def test_check_warns_when_tool_loop_turns_start_missing_the_cache(tmp_path, sent
     out = capsys.readouterr().out.splitlines()
     assert ("[check 2026-09-22 09:00] ccdrift: tool-loop cache misses rising: 10 of the last 10 tool-loop turns "
             "missed the cache (usually 0.00%), since 09-21 11:31, in 1 session, rewriting ~110k tokens, on Claude "
-            "Code 2.1.226 (since 09-01). The weekly summary shows whether it lasts.") in out
+            "Code 2.1.226 (since 09-01). `ccdrift report` shows whether it lasts.") in out
     assert "    release notes 2.1.226: Fixed prompt cache misses after a tool call" in out
 
 
