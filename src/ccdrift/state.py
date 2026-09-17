@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -25,6 +26,16 @@ def ccdrift_home(environ: Mapping[str, str] = os.environ) -> Path:
     when set, otherwise ~/.ccdrift."""
     home = environ.get("CCDRIFT_HOME")
     return Path(home).expanduser() if home else Path.home() / ".ccdrift"
+
+
+def make_private(path: Path) -> None:
+    """Create `path` when it is missing, and take away everyone's access to it but its
+    owner's, as Claude Code does for its transcripts. The owner's access stays as it
+    is, so a file made read-only stays read-only."""
+    path.touch(mode=0o600)
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if mode & 0o077:
+        path.chmod(mode & 0o700)
 
 
 def new_state() -> dict[str, Any]:

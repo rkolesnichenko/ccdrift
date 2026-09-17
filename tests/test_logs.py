@@ -142,6 +142,15 @@ def test_responses_carry_the_version_entrypoint_and_settings_claude_code_logged(
         ("2.1.233", "cli", "xhigh", "standard", "standard")
 
 
+def test_control_characters_are_dropped_from_logged_text(tmp_path):
+    # Agent names come from agent files in a repository or plugin, models from whatever
+    # endpoint answered; the report, the log and notifications print them.
+    write(tmp_path / "s1.jsonl", [line("m1", text(40), ts=at(0), model="claude-\x1b[31mopus",
+                                       agent_type="auditor\x1b]0;title\x07", version="2.1.\x9b260\n")])
+    row = parse_source(tmp_path).iloc[0]
+    assert (row["model"], row["agent_type"], row["version"]) == ("claude-[31mopus", "auditor]0;title", "2.1.260")
+
+
 def test_settings_missing_from_older_versions_are_left_empty(tmp_path):
     write(tmp_path / "s1.jsonl", [line("m1", text(40), ts=at(0))])
     row = parse_source(tmp_path).iloc[0]

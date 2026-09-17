@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
-from ccdrift.logs import default_source
+from ccdrift.logs import CONTROL_CHARS, default_source
 from ccdrift.notify import notify as send_notification
-from ccdrift.state import ccdrift_home
+from ccdrift.state import ccdrift_home, make_private
 
 LAUNCHD_LABEL = "io.github.rkolesnichenko.ccdrift"
 SYSTEMD_UNIT = "ccdrift-check"
@@ -29,7 +29,8 @@ Run = Callable[..., subprocess.CompletedProcess]
 
 
 class ScheduleError(RuntimeError):
-    """A scheduler command failed; the message carries its output."""
+    """A job can't be scheduled, or a scheduler command failed; the message says why,
+    with the command's output."""
 
 
 def run_command(argv: list[str], input: Optional[str] = None) -> subprocess.CompletedProcess:
@@ -407,9 +408,17 @@ class Cron:
 
 
 def install(job: Job, backend, send: Callable[[str, str], None] = send_notification) -> None:
-    """Create the log folder, install the job (the backend also starts a first run),
-    and send a test notification unless the job runs without notifications."""
+    """Create the log only its owner can read, install the job (the backend also
+    starts a first run), and send a test notification unless the job runs without
+    notifications. Raises ScheduleError, before changing anything, for a job holding a
+    control character: in a systemd unit or a crontab, what follows a line break reads
+    as a line of its own."""
+    for value in (*job.argv(), str(job.log)):
+        if CONTROL_CHARS.search(value):
+            raise ScheduleError(f"a line break or other control character can't go into a scheduled job: {value!r}")
     job.log.parent.mkdir(parents=True, exist_ok=True)
+    # launchd, systemd and cron append to a log that exists and keep its permissions.
+    make_private(job.log)
     backend.install(job)
     if job.notify:
         send("ccdrift", f"The check will run {job.when()}. Alerts will look like this.")

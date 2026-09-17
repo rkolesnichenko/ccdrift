@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -215,12 +216,17 @@ def no_transcripts_message(source: Path) -> str:
             "CLAUDE_CONFIG_DIR if Claude Code keeps its files somewhere else.")
 
 
+# NUL, line breaks, and the escapes that move a terminal's cursor or retitle its window.
+CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
 def _text(value: Any) -> Optional[str]:
-    """`value` when it is text, without what SQLite, notifications or --exec can't
-    take: a lone surrogate (JSON "\\ud800") reads as "?", and a NUL is dropped."""
+    """`value` when it is text, without what SQLite, notifications, --exec or a terminal
+    can't take: a lone surrogate (JSON "\\ud800") reads as "?", and control characters
+    are dropped. Agent names come from agent files in a repository or plugin."""
     if not isinstance(value, str):
         return None
-    return value.replace("\0", "").encode("utf-8", "replace").decode("utf-8") or None
+    return CONTROL_CHARS.sub("", value).encode("utf-8", "replace").decode("utf-8") or None
 
 
 def _record(obj: dict, key: str, rel: str) -> dict:
@@ -582,10 +588,27 @@ def _num(v: Any) -> float:
 # Schema peek (Step 0 helper)
 # ---------------------------------------------------------------------------
 
+# Values peek shows as logged: how Claude Code logs, not what was said, where or in
+# which session. Any other text shows as its length, so the output can go into an issue.
+PEEK_SHOWN = frozenset({"type", "role", "model", "version", "entrypoint", "effort", "speed", "service_tier",
+                        "subtype", "stop_reason", "timestamp"})
+
+
+def _peek_value(value: Any, key: Optional[str] = None) -> Any:
+    """`value` with every string not under a PEEK_SHOWN key replaced by its length."""
+    if isinstance(value, dict):
+        return {k: _peek_value(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_peek_value(v) for v in value]
+    if isinstance(value, str) and key not in PEEK_SHOWN:
+        return f"<{len(value)} chars>"
+    return value
+
+
 def peek(source: Path) -> bool:
     """Print the first assistant line in `source` and the fields resolved from it,
-    for checking the parser against a new Claude Code version. False when there is
-    no assistant line to show."""
+    with text shown as its length (see PEEK_SHOWN), for checking the parser against
+    a new Claude Code version. False when there is no assistant line to show."""
     for fp in iter_jsonl_files(source):
         try:
             with fp.open("r", encoding="utf-8", errors="replace") as fh:
@@ -598,11 +621,12 @@ def peek(source: Path) -> bool:
                     except json.JSONDecodeError:
                         continue
                     if isinstance(obj, dict) and is_assistant(obj):
-                        print(f"# first assistant line from {fp}")
-                        print(json.dumps(obj, indent=2)[:4000])
+                        # The transcript's path names the project folder, so it isn't shown.
+                        print("# first assistant line, text shown as its length")
+                        print(json.dumps(_peek_value(obj), indent=2)[:4000])
                         print("\n# resolved fields:")
                         for logical in CANDIDATES:
-                            print(f"  {logical:16s} -> {field_get(obj, logical)!r}"[:120])
+                            print(f"  {logical:16s} -> {_peek_value(field_get(obj, logical), logical)!r}"[:120])
                         return True
         except OSError:
             continue

@@ -33,7 +33,9 @@ Everything stays on your machine. ccdrift reads the transcripts and keeps a stat
 file, a log, its own history of responses and, once a failing check has notified you,
 the time it did (`check-state.json.last-failure-notice`) in `~/.ccdrift`. The history holds token
 counts, models, versions and settings, plus each transcript's path (which includes
-your project folder names) and session id; no prompt or response text. ccdrift sends
+your project folder names) and session id; no prompt or response text. Only you can
+read the history and the log, as with Claude Code's transcripts; a log an older ccdrift
+made becomes private when you run `ccdrift schedule install` again. ccdrift sends
 nothing anywhere, unless you give it a command to run with `--exec`.
 
 ## Install
@@ -90,7 +92,7 @@ set this in `~/.claude/settings.json`:
 | **ccdrift: session start changed** | New sessions start with at least 25% more or less context than the 10 before, on 3 sessions in a row. | `ccdrift report --by version` shows the session start size per version. Your MCP servers, plugins or CLAUDE.md can cause it too. |
 | **ccdrift: hooks failing** | Stop hooks failed on at least half their runs on 2 active days in a row, after 2 quiet weeks. | Run your hooks by hand; a Claude Code update may have changed their input. |
 | **ccdrift: Claude Code stopped logging a field** | A new Claude Code version logs a field ccdrift reads on under 10% of responses. | `ccdrift peek` shows what it reads. Please open an issue. |
-| **ccdrift can't compute the cache metric** | 3 busy days had no usable cache values. Claude Code's log format has most likely changed. | `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it. Please open an issue, removing any prompt or response text from what you paste. |
+| **ccdrift can't compute the cache metric** | 3 busy days had no usable cache values. Claude Code's log format has most likely changed. | `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it, with text, ids and paths shown only as their length. Please open an issue with what it prints. |
 | **ccdrift: weekly summary** | Monday's one-line summary of the week before. | Nothing. `--no-digest` turns it off. |
 | **ccdrift check failed** | The check itself stopped with an error. | `~/.ccdrift/check.log` has the details. |
 
@@ -137,8 +139,11 @@ fields and early warnings.
 example, to send alerts to [ntfy](https://ntfy.sh):
 
 ```sh
-ccdrift schedule install --exec 'curl -s -d "$CCDRIFT_MESSAGE" ntfy.sh/your-topic'
+ccdrift schedule install --exec 'curl -s -d "$CCDRIFT_MESSAGE" https://ntfy.sh/your-topic'
 ```
+
+Anyone who knows an ntfy topic's name can read what's sent to it, so pick one that's
+hard to guess.
 
 A command that fails or runs longer than 30 seconds is noted in the log and doesn't
 stop the check.

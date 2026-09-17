@@ -2,6 +2,7 @@
 
 import os
 import sqlite3
+import stat
 from datetime import date
 
 import pandas as pd
@@ -89,6 +90,19 @@ def test_text_that_isnt_valid_unicode_doesnt_fail_the_history(tmp_path):
     write(tmp_path / "logs" / "s1.jsonl", [prompt(at(0), sid="s\ud800"), odd])
     tables = load_history(tmp_path / "logs", tmp_path / "state.json", claim=True)
     assert tables.responses[["version", "effort", "session_id"]].values.tolist() == [["2.1.?", "high", "s?"]]
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_only_the_owner_can_read_the_history_store_even_one_an_older_ccdrift_made(tmp_path, existing):
+    # Claude Code keeps transcripts to their owner; the store holds their paths, session
+    # ids and times.
+    transcripts(tmp_path / "logs")
+    path = tmp_path / "history.sqlite"
+    if existing:
+        load_history(tmp_path / "logs", tmp_path / "state.json", claim=True)
+        path.chmod(0o644)
+    load_history(tmp_path / "logs", tmp_path / "state.json", claim=True)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_history_since_a_day_holds_whole_transcripts_active_since_then_and_each_versions_first_day(tmp_path):

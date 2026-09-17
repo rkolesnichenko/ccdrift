@@ -19,6 +19,7 @@ import pandas as pd
 
 from ccdrift.logs import (MAX_TIME, MIN_TIME, SDK_ENTRYPOINT_PREFIX, SETTING_FIELDS, TOKEN_FIELDS, ParsedFile, Tables,
                           compaction_frame, duration_frame, frame, hook_frame, jsonl_files, parse_all, parse_file)
+from ccdrift.state import make_private
 
 HISTORY_FILE = "history.sqlite"
 SCHEMA_VERSION = 3
@@ -27,7 +28,8 @@ SCHEMA_VERSION = 3
 # 3: counts, times and ids out of range or of the wrong type read as missing.
 # 4: each transcript's first main-thread response is marked, and text SQLite can't
 #    store is cleaned.
-PARSER_VERSION = 4
+# 5: control characters are dropped from text.
+PARSER_VERSION = 5
 
 TEXT_COLUMNS = ("model",) + SETTING_FIELDS
 FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction", "opens_transcript")
@@ -153,6 +155,9 @@ class History:
         self.path = path
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            # A store an older ccdrift made may be readable by others; SQLite gives its journal the
+            # store's permissions.
+            make_private(path)
             self.db = sqlite3.connect(path, timeout=30)
         except (OSError, sqlite3.Error) as exc:
             # Nothing is wrong with the store itself, so moving it aside wouldn't help.

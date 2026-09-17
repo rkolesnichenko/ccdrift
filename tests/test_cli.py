@@ -62,6 +62,19 @@ def test_peek_shows_the_fields_read_from_the_first_response(tmp_path, capsys):
     assert "  model" + " " * 12 + "-> 'claude-opus-5'" in capsys.readouterr().out.splitlines()
 
 
+def test_peek_shows_text_ids_and_folders_only_as_their_length(tmp_path, capsys):
+    # Alerts send users to `ccdrift peek` and on to an issue, where its output gets pasted.
+    record = line("m1", {"type": "text", "text": "the plan for acme"}, ts=at(0), sid="0f6c-session",
+                  version="2.1.260")
+    record.update(cwd="/home/someone/acme-deal", gitBranch="acme/merger")
+    write(tmp_path / "logs" / "-home-someone-acme-deal" / "s1.jsonl", [prompt(at(0)), record])
+    assert main(["peek", "--source", str(tmp_path / "logs")]) == 0
+    out = capsys.readouterr().out
+    assert "acme" not in out and "0f6c-session" not in out
+    assert '"text": "<17 chars>"' in out
+    assert "  version" + " " * 10 + "-> '2.1.260'" in out.splitlines()
+
+
 def test_peek_exits_2_and_names_the_folder_without_transcripts(tmp_path, capsys):
     (tmp_path / "empty").mkdir()
     assert main(["peek", "--source", str(tmp_path / "empty")]) == 2

@@ -3,6 +3,7 @@ remove and report on it. Scheduler commands run through fakes; nothing touches t
 real system."""
 
 import plistlib
+import stat
 import subprocess
 from pathlib import Path
 
@@ -166,6 +167,35 @@ def test_install_creates_the_log_folder_and_sends_a_test_notification(tmp_path):
     install(job, backend, send=lambda title, message: sent.append(title))
     assert job.log.parent.is_dir()
     assert sent == ["ccdrift"]
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_only_the_owner_can_read_the_log_even_one_an_older_ccdrift_made(tmp_path, existing):
+    # launchd, systemd and cron append to a log that exists and keep its permissions.
+    run, backend = launchd(tmp_path)
+    job = job_for(tmp_path)
+    if existing:
+        job.log.parent.mkdir(parents=True)
+        job.log.write_text("[check 2026-09-16 09:00] no alerts\n")
+        job.log.chmod(0o644)
+    install(job, backend, send=lambda title, message: None)
+    assert stat.S_IMODE(job.log.stat().st_mode) == 0o600
+    assert job.log.read_text() == ("[check 2026-09-16 09:00] no alerts\n" if existing else "")
+
+
+@pytest.mark.parametrize("args, home", [(["--exec", "echo one\necho two"], "data"),
+                                        (["--source", "logs\nExecStartPre=/bin/true"], "data"),
+                                        ([], "da\nta")])
+def test_schedule_install_refuses_a_line_break_that_would_split_the_schedulers_file(tmp_path, monkeypatch, capsys,
+                                                                                   args, home):
+    # In a systemd unit or a crontab, what follows a line break reads as a line of its own.
+    monkeypatch.setenv("CCDRIFT_HOME", str(tmp_path / home))
+    run, backend = systemd(tmp_path)
+    monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: backend)
+    assert main(["schedule", "install", "--no-notify", *args]) == 1
+    assert "Nothing installed" in capsys.readouterr().err
+    assert run.calls == []
+    assert not backend.service.exists() and not backend.timer.exists()
 
 
 def test_install_without_notifications_sends_no_test(tmp_path):
