@@ -18,10 +18,12 @@ from ccdrift.early import early_message, early_warning
 from ccdrift.fields import field_gaps, gap_message
 from ccdrift.history import load_history
 from ccdrift.hooks import failure_message, hook_failures, judged_hook_runs
-from ccdrift.incidents import describe, incident_cost, incident_versions, update_incidents, versions_text
+from ccdrift.incidents import (RECOVERY_BINS, describe, incident_cost, incident_versions, update_incidents,
+                               versions_text)
 from ccdrift.logs import judged_turns, no_transcripts_message
 from ccdrift.loops import STREAMS, loop_counts, loop_message, loop_warning
 from ccdrift.notify import notify, run_exec
+from ccdrift.replay import REPLAY_SOURCE, first_run, history_message, replay_incidents
 from ccdrift.sessions import context_alerts, context_message, session_starts
 from ccdrift.settings import change_message, setting_changes
 from ccdrift.state import ccdrift_home, load_state, record_run, save_state, state_lock
@@ -138,8 +140,27 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     turns = judged_turns(df, today)
     changelog = load_changelog(changelog_path(source))
     incidents = state["incidents"]
-    events = update_incidents(turns, state, today, cfg)
     alerts: list[Alert] = []
+    # A first check replays its history day by day instead, so a regression that began
+    # more than 14 days ago is recorded too; its last replayed day is today.
+    replaying = first_run(state)
+    events = [] if replaying else update_incidents(turns, state, today, cfg)
+    if replaying:
+        replay_incidents(df, today, cfg, state)
+        found = sorted((i for i in incidents if i["source"] == REPLAY_SOURCE), key=lambda i: i["start"])
+        if found:
+            notes = []
+            judged_days = sorted(turns["day"].astype(str).unique())
+            for incident in found:
+                if incident["status"] != "persistent":
+                    # As its flag alert would have: versions first seen from a week before
+                    # the incident through its first RECOVERY_BINS days.
+                    first_days = [day for day in judged_days if day >= incident["start"]][:RECOVERY_BINS]
+                    quoted = _note_versions(turns, incident["versions"], days_before(incident["start"], 7),
+                                            first_days[-1])
+                    notes += release_notes(changelog, quoted, TOPIC_OF[incident["metric"]])
+            alerts.append(("history", "ccdrift: past incidents found",
+                           history_message(found, str(turns["day"].min())), note_lines(notes)))
     for event in events:
         kind, title, message, details, named = describe(event, turns, incidents, cfg)
         notes = []

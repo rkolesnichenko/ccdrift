@@ -16,7 +16,7 @@ from ccdrift.check import blank_cache_stretch, run_check
 from ccdrift.incidents import add_incident, close_incident
 from ccdrift.loops import LoopSetting
 from ccdrift.state import load_state, new_state, save_state
-from ccdrift.status import status_report
+from ccdrift.status import short_status, status_report
 from tests.helpers import (DAY, at, busy_days, damage_responses_table, hook_days_logs, line, main_thread_days,
                            nth_day, prompt, text, tool_loop_days, write)
 
@@ -26,6 +26,12 @@ def sent(monkeypatch):
     titles = []
     monkeypatch.setattr(ccdrift.check, "notify", lambda title, message: titles.append(title))
     return titles
+
+
+def ran_before(tmp_path):
+    """The state of a check that has run successfully before, so the next one follows
+    incidents as usual instead of replaying the history as a first check does."""
+    save_state(tmp_path / "state.json", {**new_state(), "last_ok": "2026-09-01T09:00:00+00:00"})
 
 
 def check_logs(tmp_path, today=date(2026, 9, 4), **options):
@@ -89,6 +95,7 @@ def test_cache_metric_alert_points_to_ccdrift_peek(tmp_path, sent, capsys):
 
 def test_check_alerts_when_a_flag_opens_an_incident(tmp_path, sent, capsys):
     main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12, "version": "2.1.233"}] * 3)
+    ran_before(tmp_path)
     assert check_logs(tmp_path, today=date(2026, 9, 18)) == 0
     assert sent == ["ccdrift flag"]
     assert ("ccdrift flag: Haiku share on the main thread up from 2026-09-15, on Claude Code 2.1.233 "
@@ -98,6 +105,7 @@ def test_check_alerts_when_a_flag_opens_an_incident(tmp_path, sent, capsys):
 def test_check_alerts_when_an_incident_is_back_to_normal(tmp_path, sent, capsys):
     days = [{}] * 14 + [{"haiku": 12, "version": "2.1.233"}] * 3 + [{"version": "2.1.259"}] * 5
     main_thread_days(tmp_path / "logs", days)
+    ran_before(tmp_path)
     check_logs(tmp_path, today=date(2026, 9, 18))
     check_logs(tmp_path, today=date(2026, 9, 23))
     assert sent == ["ccdrift flag", "ccdrift: back to normal"]
@@ -110,6 +118,7 @@ def test_an_incident_back_to_normal_keeps_the_versions_it_started_on(tmp_path, s
     # `ccdrift status` and `incident list` showed the versions of the recovery days instead.
     days = [{}] * 14 + [{"haiku": 12, "version": "2.1.233"}] * 3 + [{"version": "2.1.259"}] * 5
     main_thread_days(tmp_path / "logs", days)
+    ran_before(tmp_path)
     check_logs(tmp_path, today=date(2026, 9, 18))
     check_logs(tmp_path, today=date(2026, 9, 23))
     assert sent == ["ccdrift flag", "ccdrift: back to normal"]
@@ -195,6 +204,7 @@ def test_check_flags_a_regression_right_after_a_long_break(tmp_path, sent):
     # the baseline comes from before the break.
     main_thread_days(tmp_path / "logs", [{}] * 60)
     main_thread_days(tmp_path / "logs", [{"misses": 8, "version": "2.1.300"}] * 4, first_day=160)
+    ran_before(tmp_path)
     check_logs(tmp_path, today=date(2027, 2, 12))
     assert sent == ["ccdrift flag"]
 
@@ -326,6 +336,7 @@ def test_check_runs_the_exec_command_for_each_alert(tmp_path, sent, capsys):
 
 def test_a_failing_exec_command_is_logged_and_the_check_goes_on(tmp_path, sent, capsys):
     main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12}] * 3)
+    ran_before(tmp_path)
     assert run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 18),
                      exec_command="exit 7") == 0
     assert '--exec failed for "ccdrift flag": exit 7' in capsys.readouterr().out
@@ -338,6 +349,7 @@ def test_an_exec_command_that_raises_is_logged_and_every_alert_still_goes_out(tm
 
     monkeypatch.setattr(ccdrift.check, "run_exec", broken)
     main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12, "tier": "5m"}] * 3)
+    ran_before(tmp_path)
     assert run_check(tmp_path / "logs", tmp_path / "state.json", notify_user=True, today=date(2026, 9, 18),
                      exec_command="notify-me") == 0
     assert sent == ["ccdrift flag", "ccdrift: setting changed"]
@@ -363,6 +375,7 @@ def test_a_notification_that_raises_is_logged_and_every_alert_still_goes_out(tmp
     titles = a_notifier_that_raises_on_the_first_alert(monkeypatch)
     out = tmp_path / "alerts.txt"
     main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12, "tier": "5m"}] * 3)
+    ran_before(tmp_path)
     assert run_check(tmp_path / "logs", tmp_path / "state.json", notify_user=True, today=date(2026, 9, 18),
                      exec_command=f'echo "$CCDRIFT_ALERT" >> "{out}"') == 0
     assert titles == ["ccdrift flag", "ccdrift: setting changed"]
@@ -497,6 +510,55 @@ def test_check_warns_about_subagent_loop_misses_while_a_cache_incident_is_open(t
     assert sent == ["ccdrift: subagent cache misses rising"]
     assert kinds.read_text() == "subagent_loop\n"
     assert [w["stream"] for w in load_state(tmp_path / "state.json")["loop_warnings"]] == ["subagent"]
+
+
+# Haiku on 12 of 60 responses a day from Sep 15 to 17 on 2.1.233, then none on 2.1.259.
+OLD_REGRESSION = [{}] * 14 + [{"haiku": 12, "version": "2.1.233"}] * 3 + [{"version": "2.1.259"}] * 5
+
+
+def test_the_first_check_replays_its_history_and_says_once_what_it_found(tmp_path, sent, capsys):
+    # On Oct 10 the flag from Sep 15 is more than 14 days old, so without the replay a
+    # first check would record nothing; an hour later the check stays quiet.
+    main_thread_days(tmp_path / "logs", OLD_REGRESSION)
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "cache" / "changelog.md").write_text(
+        "## 2.1.233\n\n- Search subagents now run on the Haiku model\n- Added a theme picker\n")
+    kinds = tmp_path / "kinds.txt"
+    check_logs(tmp_path, today=date(2026, 10, 10), exec_command=f'echo "$CCDRIFT_ALERT" >> "{kinds}"')
+    check_logs(tmp_path, today=date(2026, 10, 10), now=datetime(2026, 10, 10, 10, 0, tzinfo=timezone.utc))
+    assert sent == ["ccdrift: past incidents found"]
+    assert kinds.read_text() == "history\n"
+    out = capsys.readouterr().out.splitlines()
+    assert ("[check 2026-10-10 09:00] ccdrift: past incidents found: Replaying your history from 2026-09-01 found "
+            "1 incident ccdrift would have followed: Haiku share up 2026-09-15..2026-09-19, back to normal from "
+            "2026-09-20, ~36 extra Haiku responses, on Claude Code 2.1.233 (since 09-15). `ccdrift incident list` "
+            "has the details; `ccdrift incident dismiss` puts a false alarm's days back in the baseline.") in out
+    assert "    release notes 2.1.233: Search subagents now run on the Haiku model" in out
+    assert [(i["start"], i["status"], i["source"], i["opened_on"], i["closed_on"])
+            for i in load_state(tmp_path / "state.json")["incidents"]] == [
+        ("2026-09-15", "recovered", "replay", "2026-09-18", "2026-09-23")]
+
+
+def test_a_first_check_that_finds_a_regression_still_going_leaves_it_open_on_the_status_line(tmp_path, sent):
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12}] * 10)
+    check_logs(tmp_path, today=date(2026, 10, 1))
+    assert sent == ["ccdrift: past incidents found"]
+    assert short_status(tmp_path / "state.json", datetime(2026, 10, 1, 9, 5, tzinfo=timezone.utc)) == (
+        "ccdrift: Haiku share up since 09-15")
+
+
+def test_a_first_check_on_a_clean_history_sends_nothing(tmp_path, sent):
+    main_thread_days(tmp_path / "logs", [{}] * 20)
+    check_logs(tmp_path, today=date(2026, 10, 1))
+    assert sent == []
+
+
+def test_a_check_that_has_run_before_doesnt_replay_an_old_regression(tmp_path, sent):
+    main_thread_days(tmp_path / "logs", OLD_REGRESSION)
+    ran_before(tmp_path)
+    check_logs(tmp_path, today=date(2026, 10, 10))
+    assert sent == []
+    assert load_state(tmp_path / "state.json")["incidents"] == []
 
 
 LOCAL = timezone(timedelta(hours=3))
