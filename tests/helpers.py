@@ -26,7 +26,7 @@ def thinking(signature_chars: int) -> dict:
 def line(mid, block, *, ts, sid="s1", out=100, cache_read=0, cache_creation=0,
          model="claude-opus-5", sidechain=False, version=None, entrypoint=None, effort=None,
          cache_1h=None, cache_5m=None, thinking_logged=None, speed=None, service_tier=None,
-         agent_type=None):
+         agent_type=None, stop_reason=None):
     """One JSONL line as Claude Code writes it: a single content block, with the
     response's message.id and usage repeated on every line of that response.
     Fields left as None are left out, as older Claude Code versions do."""
@@ -42,6 +42,8 @@ def line(mid, block, *, ts, sid="s1", out=100, cache_read=0, cache_creation=0,
         if value is not None:
             usage[name] = value
     msg = {"role": "assistant", "model": model, "content": [block], "usage": usage}
+    if stop_reason is not None:
+        msg["stop_reason"] = stop_reason
     rec = {"type": "assistant", "timestamp": ts, "sessionId": sid,
            "isSidechain": sidechain, "message": msg}
     for name, value in (("version", version), ("entrypoint", entrypoint), ("effort", effort),
@@ -57,6 +59,48 @@ def line(mid, block, *, ts, sid="s1", out=100, cache_read=0, cache_creation=0,
 def response(mid, *blocks, ts, **kw):
     """All lines of one API response."""
     return [line(mid, b, ts=ts, **kw) for b in blocks]
+
+
+# The banners Claude Code writes for a failed request, by the kind ccdrift reads.
+BANNER_TEXTS = {
+    "overloaded": "API Error: 529 Overloaded. This is a server-side issue, usually temporary.",
+    "slept": "API Error: Your computer went to sleep mid-response. The response above may be incomplete.",
+    "stream": "API Error: The response stopped arriving. The response above may be incomplete.",
+    "other": "API Error: something new Claude Code says.",
+}
+
+
+def api_error(ts, sid="s1", kind="overloaded", sidechain=False, version=None, uuid=None):
+    """Claude Code's error banner for a failed request: an assistant record of its own,
+    with no API call behind it."""
+    rec = {"type": "assistant", "timestamp": ts, "sessionId": sid, "isSidechain": sidechain,
+           "isApiErrorMessage": True, "error": "server_error", "uuid": uuid or f"err-{sid}-{ts}",
+           "message": {"role": "assistant", "model": "<synthetic>", "stop_reason": "stop_sequence",
+                       "content": [{"type": "text", "text": BANNER_TEXTS[kind]}]}}
+    if kind == "overloaded":
+        rec["apiErrorStatus"] = 529
+    if version is not None:
+        rec.update(version=version, entrypoint="cli")
+    return rec
+
+
+def no_response_stub(ts, sid="s1"):
+    """The synthetic record Claude Code writes for a turn it didn't answer: the same
+    shape as a banner, but no failure."""
+    return {"type": "assistant", "timestamp": ts, "sessionId": sid, "isSidechain": False,
+            "isApiErrorMessage": False, "uuid": f"stub-{sid}-{ts}",
+            "message": {"role": "assistant", "model": "<synthetic>", "stop_reason": "stop_sequence",
+                        "content": [{"type": "text", "text": "No response requested."}]}}
+
+
+def retry_record(ts, sid="s1", version=None):
+    """The system record Claude Code writes when it retries a request by itself."""
+    rec = {"type": "system", "subtype": "api_error", "level": "error", "timestamp": ts, "sessionId": sid,
+           "uuid": f"retry-{sid}-{ts}", "source": "request_retry", "retryAttempt": 1, "maxRetries": 10,
+           "retryInMs": 567, "error": {"message": "Connection error.", "connection": {"code": "ECONNRESET"}}}
+    if version is not None:
+        rec.update(version=version, entrypoint="cli", isSidechain=False)
+    return rec
 
 
 def prompt(ts, sid="s1", sidechain=False):
@@ -183,6 +227,31 @@ def main_thread_days(path, days, per_day=60, first_day=0):
                              cache_1h=written if tier == "1h" else 0, cache_5m=written if tier == "5m" else 0,
                              version=spec.get("version", "2.1.226"), entrypoint=spec.get("entrypoint", "cli"),
                              effort=spec.get("effort", "xhigh"))]
+        write(path / f"s{d}.jsonl", records)
+
+
+def failure_days(path, days, per_day=60):
+    """One CLI main-thread session a day from Sep 1: `per_day` responses a minute apart,
+    each after a prompt and read 90% from the cache, plus what each entry of `days`
+    asks for: `errors` banners of `kind` (default "overloaded"), `slept` banners,
+    `retries` retry records, and `truncated` responses that stop at the token limit.
+    `version` sets the day's Claude Code version (default "2.1.226")."""
+    for d, spec in enumerate(days):
+        version = spec.get("version", "2.1.226")
+        records = []
+        for k in range(per_day):
+            ts = at(d * DAY + 60 * k)
+            records += [prompt(ts, sid=f"s{d}"),
+                        line(f"m{d}-{k}", text(40), ts=ts, sid=f"s{d}", cache_read=900, cache_creation=100,
+                             cache_1h=100, cache_5m=0, version=version, entrypoint="cli", effort="xhigh",
+                             stop_reason="max_tokens" if k < spec.get("truncated", 0) else "end_turn")]
+        after = d * DAY + 60 * per_day
+        for j in range(spec.get("errors", 0)):
+            records.append(api_error(at(after + j), sid=f"s{d}", kind=spec.get("kind", "overloaded"), version=version))
+        for j in range(spec.get("slept", 0)):
+            records.append(api_error(at(after + 100 + j), sid=f"s{d}", kind="slept", version=version))
+        for j in range(spec.get("retries", 0)):
+            records.append(retry_record(at(after + 200 + j), sid=f"s{d}", version=version))
         write(path / f"s{d}.jsonl", records)
 
 

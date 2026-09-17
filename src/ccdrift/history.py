@@ -18,26 +18,29 @@ from typing import Any, Optional
 import pandas as pd
 
 from ccdrift.logs import (MAX_TIME, MIN_TIME, SDK_ENTRYPOINT_PREFIX, SETTING_FIELDS, TOKEN_FIELDS, ParsedFile, Tables,
-                          compaction_frame, duration_frame, frame, hook_frame, jsonl_files, parse_all, parse_file)
+                          compaction_frame, duration_frame, failure_frame, frame, hook_frame, jsonl_files, parse_all,
+                          parse_file)
 from ccdrift.state import make_private
 
 HISTORY_FILE = "history.sqlite"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 # Bump whenever parse_file's output changes, so every transcript still on disk is
 # read again. Rows of transcripts Claude Code already deleted keep their values.
 # 3: counts, times and ids out of range or of the wrong type read as missing.
 # 4: each transcript's first main-thread response is marked, and text SQLite can't
 #    store is cleaned.
 # 5: control characters are dropped from text.
-PARSER_VERSION = 5
+# 6: failed requests are kept, and each response's stop reason.
+PARSER_VERSION = 6
 
-TEXT_COLUMNS = ("model",) + SETTING_FIELDS
+TEXT_COLUMNS = ("model", "stop_reason") + SETTING_FIELDS
 FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction", "opens_transcript")
 COUNT_COLUMNS = TOKEN_FIELDS + ("thinking_logged", "signature_chars", "visible_chars", "n_mcp_calls")
 RESPONSE_COLUMNS = TEXT_COLUMNS + FLAG_COLUMNS + COUNT_COLUMNS
 DURATION_COLUMNS = ("version", "entrypoint", "is_sidechain", "duration_ms", "message_count")
 HOOK_COLUMNS = ("version", "entrypoint", "is_sidechain", "hook_count", "error_count", "duration_ms", "prevented")
 COMPACTION_COLUMNS = ("version", "entrypoint", "is_sidechain", "trigger", "pre_tokens")
+FAILURE_COLUMNS = ("version", "entrypoint", "is_sidechain", "kind", "status")
 
 # Integer keys, microsecond timestamps and file ids keep a year of responses near
 # 65 MB; text keys, text timestamps and a path per row made it four times larger.
@@ -51,7 +54,7 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE TABLE IF NOT EXISTS responses (
     key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
     model TEXT, version TEXT, entrypoint TEXT, effort TEXT, speed TEXT, service_tier TEXT, agent_type TEXT,
-    is_sidechain INTEGER, new_prompt INTEGER, after_compaction INTEGER,
+    stop_reason TEXT, is_sidechain INTEGER, new_prompt INTEGER, after_compaction INTEGER,
     input_tokens INTEGER, output_tokens INTEGER, cache_creation INTEGER, cache_read INTEGER,
     cache_1h INTEGER, cache_5m INTEGER, thinking_logged INTEGER,
     signature_chars INTEGER, visible_chars INTEGER, n_mcp_calls INTEGER,
@@ -70,6 +73,10 @@ CREATE TABLE IF NOT EXISTS compactions (
     key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
     version TEXT, entrypoint TEXT, is_sidechain INTEGER, trigger TEXT, pre_tokens INTEGER);
 CREATE INDEX IF NOT EXISTS compactions_file ON compactions (file_id);
+CREATE TABLE IF NOT EXISTS failures (
+    key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
+    version TEXT, entrypoint TEXT, is_sidechain INTEGER, kind TEXT, status INTEGER);
+CREATE INDEX IF NOT EXISTS failures_file ON failures (file_id);
 """
 
 
@@ -209,6 +216,9 @@ class History:
                     "(SELECT file_id, MIN(ts) AS ts FROM responses WHERE is_sidechain = 0 AND ts BETWEEN ? AND ? "
                     "GROUP BY file_id) first ON r.file_id = first.file_id AND r.ts = first.ts "
                     "WHERE r.is_sidechain = 0)", TS_RANGE)
+        if from_version < 4 and columns and "stop_reason" not in columns:
+            with self.db:
+                self.db.execute("ALTER TABLE responses ADD COLUMN stop_reason TEXT")
         file_columns = {row[1] for row in self.db.execute("PRAGMA table_info(files)")}
         if from_version < 3 and file_columns and "last_ts" not in file_columns:
             with self.db:
@@ -278,6 +288,7 @@ class History:
             self.db.execute("DELETE FROM durations WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM hook_runs WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM compactions WHERE file_id = ?", (file_id,))
+            self.db.execute("DELETE FROM failures WHERE file_id = ?", (file_id,))
             self.db.executemany(_upsert("responses", RESPONSE_COLUMNS), [
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]),
                  *(row[c] for c in TEXT_COLUMNS), *(int(row[c]) for c in FLAG_COLUMNS),
@@ -296,6 +307,10 @@ class History:
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]), row["version"], row["entrypoint"],
                  int(row["is_sidechain"]), row["trigger"], _count(row["pre_tokens"]))
                 for row in parsed.compactions.values()])
+            self.db.executemany(_upsert("failures", FAILURE_COLUMNS), [
+                (row_key(row["key"]), file_id, _micros(row["timestamp"]), row["version"], row["entrypoint"],
+                 int(row["is_sidechain"]), row["kind"], _count(row["status"]))
+                for row in parsed.failures.values()])
             self.db.execute("UPDATE files SET last_ts = (SELECT MAX(ts) FROM responses WHERE file_id = ?) WHERE id = ?",
                             (file_id, file_id))
 
@@ -367,6 +382,10 @@ class History:
         """Every stored compaction, or those from `since`, as parse_all's `compactions` table."""
         return compaction_frame(_decode(self._records("compactions", COMPACTION_COLUMNS, since), ("is_sidechain",)))
 
+    def failures(self, since: Optional[str] = None) -> pd.DataFrame:
+        """Every stored failed request, or those from `since`, as parse_all's `failures` table."""
+        return failure_frame(_decode(self._records("failures", FAILURE_COLUMNS, since), ("is_sidechain",)))
+
 
 def load_history(source: Path, state_path: Path, claim: bool, since: Optional[str] = None,
                  active_days: int = 0, active_responses: int = 0) -> Tables:
@@ -394,7 +413,7 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
                 active_start = history.active_day_start(active_days, active_responses)
                 since = None if active_start is None else min(since, active_start)
             return Tables(history.responses(since), history.durations(since), history.hook_runs(since),
-                          history.compactions(since))
+                          history.compactions(since), history.failures(since))
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc
     except pd.errors.DatabaseError as exc:

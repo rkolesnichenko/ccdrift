@@ -59,6 +59,9 @@ CANDIDATES: dict[str, list[str]] = {
     "hook_errors":       ["hookErrors"],
     "hook_infos":        ["hookInfos"],
     "prevented":         ["preventedContinuation"],
+    "stop_reason":       ["message.stop_reason"],
+    "is_api_error":      ["isApiErrorMessage"],
+    "api_error_status":  ["apiErrorStatus"],
     "compact_trigger":   ["compactMetadata.trigger"],
     "compact_pre_tokens": ["compactMetadata.preTokens"],
 }
@@ -183,6 +186,7 @@ class ParsedFile:
     durations: dict[str, dict] = field(default_factory=dict)
     hook_runs: dict[str, dict] = field(default_factory=dict)
     compactions: dict[str, dict] = field(default_factory=dict)
+    failures: dict[str, dict] = field(default_factory=dict)
     session_id: Optional[str] = None
     lines: int = 0
     bad_json: int = 0
@@ -227,6 +231,27 @@ def _text(value: Any) -> Optional[str]:
     if not isinstance(value, str):
         return None
     return CONTROL_CHARS.sub("", value).encode("utf-8", "replace").decode("utf-8") or None
+
+
+# Claude Code's own banners for a failed request, matched by the words they open
+# with; one it words differently counts as "other". None of the text is kept.
+BANNERS = (("API Error: 529 Overloaded", "overloaded"),
+           ("API Error: Your computer went to sleep", "slept"),
+           ("API Error: The response stopped arriving", "stream"),
+           ("API Error: Response stalled mid-stream", "stream"))
+
+
+def banner_kind(content: Any) -> str:
+    """Which failure an error banner reports, from the words it opens with."""
+    text = content if isinstance(content, str) else ""
+    if isinstance(content, list) and content and isinstance(content[0], dict):
+        text = str(content[0].get("text") or "")
+    return next((kind for prefix, kind in BANNERS if text.startswith(prefix)), "other")
+
+
+def _status(value: Any) -> Optional[int]:
+    """An HTTP status as an integer; None when Claude Code logged none."""
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 def _record(obj: dict, key: str, rel: str) -> dict:
@@ -282,6 +307,10 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                         "duration_ms": _num(field_get(obj, "duration_ms")),
                         "message_count": int(_num(field_get(obj, "message_count"))),
                     })
+                elif subtype == "api_error":
+                    # A request Claude Code retried by itself; its error message and
+                    # connection details aren't kept, only that it happened.
+                    parsed.failures.setdefault(key, {**_record(obj, key, rel), "kind": "retry", "status": None})
                 elif subtype == "stop_hook_summary":
                     infos = field_get(obj, "hook_infos")
                     durations = [_num(i["durationMs"]) for i in infos if isinstance(i, dict)
@@ -299,6 +328,15 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
             if role != "assistant":
                 continue
             parsed.assistant_lines += 1
+            if field_get(obj, "is_api_error") is True:
+                # Claude Code writes the banner as a response of its own, with no API
+                # call behind it: it is a failure, not a response.
+                key = str(field_get(obj, "uuid") or f"{rel}:{line_no}")
+                parsed.failures.setdefault(key, {
+                    **_record(obj, key, rel), "kind": banner_kind(field_get(obj, "content")),
+                    "status": _status(field_get(obj, "api_error_status")),
+                })
+                continue
             model = _text(field_get(obj, "model")) or "unknown"
             if model == "<synthetic>":  # Claude Code placeholder, no API call
                 continue
@@ -311,6 +349,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                     "key":              key,
                     "timestamp":        parse_ts(field_get(obj, "timestamp")),
                     "model":            model,
+                    "stop_reason":      None,
                     **{name: None for name in SETTING_FIELDS},
                     **{name: 0.0 for name in TOKEN_FIELDS},
                     "thinking_logged":  None,
@@ -328,7 +367,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                 }
                 main_thread_seen = main_thread_seen or not is_sidechain
             prompt_pending = compact_pending = False
-            for name in SETTING_FIELDS:
+            for name in ("stop_reason", *SETTING_FIELDS):
                 if row[name] is None:
                     row[name] = _text(field_get(obj, name))
             # output_tokens grows while streaming, so the largest is the
@@ -348,7 +387,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
     # another id.
     session = parsed.session_id or fp.stem
     for row in (*parsed.responses.values(), *parsed.durations.values(),
-                *parsed.hook_runs.values(), *parsed.compactions.values()):
+                *parsed.hook_runs.values(), *parsed.compactions.values(), *parsed.failures.values()):
         row["session_id"] = session
     return parsed
 
@@ -459,6 +498,11 @@ def compaction_frame(rows) -> pd.DataFrame:
     return _record_frame(rows, ("pre_tokens",), ("is_sidechain",))
 
 
+def failure_frame(rows) -> pd.DataFrame:
+    """Failed requests, from raw rows, with their UTC day."""
+    return _record_frame(rows, ("status",), ("is_sidechain",))
+
+
 @dataclass
 class Tables:
     """Everything ccdrift reads from transcripts, one table per record kind."""
@@ -466,12 +510,13 @@ class Tables:
     durations: pd.DataFrame
     hook_runs: pd.DataFrame
     compactions: pd.DataFrame
+    failures: pd.DataFrame
 
 
 def parse_all(source: Path) -> Tables:
     """Every transcript under `source`, read once. A record copied into a second
     transcript counts from the one whose path sorts first."""
-    kinds = {"responses": {}, "durations": {}, "hook_runs": {}, "compactions": {}}
+    kinds = {"responses": {}, "durations": {}, "hook_runs": {}, "compactions": {}, "failures": {}}
     for fp, rel in jsonl_files(source):
         try:
             parsed = parse_file(fp, rel)
@@ -482,7 +527,8 @@ def parse_all(source: Path) -> Tables:
                 rows.setdefault(key, row)
     return Tables(frame(list(kinds["responses"].values())), duration_frame(list(kinds["durations"].values())),
                   hook_frame(list(kinds["hook_runs"].values())),
-                  compaction_frame(list(kinds["compactions"].values())))
+                  compaction_frame(list(kinds["compactions"].values())),
+                  failure_frame(list(kinds["failures"].values())))
 
 
 def parse_durations(source: Path) -> pd.DataFrame:
