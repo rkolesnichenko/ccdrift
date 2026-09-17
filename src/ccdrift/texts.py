@@ -14,6 +14,7 @@ INCIDENT_METRICS = {"cache_ratio": "Cache read ratio on new prompts",
                     "haiku_fraction": "Haiku share on the main thread"}
 SHORT_NAMES = {"cache_ratio": "cache", "haiku_fraction": "haiku"}
 MOVES = {"cache_ratio": "down", "haiku_fraction": "up"}
+METRIC_WORDS = {"cache_ratio": "cache ratio", "haiku_fraction": "Haiku share"}
 PERSISTENT_DAYS = 30
 
 # What a tool-loop warning of each stream (see ccdrift.loops) says is happening.
