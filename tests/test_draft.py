@@ -8,9 +8,11 @@ import pytest
 
 from ccdrift import __version__
 from ccdrift.changelog import load_changelog
+from ccdrift.cli import main
 from ccdrift.detector import DetectorConfig
-from ccdrift.draft import draft_markdown, draft_periods, find_incident, os_text
+from ccdrift.draft import draft_markdown, draft_periods, find_incident, os_text, run_draft
 from ccdrift.logs import judged_turns, parse_source
+from ccdrift.state import new_state, save_state
 from tests.helpers import busy_days, main_thread_days, tool_loop_days
 
 
@@ -203,3 +205,45 @@ def test_the_os_is_named_with_its_version(monkeypatch, platform_name, mac_versio
     monkeypatch.setattr(platform, "system", lambda: system)
     monkeypatch.setattr(platform, "release", lambda: release)
     assert os_text() == expected
+
+
+def test_run_draft_prints_the_draft_and_writes_nothing(tmp_path, capsys):
+    cache_logs(tmp_path)
+    save_state(tmp_path / "state.json",
+               {**new_state(), "incidents": [incident("cache_ratio", "2026-09-15", "2026-09-18")]})
+    before = sorted(path.name for path in tmp_path.iterdir())
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "cache_ratio", today=date(2026, 9, 25),
+                     os_name="macOS 26.5.2") == 0
+    assert capsys.readouterr().out.startswith(
+        "New prompts miss the prompt cache 10.17% of the time on Claude Code 2.1.280 (usually 0.00%)\n\n")
+    assert sorted(path.name for path in tmp_path.iterdir()) == before
+
+
+def test_run_draft_says_when_there_is_no_such_incident_or_it_cant_read(tmp_path, capsys):
+    cache_logs(tmp_path)
+    save_state(tmp_path / "state.json", new_state())
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "cache_ratio", today=date(2026, 9, 25)) == 2
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "haiku_fraction", "2026-09-15",
+                     today=date(2026, 9, 25)) == 2
+    err = capsys.readouterr().err
+    assert "No cache incident is recorded.\n" in err and "No haiku incident starts on 2026-09-15.\n" in err
+    save_state(tmp_path / "state.json",
+               {**new_state(), "incidents": [incident("cache_ratio", "2026-09-15", "2026-09-18")]})
+    (tmp_path / "empty").mkdir()
+    assert run_draft(tmp_path / "empty", tmp_path / "state.json", "cache_ratio", today=date(2026, 9, 25)) == 2
+    (tmp_path / "state.json").write_text("not json")
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "cache_ratio", today=date(2026, 9, 25)) == 1
+    assert "Can't read the state file" in capsys.readouterr().err
+
+
+def test_the_draft_command_reads_the_metric_day_and_options(tmp_path, capsys):
+    cache_logs(tmp_path)
+    save_state(tmp_path / "state.json",
+               {**new_state(), "incidents": [incident("cache_ratio", "2026-09-15", "2026-09-18")]})
+    assert main(["incident", "draft", "cache", "2026-09-15", "--source", str(tmp_path / "logs"),
+                 "--state", str(tmp_path / "state.json")]) == 0
+    assert capsys.readouterr().out.startswith("New prompts miss the prompt cache 10.17% of the time")
+    with pytest.raises(SystemExit) as exited:
+        main(["incident", "draft", "cache", "Sep 15", "--state", str(tmp_path / "state.json")])
+    assert exited.value.code == 2
+    assert "expected a day like 2026-08-18, not 'Sep 15'" in capsys.readouterr().err

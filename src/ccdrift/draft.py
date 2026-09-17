@@ -9,20 +9,23 @@ from __future__ import annotations
 
 import platform
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 
 from ccdrift import __version__
-from ccdrift.changelog import days_before, note_versions, release_notes
+from ccdrift.changelog import changelog_path, days_before, load_changelog, note_versions, release_notes
 from ccdrift.check import TOPIC_OF
 from ccdrift.detector import DetectorConfig, baseline_bins
+from ccdrift.history import HistoryError, load_history
 from ccdrift.incidents import OPEN_END, RECOVERY_BINS, exclusions, incident_cost, incident_versions
-from ccdrift.logs import judged_turns
+from ccdrift.logs import judged_turns, no_transcripts_message
 from ccdrift.loops import loop_turns
-from ccdrift.texts import approx, version_key
+from ccdrift.state import load_state
+from ccdrift.texts import SHORT_NAMES, approx, version_key
 
 AFTER_DAYS = 14  # judged days after an incident that the draft compares with
 PAUSES = [(60, "≤1 min"), (300, "1–5 min"), (900, "5–15 min"), (3600, "15–60 min")]
@@ -260,3 +263,33 @@ def draft_markdown(responses: pd.DataFrame, incident: dict[str, Any], incidents:
                         + "\n".join(f"- {version}: {text}" for version, text in notes))
     sections += [_environment(_on_days(turns, periods["during"]), os_name), _method(incident["metric"], cfg)]
     return "\n\n".join([title, *sections]) + "\n"
+
+
+def run_draft(source: Path, state_path: Path, metric: str, start: Optional[str] = None,
+              today: Optional[date] = None, cfg: Optional[DetectorConfig] = None,
+              os_name: Optional[str] = None) -> int:
+    """Print a GitHub issue draft about the incident of `metric` starting on `start`, or
+    the latest, from the history; nothing is written or sent."""
+    try:
+        incidents = load_state(state_path)["incidents"]
+    except (OSError, ValueError) as exc:
+        print(f"Can't read the state file {state_path}: {exc}", file=sys.stderr)
+        return 1
+    incident = find_incident(incidents, metric, start)
+    if incident is None:
+        name = SHORT_NAMES[metric]
+        print(f"No {name} incident starts on {start}." if start else f"No {name} incident is recorded.",
+              file=sys.stderr)
+        return 2
+    try:
+        responses = load_history(source, state_path, claim=False).responses
+    except HistoryError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if responses.empty:
+        print(no_transcripts_message(source), file=sys.stderr)
+        return 2
+    today = today or datetime.now(timezone.utc).date()
+    print(draft_markdown(responses, incident, incidents, load_changelog(changelog_path(source)), today,
+                         cfg or DetectorConfig(), os_name or os_text()), end="")
+    return 0

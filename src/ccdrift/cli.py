@@ -50,6 +50,13 @@ def _days(text: str) -> int:
     return days
 
 
+def _day(text: str) -> str:
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a day like 2026-08-18, not {text!r}") from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ccdrift",
@@ -102,6 +109,13 @@ def build_parser() -> argparse.ArgumentParser:
     dismiss_action.add_argument("metric", choices=list(METRIC_ARGS))
     dismiss_action.add_argument("start", help="the incident's first day")
     _add_state(dismiss_action)
+    draft_action = incident_actions.add_parser(
+        "draft", help="print a GitHub issue draft about an incident with its evidence, aggregates only")
+    draft_action.add_argument("metric", choices=list(METRIC_ARGS))
+    draft_action.add_argument("start", nargs="?", default=None, type=_day,
+                              help="the incident's first day (default: the latest incident not dismissed)")
+    _add_source(draft_action)
+    _add_state(draft_action)
 
     replay = commands.add_parser("replay", help="replay the check day by day over your history and show the "
                                  "incidents it would have followed, without recording anything")
@@ -176,6 +190,9 @@ def _incident(args: argparse.Namespace) -> int:
     state_path = _state(args)
     if args.action == "list":
         return run_list(_source(args), state_path)
+    if args.action == "draft":
+        from ccdrift.draft import run_draft
+        return run_draft(_source(args), state_path, METRIC_ARGS[args.metric], args.start)
     # A check running now would otherwise save the state it read before this change.
     try:
         with state_lock(state_path):
