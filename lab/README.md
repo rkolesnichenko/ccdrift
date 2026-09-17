@@ -34,6 +34,9 @@ uv run --group lab python -m lab.session_start
 # G3: an early warning on cache misses — false alarms, time to catch, the real regression
 uv run --group lab python -m lab.early_warning --incident 2026-08-16..2026-09-04
 
+# G8 and G9: an early warning on tool-loop cache misses, on the main thread and in subagents
+uv run --group lab python -m lab.loop_cache --incident 2026-08-16..2026-09-04
+
 # G7: do built-in subagents keep one model?
 uv run --group lab python -m lab.subagent_models
 ```
