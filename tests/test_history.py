@@ -328,7 +328,7 @@ def test_a_store_from_ccdrift_0_2_is_upgraded_in_place_and_keeps_its_rows(tmp_pa
         columns = {row[1] for row in history.db.execute("PRAGMA table_info(responses)")}
         tables = {row[0] for row in history.db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert "agent_type" in columns
-        assert {"hook_runs", "compactions"} <= tables
+        assert {"hook_runs", "compactions", "failures"} <= tables
         assert history.responses()["model"].tolist() == ["claude-opus-5"]
         # Its transcript is gone, so its first response stays a session start, and the
         # check still finds it among recent transcripts.

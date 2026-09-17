@@ -18,6 +18,8 @@ your usage limits:
 - **New sessions start with a different amount of context**, from the system prompt,
   tools, MCP servers or CLAUDE.md.
 - **Stop hooks start failing**, as they can when an update changes what hooks receive.
+- **Requests start failing**, or **responses start stopping at the token limit**, far
+  more often than on the days before.
 - **Claude Code stops logging a field** ccdrift relies on, so a silent change can't
   hide as a quiet week.
 
@@ -98,6 +100,8 @@ set this in `~/.claude/settings.json`:
 | **ccdrift: setting changed** | The cache tier or effort level a model usually gets on the main thread changed, 2 days in a row. | If you didn't change it, Claude Code's default did. |
 | **ccdrift: session start changed** | New sessions start with at least 25% more or less context than the 10 before, on 3 sessions in a row. | `ccdrift report --by version` shows the session start size per version. Your MCP servers, plugins or CLAUDE.md can cause it too. |
 | **ccdrift: hooks failing** | Stop hooks failed on at least half their runs on 2 active days in a row, after 2 quiet weeks. | Run your hooks by hand; a Claude Code update may have changed their input. |
+| **ccdrift: requests failing** | A day had at least 5 failed requests (API errors Claude Code showed, or retries it logged), at least twice the busiest day in the 2 weeks before. | Usually the API or your connection, not your setup. `ccdrift report` shows the days; check status.claude.com. |
+| **ccdrift: responses cut short** | Responses stopped at the token limit on at least 0.5% of a day's main-thread responses, 3 times the worst day in the 2 weeks before. | A Claude Code update may have changed the output limit. `ccdrift report --by version` compares versions. |
 | **ccdrift: Claude Code stopped logging a field** | A new Claude Code version logs a field ccdrift reads on under 10% of responses. | `ccdrift peek` shows what it reads. Please open an issue. |
 | **ccdrift can't compute the cache metric** | 3 busy days had no usable cache values. Claude Code's log format has most likely changed. | `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it, with text, ids and paths shown only as their length. Please open an issue with what it prints. |
 | **ccdrift: weekly summary** | Monday's one-line summary of the week before. | Nothing. `--no-digest` turns it off. |
@@ -210,6 +214,11 @@ CLI (Agent SDK sessions are your own scripts and are left out) and computes:
 - the cache read ratio on turns that open with a new prompt, within an hour of the
   previous response and not right after a compaction;
 - the share of responses from a Haiku model.
+
+It counts failed requests the same way, on the main thread and in subagents alike — a
+request a subagent made is one Claude Code made — and the responses that stop at the
+token limit or refuse. Those are far too rare for a usual rate (13 failures in the six
+weeks this was built on), so each day is judged against the days before it instead.
 
 Each day is compared with the 14 days before it, leaving out the days of open and
 recovered incidents, using their median and spread, with the spread floored at
