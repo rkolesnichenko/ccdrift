@@ -74,7 +74,8 @@ affect it; the history grows by about 65 MB a year for a heavy user. Each check 
 its last 90 days, or its last 60 days of use when those reach further back, and back
 to an older incident whose cost it works out; `ccdrift report` and `ccdrift incident
 list` read all of it. Its first run can only see what's still on disk, and it replays
-that history day by day, as if it had run all along, so a regression from before you
+what it reads, its last 90 days, or its last 60 days of use when those reach further
+back, day by day, as if it had run all along, so a regression from before you
 installed it is recorded and reported once.
 To give that first run more to go on, and to keep transcripts for your own digging,
 set this in `~/.claude/settings.json`:
@@ -116,8 +117,9 @@ prompt turns kept missing the cache.
 
 The first check replays the history it reads, its last 90 days, day by day and records
 the incidents it would have followed, with the days it would have opened and closed
-them on, then sends one alert about them. `ccdrift replay` runs the same replay on any
-install without recording anything or sending an alert, and says whether each incident
+them on, then sends one alert about them, but only when it found any. `ccdrift replay`
+runs the same replay on any install, over all of the history, not just the last 90
+days, without recording anything or sending an alert, and says whether each incident
 it finds is recorded.
 
 ```text
