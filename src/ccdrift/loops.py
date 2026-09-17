@@ -9,13 +9,15 @@ subagents) and set LOOP_SETTINGS; None means that stream gets no warning."""
 from __future__ import annotations
 
 from collections import namedtuple
-from datetime import date
-from typing import Optional, Sequence
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Optional, Sequence
 
 import pandas as pd
 
 from ccdrift.early import alarm_runs, rise_first
+from ccdrift.incidents import versions_text
 from ccdrift.logs import outside_sdk
+from ccdrift.texts import approx, clock_text
 
 STREAMS = ("main", "subagent")
 LoopSetting = namedtuple("LoopSetting", "p1 h min_sessions")
@@ -78,3 +80,67 @@ def qualifying_alarms(turns: pd.DataFrame, base_rate: float, setting: LoopSettin
         if len(missed) >= setting.min_sessions:
             found.append((first, alarm))
     return found
+
+
+WINDOW_DAYS = 7      # the stretch the CUSUM runs over, today included
+BASE_DAYS = 14       # complete days before it that give the usual miss rate
+MIN_BASE_TURNS = 1000
+RECENT_HOURS = 24    # an alarm this recent is news
+QUIET_DAYS = 7       # at most one warning per stream in this many days
+
+
+def loop_warning(responses: pd.DataFrame, stream: str, state: dict[str, Any], now: datetime,
+                 setting: Optional[LoopSetting] = None) -> Optional[dict[str, Any]]:
+    """A warning when the CUSUM on the tool-loop turns of `stream` over the last
+    WINDOW_DAYS days (up to `now`) raised a qualifying alarm in the last RECENT_HOURS
+    hours, against the miss rate of the BASE_DAYS days before them. `setting` defaults
+    to LOOP_SETTINGS[stream]; no warning without one, within QUIET_DAYS of the stream's
+    last warning, or with under MIN_BASE_TURNS usual turns. An open cache incident
+    doesn't hold it back: one on new prompts doesn't say whether tool loops miss too.
+    The warning is also recorded in state["loop_warnings"]."""
+    setting = LOOP_SETTINGS[stream] if setting is None else setting
+    if setting is None:
+        return None
+    if any(w["stream"] == stream and now - datetime.fromisoformat(w["at"]) < timedelta(days=QUIET_DAYS)
+           for w in state["loop_warnings"]):
+        return None
+    turns = loop_turns(responses, stream)
+    today = now.astimezone(timezone.utc).date()
+    first_day = (today - timedelta(days=WINDOW_DAYS - 1)).isoformat()
+    base_start = (today - timedelta(days=WINDOW_DAYS - 1 + BASE_DAYS)).isoformat()
+    days = turns["day"]
+    base = (days >= base_start) & (days < first_day)
+    if base.sum() < MIN_BASE_TURNS:
+        return None
+    base_rate = float(turns.loc[base, "is_loop_miss"].mean())
+    stretch = turns[(days >= first_day) & (turns["timestamp"] <= pd.Timestamp(now))].reset_index(drop=True)
+    alarms = qualifying_alarms(stretch, base_rate, setting)
+    if not alarms:
+        return None
+    first, alarm = alarms[-1]
+    at = stretch["timestamp"][alarm].to_pydatetime()
+    if now - at > timedelta(hours=RECENT_HOURS):
+        return None
+    rise = stretch.iloc[first:alarm + 1]
+    missed = rise[rise["is_loop_miss"]]
+    main = responses["main_thread"].astype(bool)
+    in_stream = responses[(main if stream == "main" else ~main) & outside_sdk(responses)]
+    warning = {"stream": stream, "at": at.isoformat(timespec="seconds"),
+               "since": rise["timestamp"].iloc[0].to_pydatetime().isoformat(timespec="seconds"),
+               "misses": len(missed), "turns": len(rise), "sessions": int(missed["session_id"].nunique()),
+               "base_rate": round(base_rate, 4), "tokens": int(missed["cache_creation"].sum()),
+               "versions": versions_text(in_stream, sorted(rise["day"].unique())),
+               "reported_on": now.date().isoformat()}
+    state["loop_warnings"].append(warning)
+    return warning
+
+
+STREAM_TURNS = {"main": "tool-loop turns", "subagent": "subagent tool-loop turns"}
+
+
+def loop_message(warning: dict[str, Any], now: datetime) -> str:
+    on = f", on Claude Code {', '.join(warning['versions'])}" if warning["versions"] else ""
+    sessions = f"{warning['sessions']} session{'' if warning['sessions'] == 1 else 's'}"
+    return (f"{warning['misses']} of the last {warning['turns']} {STREAM_TURNS[warning['stream']]} missed the cache "
+            f"(usually {warning['base_rate']:.2%}), since {clock_text(warning['since'], now)}, in {sessions}, "
+            f"rewriting ~{approx(warning['tokens'])} tokens{on}. The weekly summary shows whether it lasts.")
