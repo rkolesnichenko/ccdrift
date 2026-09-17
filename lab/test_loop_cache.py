@@ -1,10 +1,13 @@
 """The G8 and G9 spike on hand-made tool-loop turns."""
 
+import functools
+
 import pandas as pd
 import pytest
 
-from ccdrift.loops import LoopSetting, loop_turns
-from lab.loop_cache import COLUMNS, base_rate, choose, evaluate
+from ccdrift.early import MIN_P0
+from ccdrift.loops import LoopSetting, loop_turns, qualifying_alarms
+from lab.loop_cache import COLUMNS, base_rate, choose, evaluate, false_alarms
 from tests.helpers import nth_day
 
 
@@ -32,6 +35,31 @@ def test_the_usual_rate_needs_1000_turns_in_the_14_days_before():
     turns = loop_turns(loop_frame(days=20, per_day=100), "main")
     assert base_rate(turns, nth_day(15)) == pytest.approx(1 / 1400)  # days 1-14 hold the miss of day 9
     assert base_rate(turns, nth_day(5)) is None                       # 500 turns
+
+
+def test_false_alarms_are_counted_with_the_usual_rate_held_at_its_floor():
+    # Subagent turns 0, 50, 100 and 150 of days 0-13 miss, and from day 20 turns 100 and
+    # 130 (sessions 0 and 2). Days 0-19 are set apart as an incident, so the days judged
+    # are days 20-29. Against the 0.2% floor at p1 = 5%, a miss adds ln(0.05/0.002) = 3.22
+    # and a hit ln(0.95/0.998) = -0.049: turn 130 stands at 3.22 - 29 × 0.049 + 3.22 = 5.01
+    # and passes h = 4, once each day (the miss at turn 199 of days 19 and 24 fades within
+    # 3.22 / 0.049 = 66 hits). Day 20's measured usual rate is 58 of the 2,800 turns of
+    # days 0-13 (those 56 and turn 199 of days 4 and 9), 2.07%: a miss adds
+    # ln(0.05/0.0207) = 0.88 and a hit ln(0.95/0.9793) = -0.0304, so turn 130 stands at
+    # 0.88 - 29 × 0.0304 + 0.88 = 0.88.
+    df = loop_frame()
+    subagent, turn = ~df["main_thread"], df.groupby(["day", "main_thread"]).cumcount()
+    df.loc[subagent & (df["day"] < nth_day(14)) & (turn % 50 == 0), "is_loop_miss"] = True
+    df.loc[subagent & (df["day"] >= nth_day(20)) & turn.isin([100, 130]), "is_loop_miss"] = True
+    turns = loop_turns(df, "subagent")
+    usual = functools.partial(base_rate, turns)
+    setting = LoopSetting(0.05, 4, 1)
+    outside, _, judged = false_alarms(turns, usual, setting, (nth_day(0), nth_day(19)))
+    assert (outside, judged) == (10, 10)
+    day_20 = turns[turns["day"].between(nth_day(14), nth_day(20))].reset_index(drop=True)
+    assert usual(nth_day(14)) == pytest.approx(58 / 2800)
+    assert qualifying_alarms(day_20, usual(nth_day(14)), setting) == []
+    assert qualifying_alarms(day_20, MIN_P0, setting) == [(1300, 1330)]
 
 
 def test_a_stream_passes_when_a_planted_rise_is_caught_without_false_alarms():

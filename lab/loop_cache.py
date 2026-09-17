@@ -2,10 +2,12 @@
 
 For the main thread (G8) and subagents (G9), and for every p1, h and number of
 sessions an alarm's misses must come from: false alarms on the days of the logs, each
-judged as the hourly check would, and how many tool-loop turns it takes to catch a
-planted 2% miss rate. A stream passes when some combination has no false alarms over
-the days judged and catches the planted rate in 90% of runs within a median of 300
-turns. No real tool-loop regression is known, so nothing checks an alarm against one.
+judged as the hourly check would but with the usual rate held at its 0.2% floor, the
+most sensitive rate the check can run at; and how many tool-loop turns it takes to
+catch a planted 2% miss rate against the measured usual rate, which catches it more
+slowly. A stream passes when some combination has no false alarms over the days judged
+and catches the planted rate in 90% of runs within a median of 300 turns. No real
+tool-loop regression is known, so nothing checks an alarm against one.
 
 Run from the repo root:
 
@@ -27,16 +29,15 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
+from ccdrift.early import MIN_P0
 from ccdrift.logs import default_source, parse_source
-from ccdrift.loops import STREAMS, LoopSetting, loop_turns, qualifying_alarms
+from ccdrift.loops import (BASE_DAYS, MIN_BASE_TURNS, STREAMS, WINDOW_DAYS, LoopSetting, loop_turns,
+                           qualifying_alarms)
 from lab.harness import date_range
 
 P1_GRID = (0.01, 0.02, 0.05)
 H_GRID = (2, 3, 4, 5, 6, 8)
 SESSIONS_GRID = (1, 2)
-BASE_DAYS = 14
-WINDOW_DAYS = 7
-MIN_BASE_TURNS = 1000
 PLANT_RATE = 0.02
 STARTS = 10
 SEEDS = 5
@@ -65,16 +66,17 @@ def false_alarms(turns: pd.DataFrame, usual: Callable[[str], Optional[float]], s
                  incident: Optional[tuple[str, str]] = None) -> tuple[int, int, int]:
     """Qualifying alarms on each day with a usual rate, the day judged as the hourly
     check would: over the WINDOW_DAYS days ending on it, counting only alarms that fall
-    on it. Returns (alarms outside `incident`, alarms inside it, days judged outside it)."""
+    on it. The usual rate is held at its floor, MIN_P0, the most sensitive rate the
+    check can run at. Returns (alarms outside `incident`, alarms inside it, days judged
+    outside it)."""
     counted = inside = judged = 0
     for day in sorted(turns["day"].unique()):
         first = _shift(day, -(WINDOW_DAYS - 1))
-        p0 = usual(first)
-        if p0 is None:
+        if usual(first) is None:
             continue
         stretch = turns[turns["day"].between(first, day)].reset_index(drop=True)
         on_day = stretch["day"].to_numpy() == day
-        alarms = sum(1 for _, alarm in qualifying_alarms(stretch, p0, setting) if on_day[alarm])
+        alarms = sum(1 for _, alarm in qualifying_alarms(stretch, MIN_P0, setting) if on_day[alarm])
         if incident is not None and incident[0] <= day <= incident[1]:
             inside += alarms
         else:
@@ -85,8 +87,9 @@ def false_alarms(turns: pd.DataFrame, usual: Callable[[str], Optional[float]], s
 
 def planted_stretches(turns: pd.DataFrame, usual: Callable[[str], Optional[float]]) -> list[tuple[pd.DataFrame, float]]:
     """For up to STARTS starting days with a usual rate, spread evenly over them, and
-    SEEDS seeds each: the turns of the WINDOW_DAYS days from that day, each missing with
-    probability PLANT_RATE and keeping its session, with that day's usual rate."""
+    SEEDS seeds each, seeded per starting day: the turns of the WINDOW_DAYS days from
+    that day, each missing with probability PLANT_RATE and keeping its session, with
+    that day's usual rate."""
     candidates = [day for day in sorted(turns["day"].unique()) if usual(day) is not None]
     if not candidates:
         return []
@@ -96,7 +99,7 @@ def planted_stretches(turns: pd.DataFrame, usual: Callable[[str], Optional[float
     for start in picks:
         stretch = turns[turns["day"].between(start, _shift(start, WINDOW_DAYS - 1))].reset_index(drop=True)
         for seed in range(SEEDS):
-            rng = random.Random(seed)
+            rng = random.Random(f"{start}/{seed}")
             planted = stretch.assign(is_loop_miss=[rng.random() < PLANT_RATE for _ in range(len(stretch))])
             stretches.append((planted, usual(start)))
     return stretches
