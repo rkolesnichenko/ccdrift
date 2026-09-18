@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from ccdrift.logs import default_source, parse_source
-from ccdrift.sessions import MIN_SESSIONS, context_changes_in, first_of_each, session_starts
+from ccdrift.sessions import MIN_SESSIONS, context_changes_in, first_of_each, ratio_starts, session_starts
 
 MAX_SPREAD = 0.10
 
@@ -41,11 +41,13 @@ def version_table(starts: pd.DataFrame) -> pd.DataFrame:
 
 
 def gate(starts: pd.DataFrame) -> tuple[bool, list[str]]:
+    judged = ratio_starts(starts)
     table = version_table(starts)
     steady = table[table["sessions"] >= MIN_SESSIONS]
     spread_ok = bool(len(steady)) and bool((steady["spread"] <= MAX_SPREAD).all())
-    versions = starts["version"].fillna("unknown").tolist()
-    kept = first_of_each(context_changes_in(starts))
+    # The positions a change carries are rows of the judged table, not of `starts`.
+    versions = judged["version"].fillna("unknown").tolist()
+    kept = first_of_each(context_changes_in(judged))
     with_new_version = [bool({versions[i] for i in c.window} - {versions[i] for i in c.baseline}) for c in kept]
     notes = [f"versions with {MIN_SESSIONS}+ sessions: {len(steady)}; largest spread "
              f"{steady['spread'].max():.3f}" if len(steady) else "no version has 3+ sessions",
@@ -63,8 +65,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     for row in version_table(starts).itertuples(index=False):
         print(f"  {row.version:<10} sessions {row.sessions:>3}  median {row.median / 1000:>6.1f}k  "
               f"range {row.low / 1000:.1f}-{row.high / 1000:.1f}k  spread {row.spread:.3f}")
-    versions = starts["version"].fillna("unknown").tolist()
-    for change in first_of_each(context_changes_in(starts)):
+    judged = ratio_starts(starts)
+    versions = judged["version"].fillna("unknown").tolist()
+    for change in first_of_each(context_changes_in(judged)):
         print(f"  step from {change.since}: {change.before / 1000:.0f}k -> {change.after / 1000:.0f}k; window on "
               f"{sorted({versions[i] for i in change.window})}, baseline on {sorted({versions[i] for i in change.baseline})}")
     passed, notes = gate(starts)

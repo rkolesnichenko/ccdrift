@@ -26,13 +26,17 @@ from ccdrift.logs import judged_turns, no_transcripts_message
 from ccdrift.loops import STREAMS, loop_counts, loop_message, loop_warning
 from ccdrift.notify import notify, run_exec
 from ccdrift.replay import REPLAY_SOURCE, first_run, history_message, replay_incidents
-from ccdrift.sessions import context_alerts, context_message, session_starts
+from ccdrift.sessions import context_alerts, context_message, rejudged, session_starts
 from ccdrift.settings import change_message, setting_changes
-from ccdrift.state import ccdrift_home, load_state, record_run, save_state, state_lock
-from ccdrift.texts import LOOP_NAMES
+from ccdrift.state import CONTEXT_RULE, ccdrift_home, load_state, record_run, save_state, state_lock
+from ccdrift.texts import LOOP_NAMES, approx
 
 # kind, title, message, and lines for the log only
 Alert = tuple[str, str, str, list[str]]
+
+# Alerts that only go to the log: nothing changed that the owner can act on.
+LOG_ONLY = frozenset({"context_dropped"})
+
 
 # The alert kind of a tool-loop warning for each stream.
 LOOP_KINDS = {"main": "loop", "subagent": "subagent_loop"}
@@ -189,9 +193,19 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     for change in setting_changes(turns, state, today):
         versions, notes = _change_notes(turns, changelog, change, TOPIC_OF[change["setting"]])
         alerts.append(("setting", "ccdrift: setting changed", change_message(change, versions), notes))
-    for change in context_alerts(session_starts(df), state, today):
+    starts = session_starts(df)
+    for change in context_alerts(starts, state, today):
         versions, notes = _change_notes(turns, changelog, change, "context")
         alerts.append(("context", "ccdrift: session start changed", context_message(change, versions), notes))
+    # A state written before the rule judged each project against itself may hold changes
+    # that were only a move between projects. They are re-judged once, and the run says so
+    # in its log without alerting: nothing changed for the owner to act on.
+    if state.get("context_rule", 1) < CONTEXT_RULE:
+        for record in rejudged(starts, state, today):
+            alerts.append(("context_dropped", "ccdrift: a recorded session-start change was dropped",
+                           f"{record['since']}, ~{approx(record['from'])} -> ~{approx(record['to'])} tokens: "
+                           "judged against each project's own level, it isn't a change.", []))
+        state["context_rule"] = CONTEXT_RULE
     for failure in hook_failures(judged_hook_runs(tables.hook_runs, today), state, today):
         versions, notes = _change_notes(turns, changelog, failure, "hooks")
         alerts.append(("hooks", "ccdrift: hooks failing", failure_message(failure, versions), notes))
@@ -313,7 +327,7 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
     except OSError:
         pass
     for kind, title, message, details in alerts:
-        alert(kind, title, message)
+        alert(kind, title, message, send=kind not in LOG_ONLY)
         for detail in details:
             print(f"    {detail}")
     if not alerts:

@@ -123,8 +123,36 @@ def cut_short_line(episode: dict[str, Any]) -> str:
             f"main-thread responses{run_text(episode.get('run_days', 0))}")
 
 
+def project_path(project: str) -> str:
+    """A project folder read back as the path it stands for, for the owner's eyes: Claude
+    Code writes "/Users/me/dev/app" as "-Users-me-dev-app". A directory whose own name
+    holds a dash reads back with an extra slash — the folder name is all Claude Code
+    keeps, so this is a convenience, not a promise."""
+    return "/" + project.lstrip("-").replace("-", "/")
+
+
+PROJECTS_SHOWN = 3
+
+
+def projects_text(paths: Sequence[str]) -> str:
+    """"in /Users/me/dev/app", or "in 4 projects: /a, /b, /c and 1 more"; "" for none.
+    Only `ccdrift status` and `ccdrift report` name a folder: an alert may be piped
+    anywhere by --exec."""
+    if not paths:
+        return ""
+    if len(paths) == 1:
+        return f"in {paths[0]}"
+    shown = ", ".join(paths[:PROJECTS_SHOWN])
+    rest = len(paths) - PROJECTS_SHOWN
+    return f"in {len(paths)} projects: {shown}" + (f" and {rest} more" if rest > 0 else "")
+
+
 def context_change_line(change: dict[str, Any]) -> str:
-    return f"session start ~{approx(change['from'])} -> ~{approx(change['to'])} tokens from {change['since']}"
+    where = projects_text([project_path(p) for p in change.get("projects", [])])
+    seen = change.get("of_projects", 0)
+    of = f" of {seen}" if seen and len(change.get("projects", [])) < seen else ""
+    return (f"session start ~{approx(change['from'])} -> ~{approx(change['to'])} tokens from {change['since']}"
+            + (f" {where}{of}" if where else ""))
 
 
 def hook_failure_line(failure: dict[str, Any]) -> str:

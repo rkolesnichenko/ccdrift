@@ -7,9 +7,13 @@ from lab.session_start import gate, main, version_table
 from tests.helpers import nth_day
 
 
-def starts_of(rows):
-    """rows: (version, prompt tokens) in time order, one session a day."""
-    return pd.DataFrame({"day": [nth_day(i) for i in range(len(rows))],
+def starts_of(rows, project="p"):
+    """rows: (version, prompt tokens) in time order, one session a day, all in one
+    project so ratio_starts judges every one of them against the same level."""
+    return pd.DataFrame({"source_file": [f"{project}/{i}.jsonl" for i in range(len(rows))],
+                         "project": [project] * len(rows),
+                         "timestamp": pd.to_datetime([f"{nth_day(i)}T10:00:00Z" for i in range(len(rows))]),
+                         "day": [nth_day(i) for i in range(len(rows))],
                          "version": [v for v, _ in rows], "prompt_tokens": [float(t) for _, t in rows]})
 
 

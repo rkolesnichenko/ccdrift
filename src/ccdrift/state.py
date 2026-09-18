@@ -19,6 +19,8 @@ except ImportError:  # Windows, where ccdrift sets up no schedule
     fcntl = None  # type: ignore[assignment]
 
 STATE_VERSION = 2
+# The session-start rule a state was written by: 2 judges each project against itself.
+CONTEXT_RULE = 2
 
 
 def ccdrift_home(environ: Mapping[str, str] = os.environ) -> Path:
@@ -41,7 +43,7 @@ def make_private(path: Path) -> None:
 def new_state() -> dict[str, Any]:
     return {"version": STATE_VERSION, "incidents": [], "settings": [], "blank_cache": [], "reported": {},
             "field_gaps": [], "hook_failures": [], "context_changes": [], "early_warnings": [], "loop_warnings": [],
-            "failed_requests": [], "cut_short": [], "runs": []}
+            "failed_requests": [], "cut_short": [], "context_rule": CONTEXT_RULE, "runs": []}
 
 
 def load_state(path: Path) -> dict[str, Any]:
@@ -54,6 +56,9 @@ def load_state(path: Path) -> dict[str, Any]:
     state = json.loads(path.read_text())
     if not isinstance(state, dict):
         raise ValueError(f"{path} doesn't hold a JSON object")
+    # Written before 0.8.0, so the check re-judges its session-start changes once. A
+    # fresh state gets the current rule from new_state() below.
+    state.setdefault("context_rule", 1)
     version = state.get("version", 1)
     if isinstance(version, bool) or not isinstance(version, int):
         raise ValueError(f"{path} has an unknown state version: {version!r}")

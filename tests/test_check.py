@@ -410,7 +410,7 @@ def test_alerts_quote_the_version_they_name_first_then_other_new_versions_newest
         if d == 9:
             records.append(line("resumed", text(40), ts=at(d * DAY + 3600), sid=f"s{d}", cache_read=54_000,
                                 version="2.1.267", entrypoint="cli"))
-        write(logs / f"session-{d}.jsonl", records)
+        write(logs / "-Users-me-app" / f"session-{d}.jsonl", records)
     (tmp_path / "cfg" / "cache").mkdir(parents=True)
     (tmp_path / "cfg" / "cache" / "changelog.md").write_text(
         "## 2.1.267\n\n- Fixed the tool list changing when an MCP server reconnects\n\n"
@@ -453,14 +453,16 @@ def test_check_alerts_when_stop_hooks_start_failing(tmp_path, sent, capsys):
 def test_check_alerts_when_sessions_start_with_much_less_context(tmp_path, sent, capsys):
     # One session a day; its first request reads the rest from the cache, so the cache ratio stays high.
     for d, (tokens, version) in enumerate([(128_000, "2.1.261")] * 8 + [(54_000, "2.1.267")] * 3):
-        write(tmp_path / "logs" / f"session-{d}.jsonl",
+        write(tmp_path / "logs" / "-Users-me-app" / f"session-{d}.jsonl",
               [prompt(at(d * DAY), sid=f"s{d}"),
                line(f"m{d}", text(40), ts=at(d * DAY), sid=f"s{d}", cache_creation=100, cache_read=tokens - 110,
                     version=version, entrypoint="cli")])
     check_logs(tmp_path, today=date(2026, 9, 12))
     assert sent == ["ccdrift: session start changed"]
     assert ("ccdrift: session start changed: New sessions start with ~54k tokens of context from 2026-09-09, on "
-            "Claude Code 2.1.267 (since 09-09), down from ~130k.") in capsys.readouterr().out
+            "Claude Code 2.1.267 (since 09-09), down from ~130k, in the one project ccdrift could compare with "
+            "itself, and on a Claude Code version none of the sessions before it ran: either that version or the "
+            "project's own files explain it.") in capsys.readouterr().out
 
 
 def test_check_warns_within_a_day_when_new_prompts_start_missing_the_cache(tmp_path, sent, capsys):
