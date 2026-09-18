@@ -88,6 +88,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="write the day view to FILE as a self-contained page, charts and all")
     _add_source(report)
     _add_state(report)
+    # So a refusal `main` raises prints `usage: ccdrift report …`, as argparse's own do.
+    report.set_defaults(_parser=report)
 
     status = commands.add_parser("status", help="how the last check went and what ccdrift is following")
     status.add_argument("--short", action="store_true",
@@ -248,7 +250,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.command == "report":
         from ccdrift.report import run_report
         if args.html is not None and args.by == "version":
-            parser.error("--html draws the day view; drop --by version")
+            args._parser.error("--html draws the day view; drop --by version")
         return run_report(_source(args), _state(args), days=args.days, by=args.by, as_json=args.json,
                           html_path=args.html)
     if args.command == "status":

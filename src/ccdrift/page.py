@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import html
 import math
+import textwrap
 from datetime import date
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 import pandas as pd
 
 from ccdrift.settings import settings_lines
-from ccdrift.texts import INCIDENT_METRICS, incident_line, misses, number
+from ccdrift.texts import INCIDENT_METRICS, SHORT_NAMES, incident_line, misses, number
 
 WIDTH = 720          # the drawing area of a chart, in SVG user units
 HEIGHT = 160         # the metric line's height
@@ -83,15 +84,16 @@ def top(values: Sequence[Any], floor: float) -> float:
 
 def chart(days: Sequence[str], values: Sequence[Any], *, title: str, low: float, high: float,
           marked: Sequence[str] = (), shaded: Sequence[str] = (), fmt: str = ".2f") -> str:
-    """One metric over the days shown: the days of an incident shaded, the days that passed
-    the cutoff marked, and the line itself. Values are placed between `low` and `high`, so
-    two charts of the same metric are always read on the same scale."""
+    """One metric over the days shown: the days of an incident on this metric shaded, the
+    days the detector flagged it on marked, and the line itself. Values are placed between
+    `low` and `high`, so two charts of the same metric are always read on the same scale."""
     placed = points(values, low, high)
+    shade, mark = set(shaded), set(marked)
     height = PAD_TOP + HEIGHT + PAD_BOTTOM
     parts = [f'<svg viewBox="0 0 {PAD_LEFT + WIDTH + PAD_RIGHT} {height}" role="img" '
              f'aria-label="{escape(title)}">']
     for i, day in enumerate(days):
-        if day in set(shaded):
+        if day in shade:
             parts.append(f'<rect class="incident" x="{_x(i, len(days)) - 3}" y="{PAD_TOP}" width="6" '
                          f'height="{HEIGHT}" />')
     parts.append(f'<line class="axis" x1="{PAD_LEFT}" y1="{PAD_TOP + HEIGHT}" x2="{PAD_LEFT + WIDTH}" '
@@ -102,7 +104,7 @@ def chart(days: Sequence[str], values: Sequence[Any], *, title: str, low: float,
         else:
             parts.append(f'<polyline class="line" points="{_path(run)}" />')
     for i, day in enumerate(days):
-        if day in set(marked) and placed[i] is not None:
+        if day in mark and placed[i] is not None:
             parts.append(f'<circle class="flagged" cx="{placed[i][0]}" cy="{placed[i][1]}" r="3.5" />')
     parts.append(f'<text class="tick" x="{PAD_LEFT - 6}" y="{PAD_TOP + 4}" text-anchor="end">'
                  f'{escape(format(high, fmt))}</text>')
@@ -116,24 +118,26 @@ def chart(days: Sequence[str], values: Sequence[Any], *, title: str, low: float,
     return f'<figure><figcaption>{escape(title)}</figcaption>' + "".join(parts) + "</figure>"
 
 
-def z_strip(days: Sequence[str], zs: Sequence[Any], cutoff: float, *, above: bool) -> str:
+def z_strip(days: Sequence[str], zs: Sequence[Any], cutoff: float, *, above: bool,
+            label: str = "z") -> str:
     """How far each day sat from its usual level, as bars from the middle, with the cutoff
     drawn across the side the metric is judged from. A day ccdrift couldn't judge has no
-    bar."""
+    bar. `label` names the metric in the strip's aria-label, so a reader who hears the page
+    is told which strip this is."""
     reach = max([abs(cutoff) * 1.5] + [abs(float(z)) for z in zs if not _missing(z)])
     middle = PAD_TOP + STRIP / 2
     # A cutoff of 0 with no larger z leaves reach at 0: draw an empty strip rather than
     # dividing by it.
     scale = (STRIP / 2) / reach if reach else 0.0
     parts = [f'<svg viewBox="0 0 {PAD_LEFT + WIDTH + PAD_RIGHT} {PAD_TOP * 2 + STRIP}" role="img" '
-             f'aria-label="z per day">']
+             f'aria-label="{escape(label)} per day">']
     parts.append(f'<line class="axis" x1="{PAD_LEFT}" y1="{middle}" x2="{PAD_LEFT + WIDTH}" y2="{middle}" />')
     for i, z in enumerate(zs):
         if _missing(z):
             continue
         height = round(abs(float(z)) * scale, 1)
-        top = round(middle - height if float(z) > 0 else middle, 1)
-        parts.append(f'<rect class="z" x="{_x(i, len(zs)) - 2}" y="{top}" width="4" height="{height}" />')
+        y = round(middle - height if float(z) > 0 else middle, 1)
+        parts.append(f'<rect class="z" x="{_x(i, len(zs)) - 2}" y="{y}" width="4" height="{height}" />')
     line = round(middle - cutoff * scale if above else middle + abs(cutoff) * scale, 1)
     parts.append(f'<line class="cutoff" x1="{PAD_LEFT}" y1="{line}" x2="{PAD_LEFT + WIDTH}" y2="{line}" />')
     parts.append(f'<text class="tick" x="{PAD_LEFT - 6}" y="{line + 4}" text-anchor="end">'
@@ -143,11 +147,12 @@ def z_strip(days: Sequence[str], zs: Sequence[Any], cutoff: float, *, above: boo
 
 
 def section(title: str, lines: Sequence[str]) -> str:
-    """A heading and the lines the terminal report already writes, escaped. The page keeps
-    one wording for both views rather than a second to hold in step. A part the terminal
-    writes as a single sentence — "Session starts by project over these days: …" — has no
-    body to head, so it stays a sentence."""
-    kept = [line.strip() for line in lines if line.strip()]
+    """A heading and the lines the terminal report already writes, escaped as they arrive:
+    a body that came in nested stays nested, since the `<pre>` keeps the whitespace it is
+    given. The page keeps one wording for both views rather than a second to hold in step.
+    A part the terminal writes as a single sentence — "Session starts by project over these
+    days: …" — has no body to head, so it stays a sentence."""
+    kept = [line for line in lines if line.strip()]
     heading = title.rstrip(":")
     if not kept:
         return f'<p class="note">{escape(heading)}</p>'
@@ -160,16 +165,21 @@ def blocks(lines: Sequence[str]) -> list[tuple[str, list[str]]]:
     part is expected to open with a heading line (no leading space) followed by its indented
     body lines, but a body line that arrives before any heading — a shape no tail helper
     produces today — starts its own block instead of being dropped, so a future helper that
-    broke that shape would still show up on the page rather than vanish from it."""
+    broke that shape would still show up on the page rather than vanish from it.
+
+    A body is dedented by the whitespace every one of its lines shares rather than line by
+    line, so its own nesting survives: `settings_lines` indents a setting change under its
+    model, and with two models a change rendered flush would belong to either."""
     found: list[tuple[str, list[str]]] = []
     for line in lines:
         if not line.strip():
             continue
         if line.startswith(" ") and found:
-            found[-1][1].append(line.strip())
+            found[-1][1].append(line.rstrip())
         else:
             found.append((line.strip(), []))
-    return found
+    return [(heading, textwrap.dedent("\n".join(body)).split("\n") if body else [])
+            for heading, body in found]
 
 
 TABLE_COLUMNS = [("day", "day"), ("responses", "responses"), ("cache_ratio", "cache ratio"), ("cache_z", "z"),
@@ -214,6 +224,7 @@ body { margin: 0 auto; padding: 2rem 1rem 4rem; max-width: 56rem; background: va
 h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
 h2 { font-size: 1.05rem; margin: 2rem 0 .5rem; }
 p.rule { color: var(--muted); margin: 0 0 1.5rem; }
+p.key { color: var(--muted); margin: 1rem 0 0; }
 figure { margin: 1.5rem 0 .25rem; }
 figcaption { color: var(--muted); margin-bottom: .25rem; }
 svg { width: 100%; height: auto; display: block; }
@@ -234,18 +245,32 @@ p.note { margin: 1.25rem 0 0; }
 footer { margin-top: 3rem; color: var(--muted); font-size: .9rem; }"""
 
 
+def flagged_on(rows: pd.DataFrame, metric: str) -> list[str]:
+    """The days the detector flagged `metric` on, read from the same `flagged` column the
+    table prints. A ring and a red row then say one thing: the sustained flag. Which single
+    days passed the cutoff is what the z strip below the chart shows."""
+    short = SHORT_NAMES[metric]
+    return [str(row.day) for row in rows.itertuples(index=False)
+            if short in [name.strip() for name in str(row.flagged).split(",")]]
+
+
+# The page is the artefact meant to be sent on, and its reader can't ask what a mark means.
+KEY = ("A ring marks a day ccdrift flagged; a shaded column is a day inside a recorded incident for that "
+       "metric; the bars under each chart are that day’s z, with the dashed line the cutoff. Days with no "
+       "main-thread activity are left out, so the line joins the days there are.")
+
+
 def render(rows: pd.DataFrame, entries: Sequence[tuple[dict, float]], reported: dict, summary: Sequence[dict],
            extra: Sequence[str], cfg: Any, *, version: str, today: date, source: Any,
-           incident_days: Sequence[str] = ()) -> str:
-    """The whole page: the rule in words, a chart per metric with its z below it, the day
-    table, and the sections the terminal report prints under it."""
+           incident_days: Optional[Mapping[str, Sequence[str]]] = None) -> str:
+    """The whole page: the rule in words, a chart per metric with its z below it, the key to
+    the marks, the day table, and the sections the terminal report prints under it.
+    `incident_days` holds the days to shade per metric (see `report._incident_days`), so an
+    incident shades the chart of the metric it was recorded on and no other."""
     days = [str(day) for day in rows["day"]] if not rows.empty else []
+    shaded = incident_days or {}
     cache_cutoff = cfg.metric_z_thresholds.get("cache_ratio", cfg.z_threshold)
     haiku_cutoff = cfg.metric_z_thresholds.get("haiku_fraction", cfg.z_threshold)
-    flagged_cache = [str(row.day) for row in rows.itertuples(index=False)
-                     if not _missing(row.cache_z) and float(row.cache_z) <= -cache_cutoff]
-    flagged_haiku = [str(row.day) for row in rows.itertuples(index=False)
-                     if not _missing(row.haiku_z) and float(row.haiku_z) >= haiku_cutoff]
     parts = [
         "<!DOCTYPE html>", '<html lang="en"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
@@ -254,20 +279,22 @@ def render(rows: pd.DataFrame, entries: Sequence[tuple[dict, float]], reported: 
         f"<h1>ccdrift report, {escape(today.isoformat())}</h1>",
         f'<p class="rule">The last {len(days)} complete UTC days with main-thread activity. A metric is '
         f"flagged once {cfg.deviant_bins} of any {cfg.flag_window} days in a row pass the cutoff: "
-        f"z ≤ −{cache_cutoff:.1f} for the cache ratio, z ≥ +{haiku_cutoff:.1f} for the Haiku share. "
-        "Shaded days belong to a recorded incident.</p>",
+        f"z ≤ −{cache_cutoff:.1f} for the cache ratio, z ≥ +{haiku_cutoff:.1f} for the Haiku share.</p>",
     ]
     if days:
         parts.append(chart(days, [row.cache_ratio for row in rows.itertuples(index=False)],
                            title="Cache read ratio per day", low=0.0, high=1.0,
-                           marked=flagged_cache, shaded=incident_days, fmt=".2f"))
+                           marked=flagged_on(rows, "cache_ratio"),
+                           shaded=shaded.get("cache_ratio", ()), fmt=".2f"))
         parts.append(z_strip(days, [row.cache_z for row in rows.itertuples(index=False)],
-                             -cache_cutoff, above=False))
+                             -cache_cutoff, above=False, label="Cache read ratio z"))
         shares = [row.haiku_share for row in rows.itertuples(index=False)]
         parts.append(chart(days, shares, title="Haiku share of main-thread responses per day", low=0.0,
-                           high=top(shares, 0.2), marked=flagged_haiku, shaded=incident_days, fmt=".2f"))
+                           high=top(shares, 0.2), marked=flagged_on(rows, "haiku_fraction"),
+                           shaded=shaded.get("haiku_fraction", ()), fmt=".2f"))
         parts.append(z_strip(days, [row.haiku_z for row in rows.itertuples(index=False)],
-                             haiku_cutoff, above=True))
+                             haiku_cutoff, above=True, label="Haiku share z"))
+        parts.append(f'<p class="key">{escape(KEY)}</p>')
         parts.append(table(rows))
     incidents = [incident_line(incident, cost) for incident, cost in entries]
     parts.append(section("Incidents", incidents or ["none yet"]))

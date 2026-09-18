@@ -8,7 +8,7 @@ import pytest
 from ccdrift.cli import main
 from ccdrift.history import load_history
 from ccdrift.logs import judged_turns
-from ccdrift.report import daily_rows, run_report, version_key
+from ccdrift.report import _incident_days, daily_rows, run_report, version_key
 from tests.helpers import (DAY, HAIKU, QUIET, at, busy_days, compact_boundary, daily_turns,
                            damage_responses_table, line, main_thread_days, prompt, stop_hook_summary, text,
                            tool_result, write)
@@ -264,6 +264,40 @@ def test_report_html_writes_a_self_contained_page_and_prints_where(tmp_path, cap
     assert "http://" not in text and "https://" not in text and "<img" not in text
 
 
+def entry(metric, start, end, status):
+    return ({"metric": metric, "start": start, "end": end, "status": status}, 0.0)
+
+
+def test_only_a_live_incident_on_the_charts_own_metric_shades_its_days():
+    days = ["2026-09-02", "2026-09-03", "2026-09-04"]
+    live = entry("cache_ratio", "2026-09-04", None, "open")          # open: runs to the last day shown
+    recovered = entry("cache_ratio", "2026-09-01", "2026-09-02", "recovered")
+    persistent = entry("cache_ratio", "2026-09-03", "2026-09-03", "persistent")
+    # Dismissed: ccdrift put these days back in the baseline and scores them like any other,
+    # so shading them would tell the reader to discount a dip ccdrift counts as normal.
+    dismissed = entry("cache_ratio", "2026-09-02", "2026-09-04", "dismissed")
+    haiku = entry("haiku_fraction", "2026-09-02", "2026-09-04", "recovered")
+    older = entry("cache_ratio", "2026-08-01", "2026-08-10", "recovered")
+    assert _incident_days([live], days, "cache_ratio") == ["2026-09-04"]
+    assert _incident_days([recovered], days, "cache_ratio") == ["2026-09-02"]
+    assert _incident_days([persistent], days, "cache_ratio") == ["2026-09-03"]
+    assert _incident_days([dismissed], days, "cache_ratio") == []
+    assert _incident_days([haiku], days, "cache_ratio") == []
+    assert _incident_days([haiku], days, "haiku_fraction") == days
+    assert _incident_days([older], days, "cache_ratio") == []
+    assert _incident_days([live, recovered, persistent, dismissed, haiku, older], days, "cache_ratio") == days
+
+
+def test_run_report_refuses_a_page_it_cannot_draw(tmp_path):
+    page = tmp_path / "report.html"
+    # The CLI refuses both, but the function doesn't trust its caller.
+    with pytest.raises(ValueError, match="day view"):
+        run_report(tmp_path / "logs", tmp_path / "state.json", by="version", html_path=page)
+    with pytest.raises(ValueError, match="one output each"):
+        run_report(tmp_path / "logs", tmp_path / "state.json", as_json=True, html_path=page)
+    assert not page.exists()
+
+
 def test_report_html_says_when_it_cannot_write_the_file(tmp_path, capsys):
     main_thread_days(tmp_path / "logs" / "-Users-me-app", [{}] * 3)
     assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4),
@@ -279,4 +313,7 @@ def test_the_html_flag_takes_the_day_view_only_and_not_with_json(tmp_path, capsy
         with pytest.raises(SystemExit) as exited:
             main([*argv, "--source", str(tmp_path / "logs"), "--state", str(tmp_path / "state.json")])
         assert exited.value.code == 2
-    assert "--html draws the day view; drop --by version" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "--html draws the day view; drop --by version" in err
+    # Both refusals print the report's own usage, the way argparse's own do.
+    assert err.count("usage: ccdrift report") == 2 and "usage: ccdrift [-h]" not in err

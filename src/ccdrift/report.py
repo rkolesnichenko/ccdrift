@@ -203,11 +203,19 @@ def report_json(view: str, rows: pd.DataFrame, entries: Sequence[Entry], reporte
     return json.dumps(payload, indent=1) + "\n"
 
 
-def _incident_days(entries: Sequence[Entry], days: Sequence[str]) -> list[str]:
-    """The days shown that belong to a recorded incident, whichever metric it is on: the
-    page shades them, so a dip already accounted for doesn't read as news."""
+def _incident_days(entries: Sequence[Entry], days: Sequence[str], metric: str) -> list[str]:
+    """The days shown that belong to a recorded incident on `metric` — only that metric,
+    since a Haiku incident accounts for nothing on the cache chart. The page shades them, so
+    a dip already accounted for doesn't read as news.
+
+    A dismissed incident shades nothing: ccdrift puts its days back in the baseline and
+    scores them like any other, so shading them would tell the reader to discount a dip
+    ccdrift itself counts as normal. Open, recovered and persistent incidents all shade —
+    those are days ccdrift stands behind, whatever it later decided about them."""
     shaded = set()
     for incident, _ in entries:
+        if incident["metric"] != metric or incident["status"] == "dismissed":
+            continue
         end = incident["end"] or max(days, default=incident["start"])
         shaded |= {day for day in days if incident["start"] <= day <= end}
     return sorted(shaded)
@@ -216,6 +224,10 @@ def _incident_days(entries: Sequence[Entry], days: Sequence[str]) -> list[str]:
 def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: str = "day",
                as_json: bool = False, today: Optional[date] = None,
                cfg: Optional[DetectorConfig] = None, html_path: Optional[Path] = None) -> int:
+    if html_path is not None and by != "day":
+        raise ValueError(f"The page draws the day view; it has nothing to draw for by={by!r}.")
+    if html_path is not None and as_json:
+        raise ValueError("The page and JSON are one output each; ask for one of them.")
     try:
         state = load_state(state_path)
     except (OSError, ValueError) as exc:
@@ -266,19 +278,14 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
         # paths, so the projects stay out of it.
         extra_json = {"hooks": hooks, "subagents": subagents, "failures": fails}
     summary = settings_summary(turns, window)
-    if as_json:
-        text = report_json(by, rows, entries, state["reported"], summary, cfg, extra_json)
-    elif by == "version":
-        text = format_version_report(rows, entries, state["reported"], summary)
-    else:
-        text = format_report(rows, entries, state["reported"], summary, cfg, extra=extra_lines)
     if html_path is not None:
         from ccdrift import __version__
         from ccdrift.page import render
 
         shown = [str(day) for day in rows["day"]] if not rows.empty else []
         page = render(rows, entries, state["reported"], summary, extra_lines, cfg, version=__version__,
-                      today=today, source=source, incident_days=_incident_days(entries, shown))
+                      today=today, source=source,
+                      incident_days={metric: _incident_days(entries, shown, metric) for metric in INCIDENT_METRICS})
         try:
             html_path.write_text(page, encoding="utf-8")
         except OSError as exc:
@@ -286,5 +293,11 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
             return 1
         print(f"wrote {html_path}")
         return 0
+    if as_json:
+        text = report_json(by, rows, entries, state["reported"], summary, cfg, extra_json)
+    elif by == "version":
+        text = format_version_report(rows, entries, state["reported"], summary)
+    else:
+        text = format_report(rows, entries, state["reported"], summary, cfg, extra=extra_lines)
     print(text, end="")
     return 0

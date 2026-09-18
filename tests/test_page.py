@@ -5,7 +5,8 @@ from datetime import date
 import pandas as pd
 
 from ccdrift.detector import DetectorConfig
-from ccdrift.page import blocks, chart, escape, points, render, section, table, top, z_strip
+from ccdrift.page import KEY, blocks, chart, escape, points, render, section, table, top, z_strip
+from ccdrift.settings import settings_lines
 
 DAYS = ["2026-09-01", "2026-09-02", "2026-09-03"]
 
@@ -47,6 +48,8 @@ def test_a_chart_breaks_its_line_at_a_day_it_has_no_value_for():
 
 def test_the_z_strip_draws_a_bar_per_judged_day_and_the_cutoff_on_the_side_judged_from():
     below = z_strip(["2026-09-01", "2026-09-02"], [None, -4.0], -3.0, above=False)
+    # One bar for the one day with a z: 09-01 wasn't judged, so it gets none.
+    assert below.count("<rect") == 1
     assert '<rect class="z" x="766.0" y="32.0" width="4" height="17.8" />' in below
     assert '<line class="cutoff" x1="48" y1="45.3" x2="768" y2="45.3" />' in below
     assert '<text class="tick" x="42" y="49.3" text-anchor="end">-3.0</text>' in below
@@ -60,8 +63,10 @@ def test_a_zero_cutoff_with_no_larger_z_draws_an_empty_strip_instead_of_dividing
     strip = z_strip(["2026-09-01"], [0.0], 0.0, above=True)
     assert '<rect class="z" x="406.0" y="32.0" width="4" height="0.0" />' in strip
     assert '<line class="cutoff" x1="48" y1="32.0" x2="768" y2="32.0" />' in strip
-    empty = z_strip(["2026-09-01"], [], 0.0, above=False)
-    assert "<rect" not in empty
+    # One day ccdrift couldn't judge: the strip is the cutoff alone, with no bar to mislead.
+    unjudged = z_strip(["2026-09-01"], [None], 0.0, above=False)
+    assert "<rect" not in unjudged
+    assert '<line class="cutoff" x1="48" y1="32.0" x2="768" y2="32.0" />' in unjudged
 
 
 def test_everything_the_page_prints_is_escaped():
@@ -70,11 +75,14 @@ def test_everything_the_page_prints_is_escaped():
 
 
 def test_a_section_keeps_the_terminal_wording_and_a_one_line_part_stays_a_sentence():
-    assert section("Incidents", ["  cache 2026-08-18..2026-09-03"]) == (
+    assert section("Incidents", ["cache 2026-08-18..2026-09-03"]) == (
         "<h2>Incidents</h2><pre>cache 2026-08-18..2026-09-03</pre>")
     # The heading's trailing colon belongs to a terminal line, not to a heading.
-    assert section("Settings over these days:", ["  claude-opus-5: effort xhigh 100%"]).startswith(
+    assert section("Settings over these days:", ["claude-opus-5: effort xhigh 100%"]).startswith(
         "<h2>Settings over these days</h2>")
+    # A body keeps the nesting it arrives with; the <pre> is where whitespace still means something.
+    assert section("Settings:", ["claude-opus-5: effort xhigh 100%", "  2026-09-02: effort xhigh -> high"]) == (
+        "<h2>Settings</h2><pre>claude-opus-5: effort xhigh 100%\n  2026-09-02: effort xhigh -&gt; high</pre>")
     assert section("Session starts by project over these days: /Users/me/app ~1k (3 sessions)", []) == (
         '<p class="note">Session starts by project over these days: /Users/me/app ~1k (3 sessions)</p>')
 
@@ -82,6 +90,20 @@ def test_a_section_keeps_the_terminal_wording_and_a_one_line_part_stays_a_senten
 def test_the_terminal_tail_splits_into_its_own_parts():
     assert blocks(["", "Hooks over these days: 3 runs", "", "Settings:", "  opus: effort xhigh"]) == [
         ("Hooks over these days: 3 runs", []), ("Settings:", ["opus: effort xhigh"])]
+
+
+def test_a_setting_change_stays_under_the_model_it_belongs_to():
+    # Two models: a change rendered flush with them would belong to either one.
+    lines = settings_lines([
+        {"model": "claude-opus-5", "shares": {"effort": {"xhigh": 1.0}}, "changes": []},
+        {"model": "claude-sonnet-5", "shares": {"effort": {"high": 1.0}},
+         "changes": [{"day": "2026-09-02", "setting": "effort", "from": "xhigh", "to": "high"}]}])
+    (heading, body), = blocks(lines)
+    assert heading == "Settings on the CLI main thread over these days (share of responses):"
+    assert body == ["claude-opus-5: effort xhigh 100%", "claude-sonnet-5: effort high 100%",
+                    "  2026-09-02: effort xhigh -> high"]
+    assert ("<pre>claude-opus-5: effort xhigh 100%\nclaude-sonnet-5: effort high 100%\n"
+            "  2026-09-02: effort xhigh -&gt; high</pre>") in section(heading, body)
 
 
 def test_a_body_line_before_any_heading_starts_its_own_block_instead_of_vanishing():
@@ -102,19 +124,50 @@ def test_the_page_holds_the_rule_both_charts_the_table_and_the_footer_and_no_scr
     page = render(rows_of([0.9, 0.44, 0.9], [None, -20.4, 0.0], flagged=["", "cache", ""]),
                   entries=[], reported={}, summary=[], extra=["", "Hooks over these days: 3 runs"],
                   cfg=DetectorConfig(), version="0.9.0", today=date(2026, 9, 18),
-                  source="/Users/me/.claude/projects", incident_days=["2026-09-02"])
+                  source="/Users/me/.claude/projects", incident_days={"cache_ratio": ["2026-09-02"]})
     assert page.startswith("<!DOCTYPE html>\n")
     assert "<script" not in page
     assert ("A metric is flagged once 3 of any 4 days in a row pass the cutoff: z ≤ −3.0 for the cache ratio, "
             "z ≥ +3.5 for the Haiku share.") in page
+    # The page is sent on, so it says what its own marks mean.
+    assert f'<p class="key">{KEY}</p>' in page
+    assert ("A ring marks a day ccdrift flagged; a shaded column is a day inside a recorded incident for "
+            "that metric; the bars under each chart are that day’s z, with the dashed line the cutoff. "
+            "Days with no main-thread activity are left out, so the line joins the days there are.") in page
     assert "<figcaption>Cache read ratio per day</figcaption>" in page
     assert "<figcaption>Haiku share of main-thread responses per day</figcaption>" in page
+    # Each strip names the metric it belongs to, for a reader who hears the page.
+    assert 'aria-label="Cache read ratio z per day"' in page and 'aria-label="Haiku share z per day"' in page
     assert '<rect class="incident" x="405.0"' in page
     assert "<h2>Incidents</h2><pre>none yet</pre>" in page
     assert '<p class="note">Hooks over these days: 3 runs</p>' in page
     assert ("<footer>Written by ccdrift 0.9.0 on 2026-09-18 from the transcripts in "
             "/Users/me/.claude/projects. This page holds local paths, and nothing left this machine to "
             "make it.</footer>") in page
+
+
+def render_of(rows, **kwargs):
+    return render(rows, entries=[], reported={}, summary=[], extra=[], cfg=DetectorConfig(),
+                  version="0.9.0", today=date(2026, 9, 18), source="/logs", **kwargs)
+
+
+def test_each_chart_rings_the_days_the_detector_flagged_its_own_metric_on():
+    # 09-02's z is far past the cutoff without a sustained flag, so it carries no ring: a
+    # ring and a red table row say the same thing, and the strip shows the single days.
+    page = render_of(rows_of([0.9] * 3, [-4.0, -20.4, 0.0], shares=[0.0, 0.0, 0.1],
+                             haiku_zs=[0.0, 0.0, 4.0], flagged=["cache", "", "haiku"]))
+    cache, haiku = page.split("<figcaption>Haiku share")
+    assert '<circle class="flagged" cx="48.0" cy="28.0" r="3.5" />' in cache
+    assert 'class="flagged" cx="408.0"' not in cache and 'class="flagged" cx="768.0"' not in cache
+    assert '<circle class="flagged" cx="768.0" cy="92.0" r="3.5" />' in haiku
+    assert 'class="flagged" cx="48.0"' not in haiku
+
+
+def test_an_incident_shades_the_chart_of_its_own_metric_and_no_other():
+    page = render_of(rows_of([0.9] * 3, [0.0] * 3), incident_days={"cache_ratio": ["2026-09-02"]})
+    cache, haiku = page.split("<figcaption>Haiku share")
+    assert '<rect class="incident" x="405.0" y="12" width="6" height="160" />' in cache
+    assert '<rect class="incident"' not in haiku
 
 
 def test_a_page_with_no_days_still_renders_its_sections():
