@@ -171,6 +171,21 @@ def test_one_run_alerts_once_for_a_spell_of_responses_cut_short(tmp_path):
     assert reported(once, "cut_short") == reported(daily, "cut_short")
 
 
+def test_a_run_that_escalates_says_the_same_in_one_call_as_day_by_day(tmp_path):
+    # The escalation records its episode in the middle of the run, and the day after is
+    # judged against it. A fortnight judged in one call — a first check after an upgrade,
+    # or after days with the Mac off — must reach the same two words a check running each
+    # morning would: this is what _judged_days being a generator is for, and an escalation
+    # is the second way its state grows while it runs.
+    counts = counts_of(tmp_path, [{}] * 6 + [{"truncated": 10}, {"truncated": 40}])
+    once = state_with()
+    assert [e["since"] for e in cut_short(counts, once, date(2026, 9, 9))] == ["2026-09-07", "2026-09-08"]
+    daily = state_with()
+    for today in (date(2026, 9, 8), date(2026, 9, 9)):
+        cut_short(counts[counts["day"] < today.isoformat()], daily, today)
+    assert reported(once, "cut_short") == reported(daily, "cut_short")
+
+
 def test_a_day_alerts_when_responses_stop_at_the_token_limit_far_more_than_before(tmp_path):
     counts = counts_of(tmp_path, [{}] * 6 + [{"truncated": 5}])
     state = state_with()
