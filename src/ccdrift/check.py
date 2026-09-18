@@ -144,7 +144,7 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     replaying = first_run(state)
     events = [] if replaying else update_incidents(turns, state, today, cfg)
     if replaying:
-        replay_incidents(df, today, cfg, state)
+        replayed = replay_incidents(df, today, cfg, state)
         found = sorted((i for i in incidents if i["source"] == REPLAY_SOURCE), key=lambda i: i["start"])
         if found:
             notes = []
@@ -159,6 +159,14 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
                     notes += release_notes(changelog, quoted, TOPIC_OF[incident["metric"]])
             alerts.append(("history", "ccdrift: past incidents found",
                            history_message(found, str(turns["day"].min())), note_lines(notes)))
+        # A regression still going is why someone installs ccdrift mid-flight, and the
+        # summary above reads as history. It also gets the flag alert it would have had,
+        # with the days and z values that opened it; the release notes stay on the summary
+        # rather than being quoted twice in the same run.
+        for _, event in replayed:
+            if event.kind == "flag" and event.incident["status"] == "open":
+                kind, title, message, details, _ = describe(event, turns, incidents, cfg)
+                alerts.append((kind, title, message, details))
     for event in events:
         kind, title, message, details, named = describe(event, turns, incidents, cfg)
         notes = []

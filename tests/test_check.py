@@ -587,12 +587,25 @@ def test_the_first_check_replays_its_history_and_says_once_what_it_found(tmp_pat
         ("2026-09-15", "recovered", "replay", "2026-09-18", "2026-09-23")]
 
 
-def test_a_first_check_that_finds_a_regression_still_going_leaves_it_open_on_the_status_line(tmp_path, sent):
+def test_a_first_check_that_finds_a_regression_still_going_flags_it_as_well(tmp_path, sent, capsys):
+    # The summary says what the history held; the flag says this is happening now, with the
+    # days and z values that opened it — the alert the owner would have had all along.
     main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12}] * 10)
     check_logs(tmp_path, today=date(2026, 10, 1))
-    assert sent == ["ccdrift: past incidents found"]
+    assert sent == ["ccdrift: past incidents found", "ccdrift flag"]
+    out = capsys.readouterr().out.splitlines()
+    assert ("[check 2026-10-01 09:00] ccdrift flag: Haiku share on the main thread up from 2026-09-15, on "
+            "Claude Code 2.1.226 (since 09-01). ~120 extra Haiku responses so far.") in out
+    assert any(line.startswith("    days 2026-09-15, 2026-09-16, 2026-09-17; z = ") for line in out)
     assert short_status(tmp_path / "state.json", datetime(2026, 10, 1, 9, 5, tzinfo=timezone.utc)) == (
         "ccdrift: Haiku share up since 09-15")
+
+
+def test_a_first_check_whose_incidents_are_all_over_sends_only_the_summary(tmp_path, sent):
+    # Nothing is happening now, so nothing is flagged: one alert, as before.
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12}] * 5 + [{}] * 10)
+    check_logs(tmp_path, today=date(2026, 10, 10))
+    assert sent == ["ccdrift: past incidents found"]
 
 
 def test_a_first_check_on_a_clean_history_sends_nothing(tmp_path, sent):
