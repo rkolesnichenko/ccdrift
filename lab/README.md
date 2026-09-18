@@ -43,6 +43,10 @@ uv run --group lab python -m lab.subagent_models
 # G10 and G11: do the failure rules stay quiet on a real history and catch a planted
 # burst — a single bad day for G10, a three-day run of them for G11?
 uv run --group lab python -m lab.failures
+
+# G12: does judging each project against itself stop a move between projects from
+# reading as a change in how much context a session starts with?
+uv run --group lab python -m lab.context
 ```
 
 `--help` lists every option, including `--main-thread-only`, `--since`, `--until` and
