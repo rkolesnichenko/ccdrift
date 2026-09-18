@@ -275,7 +275,7 @@ def rejudged(starts: pd.DataFrame, state: dict[str, Any], today: date) -> list[d
         return []
     complete = starts[starts["day"].astype(str) < today.isoformat()].reset_index(drop=True)
     earliest = str(complete["day"].astype(str).min()) if not complete.empty else today.isoformat()
-    found = {c.since for c in context_changes_in(ratio_starts(complete))}
+    found = {c.since for c in found_changes(ratio_starts(complete))}
     kept, dropped = [], []
     for record in state["context_changes"]:
         if record["since"] >= earliest and record["since"] not in found:

@@ -465,6 +465,45 @@ def test_check_alerts_when_sessions_start_with_much_less_context(tmp_path, sent,
             "project's own files explain it.") in capsys.readouterr().out
 
 
+def test_a_state_from_an_older_ccdrift_is_rejudged_once_and_keeps_a_real_change(tmp_path, sent, capsys):
+    # -Users-me-a steps alone among two projects: the shape of
+    # test_a_step_in_one_project_of_several_blames_that_projects_own_files in test_sessions.py.
+    # Only the per-project pass finds it; the pooled-only rule `rejudged` used to re-check
+    # against would have deleted it in the same run it was alerted.
+    for project, tokens in [("-Users-me-a", [128_000] * 8 + [64_000] * 3), ("-Users-me-b", [64_000] * 11)]:
+        for d, size in enumerate(tokens):
+            write(tmp_path / "logs" / project / f"s{d}.jsonl",
+                  [prompt(at(d * DAY), sid=f"{project}-{d}"),
+                   line(f"m{project}-{d}", text(40), ts=at(d * DAY), sid=f"{project}-{d}", cache_creation=100,
+                        cache_read=size - 110, entrypoint="cli")])
+    # A state as ccdrift 0.7.0 left it: no context_rule, and a recorded change (an "up" move,
+    # so it isn't deduped against the real "down" one below) that the new rule can't find.
+    state = new_state()
+    del state["context_rule"]
+    state["context_changes"] = [{"since": "2026-09-03", "from": 60_000.0, "to": 90_000.0,
+                                 "days": ["2026-09-03", "2026-09-05"], "reported_on": "2026-09-06"}]
+    state["last_ok"] = "2026-09-01T09:00:00+00:00"
+    save_state(tmp_path / "state.json", state)
+
+    check_logs(tmp_path, today=date(2026, 9, 14))
+    out = capsys.readouterr().out
+    assert sent == ["ccdrift: session start changed"]
+    assert ("ccdrift: session start changed: New sessions start with ~64k tokens of context from 2026-09-09, "
+            "down from ~130k, in 1 of 2 projects you used. That project's CLAUDE.md, MCP servers or skills "
+            "explain it, not Claude Code.") in out
+    assert ("ccdrift: a recorded session-start change was dropped: 2026-09-03, ~60k -> ~90k tokens: judged "
+            "against each project's own level, it isn't a change.") in out
+    state = load_state(tmp_path / "state.json")
+    assert [c["since"] for c in state["context_changes"]] == ["2026-09-09"]
+    assert state["context_rule"] == 2
+
+    check_logs(tmp_path, today=date(2026, 9, 15))
+    assert sent == ["ccdrift: session start changed"]
+    state = load_state(tmp_path / "state.json")
+    assert [c["since"] for c in state["context_changes"]] == ["2026-09-09"]
+    assert state["context_rule"] == 2
+
+
 def test_check_warns_within_a_day_when_new_prompts_start_missing_the_cache(tmp_path, sent, capsys):
     # Ten misses in a row on Sep 21 from 10:50 UTC pass h = THRESHOLD = 4.0 at 10:59;
     # the second run, an hour later, stays quiet.
