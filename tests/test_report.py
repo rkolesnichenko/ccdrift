@@ -248,3 +248,35 @@ def test_report_by_version_quotes_release_notes_under_each_version(tmp_path, cap
     assert lines[row + 1:row + 4] == ["    release notes: Hooks now receive the session's effort level",
                                       "    release notes: Fixed prompt cache misses at turn boundaries",
                                       ""]
+
+
+def test_report_html_writes_a_self_contained_page_and_prints_where(tmp_path, capsys):
+    main_thread_days(tmp_path / "logs" / "-Users-me-app", [{}] * 3)
+    page = tmp_path / "report.html"
+    assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4),
+                      html_path=page) == 0
+    assert capsys.readouterr().out == f"wrote {page}\n"
+    text = page.read_text()
+    assert text.startswith("<!DOCTYPE html>\n")
+    assert "<h1>ccdrift report, 2026-09-04</h1>" in text
+    assert "2026-09-03" in text and "<script" not in text
+    # Nothing is fetched when the page is opened: no links out, no images, no scripts.
+    assert "http://" not in text and "https://" not in text and "<img" not in text
+
+
+def test_report_html_says_when_it_cannot_write_the_file(tmp_path, capsys):
+    main_thread_days(tmp_path / "logs" / "-Users-me-app", [{}] * 3)
+    assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4),
+                      html_path=tmp_path / "missing" / "report.html") == 1
+    assert "Can't write" in capsys.readouterr().err
+
+
+def test_the_html_flag_takes_the_day_view_only_and_not_with_json(tmp_path, capsys):
+    main_thread_days(tmp_path / "logs" / "-Users-me-app", [{}] * 3)
+    page = tmp_path / "report.html"
+    for argv in (["report", "--json", "--html", str(page)],
+                 ["report", "--by", "version", "--html", str(page)]):
+        with pytest.raises(SystemExit) as exited:
+            main([*argv, "--source", str(tmp_path / "logs"), "--state", str(tmp_path / "state.json")])
+        assert exited.value.code == 2
+    assert "--html draws the day view; drop --by version" in capsys.readouterr().err

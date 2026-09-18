@@ -177,7 +177,7 @@ stop the check.
 
 ```text
 ccdrift check [--notify] [--exec CMD] [--no-digest] [--source DIR] [--state FILE]   what the schedule runs
-ccdrift report [--days N] [--by day|version] [--json] [--source DIR] [--state FILE]
+ccdrift report [--days N] [--by day|version] [--json | --html FILE] [--source DIR] [--state FILE]
 ccdrift status [--short] [--state FILE]
 ccdrift incident list [--source DIR] [--state FILE]
 ccdrift incident add {cache|haiku} START..END [--state FILE]
@@ -199,6 +199,13 @@ the models subagents ran on, and tool-loop cache misses on the main thread and i
 subagents, which `report --by version` shows as a share per version.
 
 `report --json` holds aggregates only: no paths, session ids or project names.
+
+`report --html FILE` writes the day view as one self-contained page: the cache ratio and
+Haiku share drawn per day, with the days of a recorded incident shaded and the flagged
+ones marked, a strip of each day's z under the chart with the cutoff across it, then the
+table and the sections the terminal prints. It has no scripts and fetches nothing when
+opened, so it works offline, and it names your project folders as the terminal report
+does — its last line says so, since a page is easier to send on than a terminal.
 
 Transcripts are read from `$CLAUDE_CONFIG_DIR/projects` when that variable is set,
 otherwise from `~/.claude/projects`. The state file, history and log live in

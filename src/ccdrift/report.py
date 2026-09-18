@@ -25,7 +25,7 @@ from ccdrift.sessions import MIN_SESSIONS, project_lines, project_summary, sessi
 from ccdrift.settings import settings_lines, settings_summary, subagent_lines, subagent_summary
 from ccdrift.state import load_state
 from ccdrift.texts import (INCIDENT_METRICS, SHORT_NAMES, approx, incident_line, misses as _misses,
-                          number as _number, version_key)
+                           number as _number, version_key)
 
 COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", *COUNT_COLUMNS, "flagged"]
 VERSION_COLUMNS = ["version", "first_day", "last_day", "responses", "prompt_turns", "cache_ratio",
@@ -203,9 +203,19 @@ def report_json(view: str, rows: pd.DataFrame, entries: Sequence[Entry], reporte
     return json.dumps(payload, indent=1) + "\n"
 
 
+def _incident_days(entries: Sequence[Entry], days: Sequence[str]) -> list[str]:
+    """The days shown that belong to a recorded incident, whichever metric it is on: the
+    page shades them, so a dip already accounted for doesn't read as news."""
+    shaded = set()
+    for incident, _ in entries:
+        end = incident["end"] or max(days, default=incident["start"])
+        shaded |= {day for day in days if incident["start"] <= day <= end}
+    return sorted(shaded)
+
+
 def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: str = "day",
                as_json: bool = False, today: Optional[date] = None,
-               cfg: Optional[DetectorConfig] = None) -> int:
+               cfg: Optional[DetectorConfig] = None, html_path: Optional[Path] = None) -> int:
     try:
         state = load_state(state_path)
     except (OSError, ValueError) as exc:
@@ -262,5 +272,19 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
         text = format_version_report(rows, entries, state["reported"], summary)
     else:
         text = format_report(rows, entries, state["reported"], summary, cfg, extra=extra_lines)
+    if html_path is not None:
+        from ccdrift import __version__
+        from ccdrift.page import render
+
+        shown = [str(day) for day in rows["day"]] if not rows.empty else []
+        page = render(rows, entries, state["reported"], summary, extra_lines, cfg, version=__version__,
+                      today=today, source=source, incident_days=_incident_days(entries, shown))
+        try:
+            html_path.write_text(page, encoding="utf-8")
+        except OSError as exc:
+            print(f"Can't write {html_path}: {exc}", file=sys.stderr)
+            return 1
+        print(f"wrote {html_path}")
+        return 0
     print(text, end="")
     return 0

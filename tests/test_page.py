@@ -55,6 +55,15 @@ def test_the_z_strip_draws_a_bar_per_judged_day_and_the_cutoff_on_the_side_judge
     assert '<text class="tick" x="42" y="22.7" text-anchor="end">+3.5</text>' in above
 
 
+def test_a_zero_cutoff_with_no_larger_z_draws_an_empty_strip_instead_of_dividing_by_zero():
+    # reach would be 0 here with nothing larger to divide by; it must not raise.
+    strip = z_strip(["2026-09-01"], [0.0], 0.0, above=True)
+    assert '<rect class="z" x="406.0" y="32.0" width="4" height="0.0" />' in strip
+    assert '<line class="cutoff" x1="48" y1="32.0" x2="768" y2="32.0" />' in strip
+    empty = z_strip(["2026-09-01"], [], 0.0, above=False)
+    assert "<rect" not in empty
+
+
 def test_everything_the_page_prints_is_escaped():
     assert escape('/Users/me/a&b<script>') == "/Users/me/a&amp;b&lt;script&gt;"
     assert '&lt;script&gt;' in section("Session starts", ["  /Users/me/<script>x</script> ~1k"])
@@ -73,6 +82,13 @@ def test_a_section_keeps_the_terminal_wording_and_a_one_line_part_stays_a_senten
 def test_the_terminal_tail_splits_into_its_own_parts():
     assert blocks(["", "Hooks over these days: 3 runs", "", "Settings:", "  opus: effort xhigh"]) == [
         ("Hooks over these days: 3 runs", []), ("Settings:", ["opus: effort xhigh"])]
+
+
+def test_a_body_line_before_any_heading_starts_its_own_block_instead_of_vanishing():
+    # No tail helper emits this shape today, but a future one that did shouldn't lose the
+    # line: it opens a block of its own rather than being swallowed with nothing to catch it.
+    assert blocks(["  stray line", "Heading:", "  body"]) == [
+        ("stray line", []), ("Heading:", ["body"])]
 
 
 def test_the_table_carries_the_terminal_columns_and_marks_a_flagged_day():

@@ -82,7 +82,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="how many recent days to cover (default: 21 by day, all by version)")
     report.add_argument("--by", choices=["day", "version"], default="day",
                         help="one row per day (default) or per Claude Code version")
-    report.add_argument("--json", action="store_true", help="print the report as JSON")
+    output = report.add_mutually_exclusive_group()
+    output.add_argument("--json", action="store_true", help="print the report as JSON")
+    output.add_argument("--html", type=Path, metavar="FILE",
+                        help="write the day view to FILE as a self-contained page, charts and all")
     _add_source(report)
     _add_state(report)
 
@@ -233,7 +236,8 @@ def _change_incident(args: argparse.Namespace, state_path: Path) -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if args.command == "check":
         from ccdrift.check import run_check
         return run_check(_source(args), _state(args), notify_user=args.notify, exec_command=args.exec,
@@ -243,7 +247,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0 if peek(_source(args)) else 2
     if args.command == "report":
         from ccdrift.report import run_report
-        return run_report(_source(args), _state(args), days=args.days, by=args.by, as_json=args.json)
+        if args.html is not None and args.by == "version":
+            parser.error("--html draws the day view; drop --by version")
+        return run_report(_source(args), _state(args), days=args.days, by=args.by, as_json=args.json,
+                          html_path=args.html)
     if args.command == "status":
         from ccdrift.status import run_status
         return run_status(_state(args), short=args.short)

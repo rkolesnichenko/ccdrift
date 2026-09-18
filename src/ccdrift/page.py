@@ -122,7 +122,9 @@ def z_strip(days: Sequence[str], zs: Sequence[Any], cutoff: float, *, above: boo
     bar."""
     reach = max([abs(cutoff) * 1.5] + [abs(float(z)) for z in zs if not _missing(z)])
     middle = PAD_TOP + STRIP / 2
-    scale = (STRIP / 2) / reach
+    # A cutoff of 0 with no larger z leaves reach at 0: draw an empty strip rather than
+    # dividing by it.
+    scale = (STRIP / 2) / reach if reach else 0.0
     parts = [f'<svg viewBox="0 0 {PAD_LEFT + WIDTH + PAD_RIGHT} {PAD_TOP * 2 + STRIP}" role="img" '
              f'aria-label="z per day">']
     parts.append(f'<line class="axis" x1="{PAD_LEFT}" y1="{middle}" x2="{PAD_LEFT + WIDTH}" y2="{middle}" />')
@@ -154,16 +156,19 @@ def section(title: str, lines: Sequence[str]) -> str:
 
 def blocks(lines: Sequence[str]) -> list[tuple[str, list[str]]]:
     """The terminal report's tail split into (heading, body) by the blank lines it already
-    puts between its parts, so the page and the terminal never drift apart in wording."""
+    puts between its parts, so the page and the terminal never drift apart in wording. Each
+    part is expected to open with a heading line (no leading space) followed by its indented
+    body lines, but a body line that arrives before any heading — a shape no tail helper
+    produces today — starts its own block instead of being dropped, so a future helper that
+    broke that shape would still show up on the page rather than vanish from it."""
     found: list[tuple[str, list[str]]] = []
     for line in lines:
         if not line.strip():
             continue
-        if line.startswith(" "):
-            if found:
-                found[-1][1].append(line.strip())
+        if line.startswith(" ") and found:
+            found[-1][1].append(line.strip())
         else:
-            found.append((line, []))
+            found.append((line.strip(), []))
     return found
 
 
