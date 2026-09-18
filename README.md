@@ -108,11 +108,12 @@ set this in `~/.claude/settings.json`:
 | **ccdrift check failed** | The check itself stopped with an error. | `~/.ccdrift/check.log` has the details. |
 
 Each alert is sent once, except responses cut short: a run that deepens to 3 times the
-share last reported is sent again, naming the level it escalated from. A failing check is
-logged on every run and notifies at most once in 20 hours. Claude Code's documentation
-says the transcript format "is internal to Claude Code and changes between versions, so
-scripts that parse these files directly can break on any release", which is why the
-cache-metric alert exists.
+share last reported is sent again, naming the level it escalated from, and a regression
+that simply lasts is repeated about once a fortnight. A failing check is logged on every
+run and notifies at most once in 20 hours. Claude Code's documentation says the transcript
+format "is internal to Claude Code and changes between versions, so scripts that parse
+these files directly can break on any release", which is why the cache-metric alert
+exists.
 
 ## Incidents
 
