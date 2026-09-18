@@ -4,6 +4,7 @@ line that refreshes often."""
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime
 from typing import Any, Optional, Sequence
@@ -22,6 +23,18 @@ LOOP_NAMES = {"main": "tool-loop cache misses rising", "subagent": "subagent cac
 
 SETTING_NAMES = {"cache_tier": "cache tier", "effort": "effort", "speed": "speed", "service_tier": "service tier"}
 TIER_NAMES = {"1h": "1-hour", "5m": "5-minute"}
+
+
+def number(value: Any, spec: str) -> str:
+    """A number as the report prints it, or "-" when there is none."""
+    return "-" if value is None or (isinstance(value, float) and math.isnan(value)) else format(value, spec)
+
+
+def misses(count: int, turns: int, share: bool = False) -> str:
+    """Tool-loop misses as "2/412", or as a share ("0.49%"); "-" without turns."""
+    if not turns:
+        return "-"
+    return f"{count / turns:.2%}" if share else f"{count}/{turns}"
 
 
 def approx(value: float) -> str:

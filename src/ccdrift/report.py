@@ -24,7 +24,8 @@ from ccdrift.loops import COUNT_COLUMNS, loop_counts
 from ccdrift.sessions import MIN_SESSIONS, project_lines, project_summary, session_starts
 from ccdrift.settings import settings_lines, settings_summary, subagent_lines, subagent_summary
 from ccdrift.state import load_state
-from ccdrift.texts import INCIDENT_METRICS, SHORT_NAMES, approx, incident_line, version_key
+from ccdrift.texts import (INCIDENT_METRICS, SHORT_NAMES, approx, incident_line, misses as _misses,
+                          number as _number, version_key)
 
 COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", *COUNT_COLUMNS, "flagged"]
 VERSION_COLUMNS = ["version", "first_day", "last_day", "responses", "prompt_turns", "cache_ratio",
@@ -107,17 +108,6 @@ def version_rows(turns: pd.DataFrame, changelog: Optional[dict] = None, starts: 
             })
     rows.sort(key=lambda row: version_key(row["version"]))
     return pd.DataFrame(rows, columns=VERSION_COLUMNS)
-
-
-def _misses(misses: int, turns: int, share: bool = False) -> str:
-    """Tool-loop misses as "2/412", or as a share ("0.49%"); "-" without turns."""
-    if not turns:
-        return "-"
-    return f"{misses / turns:.2%}" if share else f"{misses}/{turns}"
-
-
-def _number(value: Any, spec: str) -> str:
-    return "-" if value is None or (isinstance(value, float) and math.isnan(value)) else format(value, spec)
 
 
 def _cutoffs(cfg: DetectorConfig) -> tuple[float, float]:
