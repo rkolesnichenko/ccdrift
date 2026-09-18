@@ -153,6 +153,16 @@ def _cut_shares(frame: pd.DataFrame) -> pd.Series:
     return (frame["truncated"] + frame["refused"]) / frame["responses"]
 
 
+def _day_share(row: pd.Series) -> float:
+    """The share of one day's responses that stopped at the token limit or refused."""
+    return int(row["truncated"] + row["refused"]) / int(row["responses"])
+
+
+def _episode_share(episode: dict[str, Any]) -> float:
+    """The share a reported episode said was cut short: the number the owner was given."""
+    return episode["cut"] / episode["responses"] if episode["responses"] else 0.0
+
+
 def _worst_share(frame: pd.DataFrame) -> float:
     """The worst of those shares, 0.0 over no days at all."""
     return float(_cut_shares(frame).max()) if len(frame) else 0.0
@@ -181,10 +191,12 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
     as CUT_USUAL); each is recorded in state["cut_short"], once per run. Only active days
     are judged: this rule is a share of a day's responses, which a day too quiet to be
     active can't support. The lab tries other floors and shares; the check keeps the
-    defaults."""
+    defaults. A day standing CUT_RATIO above the share a covering episode reported is the
+    regression deepening rather than that episode carrying on, and is reported again,
+    carrying "worse_than" — the level and day it escalated from."""
     def hit(row: pd.Series, before: pd.DataFrame) -> bool:
         cut = int(row["truncated"] + row["refused"])
-        today_share = cut / int(row["responses"])
+        today_share = _day_share(row)
         usual = max(CUT_USUAL, _worst_share(_usual_days(before, share)))
         return cut >= floor and today_share >= share and today_share >= CUT_RATIO * usual
 
@@ -201,8 +213,19 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
         carried = before[before["day"].astype(str) >= episode["since"]]
         return bool(len(carried)) and bool((_cut_shares(carried) >= share).all())
 
+    def louder(episode: dict[str, Any], row: pd.Series) -> bool:
+        """Whether this day stands CUT_RATIO above the share `episode` reported — the same
+        factor a first alert needs over its baseline, so no second number decides this.
+        A regression that deepens that far is not the reported one carrying on, and says so
+        whatever would have held it: both the spell and the run exist to stop one level
+        being reported twice, and this day is not that level. Each further word costs
+        another tripling, so a run first reported at 0.6% can speak four more times before
+        it is cutting every response short."""
+        return _day_share(row) >= CUT_RATIO * _episode_share(episode)
+
     new = []
-    for row, before, _ in _judged_days(counts, "cut_short", state, today, hit, ongoing=ongoing):
+    for row, before, covering in _judged_days(counts, "cut_short", state, today, hit,
+                                              ongoing=ongoing, louder=louder):
         usual = _usual_days(before, share)
         episode = {"since": str(row["day"]), "days": [str(row["day"])],
                    "cut": int(row["truncated"] + row["refused"]), "truncated": int(row["truncated"]),
@@ -212,6 +235,12 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
                    # can't call a fortnight clean that wasn't.
                    "run_days": len(before) - len(usual),
                    "reported_on": today.isoformat()}
+        if covering:
+            # The last word said about this regression, which this day stands three times
+            # above. The alert names it rather than a baseline the run left behind days
+            # ago, and the next escalation is judged against this episode in turn.
+            last = max(covering, key=lambda reported: str(reported["since"]))
+            episode["worse_than"] = {"share": _episode_share(last), "since": str(last["since"])}
         state["cut_short"].append(episode)
         new.append(episode)
     return new

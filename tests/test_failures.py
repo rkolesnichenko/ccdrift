@@ -158,7 +158,11 @@ def test_one_run_alerts_once_for_a_spell_just_as_daily_runs_would(tmp_path):
 
 
 def test_one_run_alerts_once_for_a_spell_of_responses_cut_short(tmp_path):
-    counts = counts_of(tmp_path, [{}] * 6 + [{"truncated": 10}, {"truncated": 40}])
+    # The second day worsens (10 -> 15 of 60) but stays under CUT_RATIO times the first
+    # day's share, so it carries the run on rather than escalating it: this test is about
+    # the spell suppressing a repeat, not about magnitude, which test_a_run_that_gets_
+    # three_times_worse_is_reported_again and its neighbours cover on their own.
+    counts = counts_of(tmp_path, [{}] * 6 + [{"truncated": 10}, {"truncated": 15}])
     once = state_with()
     assert [e["since"] for e in cut_short(counts, once, date(2026, 9, 9))] == ["2026-09-07"]
     daily = state_with()
@@ -266,6 +270,45 @@ def test_a_fresh_run_alerts_again_once_the_level_has_been_back_to_normal(tmp_pat
     first = cut_short(counts[counts["day"] < "2026-09-07"], state, date(2026, 9, 7))
     assert [e["since"] for e in first] == ["2026-09-06"]
     assert [e["since"] for e in cut_short(counts, state, date(2026, 9, 22))] == ["2026-09-21"]
+
+
+def test_a_run_that_gets_three_times_worse_is_reported_again(tmp_path):
+    # 2026-09-06 opens the run at 2.50% and is reported. 09-07 to 09-09 hold it there and
+    # stay silent. 09-10 cuts 8.00% — over three times what ccdrift said — so it says so,
+    # naming the level it was last told about rather than the baseline before the run.
+    counts = cut_days(tmp_path, [(60, 0)] * 5 + [(200, 5)] * 4 + [(200, 16)])
+    state = state_with()
+    episodes = cut_short(counts, state, date(2026, 9, 11))
+    assert [(e["since"], e.get("worse_than")) for e in episodes] == [
+        ("2026-09-06", None), ("2026-09-10", {"share": 0.025, "since": "2026-09-06"})]
+
+
+def test_a_run_that_worsens_by_less_than_three_times_stays_silent(tmp_path):
+    # The same run rising from 2.50% to 6.00%: worse, but not the three times a first alert
+    # needs over its baseline, so it is the same regression carrying on and says nothing.
+    counts = cut_days(tmp_path, [(60, 0)] * 5 + [(200, 5)] * 4 + [(200, 12)])
+    assert [e["since"] for e in cut_short(counts, state_with(), date(2026, 9, 11))] == ["2026-09-06"]
+
+
+def test_an_escalation_speaks_inside_the_spell_window(tmp_path):
+    # The day after the one reported is three times worse. SPELL_DAYS would have swallowed
+    # it — the whole point is that a regression deepening is not one burst reported twice.
+    counts = cut_days(tmp_path, [(60, 0)] * 5 + [(200, 5), (200, 16)])
+    episodes = cut_short(counts, state_with(), date(2026, 9, 8))
+    assert [(e["since"], e.get("worse_than")) for e in episodes] == [
+        ("2026-09-06", None), ("2026-09-07", {"share": 0.025, "since": "2026-09-06"})]
+
+
+def test_the_next_word_is_owed_three_times_the_last_one_not_the_first(tmp_path):
+    # 09-06 at 2.50% is reported, 09-07 at 8.00% escalates. 09-08 at 10.00% is over three
+    # times the first level but not the second, so it stays quiet; 09-09 at 25.00% clears
+    # the second and speaks. Each word is judged against the last one said, which is why an
+    # escalation records its own episode instead of amending the old one.
+    counts = cut_days(tmp_path, [(60, 0)] * 5 + [(200, 5), (200, 16), (200, 20), (200, 50)])
+    episodes = cut_short(counts, state_with(), date(2026, 9, 10))
+    assert [(e["since"], e.get("worse_than")) for e in episodes] == [
+        ("2026-09-06", None), ("2026-09-07", {"share": 0.025, "since": "2026-09-06"}),
+        ("2026-09-09", {"share": 0.08, "since": "2026-09-07"})]
 
 
 def test_the_days_an_alert_compares_with_are_the_active_ones(tmp_path):
