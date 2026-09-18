@@ -13,7 +13,9 @@ quiet Sunday at the end of the logs flipped a PASS to a FAIL with no change to t
 
 Each gate plants the shape its own trouble takes. An overload is a day, so G10 plants a
 single bad day; a release that truncates responses keeps doing it until someone fixes it,
-so G11 plants a run of PLANT_RUN days and asks whether ccdrift says so within the run.
+so G11 plants a run of PLANT_RUN whole days and asks whether ccdrift says so within the
+run. A plant counts only when the planted replay alerts on a day the unplanted history
+stayed quiet on: an alert the logs were going to raise anyway proves nothing.
 
 - G10 (requests failing) passes when the settings alert at most ALERT_BUDGET times per
   BUDGET_DAYS days of history, and alert on every day planted with PLANTED_REQUESTS
@@ -111,30 +113,37 @@ def plant_run(counts: pd.DataFrame, day: str, share: float) -> pd.DataFrame:
     return planted
 
 
-def plant_days(counts: pd.DataFrame, how_many: int = PLANT_DAYS) -> list[str]:
+def plant_days(counts: pd.DataFrame, how_many: int = PLANT_DAYS, room: int = 0) -> list[str]:
     """The last `how_many` active days a rule could judge a burst on — at least
-    MIN_BEFORE_DAYS active days within the BEFORE_DAYS before them — oldest first. A gate
-    that planted only on the corpus's last day answered a question about that day (how
-    busy it was, and how close to a real failure day), not about the rule."""
+    MIN_BEFORE_DAYS active days within the BEFORE_DAYS before them — oldest first, keeping
+    only those with `room` judged days after them. A gate that planted only on the corpus's
+    last day answered a question about that day (how busy it was, and how close to a real
+    failure day), not about the rule; `room` keeps the same thing from coming back through
+    a run planted at the end of the logs, which would be cut short to one or two days and
+    would put that last day in charge of the verdict again. G11 asks for a whole run, G10
+    plants a single day and asks for none."""
     days = [str(day) for day in counts[counts["responses"] >= ACTIVE_RESPONSES]["day"].astype(str)]
     judgeable = []
     for i, day in enumerate(days):
         earliest = (date.fromisoformat(day) - timedelta(days=BEFORE_DAYS)).isoformat()
         if sum(1 for before in days[:i] if before >= earliest) >= MIN_BEFORE_DAYS:
             judgeable.append(day)
+    if room:
+        judgeable = judgeable[:-room]
     return judgeable[-how_many:]
 
 
 def _rows(counts: pd.DataFrame, days: int, rule, grid, names,
-          planted: Callable[[str], tuple[pd.DataFrame, list[str]]]) -> list[dict[str, Any]]:
+          planted: Callable[[str], tuple[pd.DataFrame, list[str]]], room: int = 0) -> list[dict[str, Any]]:
     """One row per setting in `grid`: the days it would alert on over the real history,
     and how many of the planted bursts it catches. `planted(day)` gives the counts with a
     burst starting on that day and the days whose alerting means it was caught — the day
-    itself for G10, the whole run for G11 — and each day of plant_days(counts) carries one
-    in turn, one replay each. A setting catches a plant only when a day of the plant
-    itself alerts."""
+    itself for G10, the whole run for G11 — and each day of plant_days(counts, room=room)
+    carries one in turn, one replay each. A setting catches a plant only when the planted
+    replay alerts on a day of that plant which the unplanted history did not: an alert the
+    history was going to raise anyway is no evidence that the setting saw the plant."""
     budget = ALERT_BUDGET * max(1, days / BUDGET_DAYS)
-    plants = plant_days(counts)
+    plants = plant_days(counts, room=room)
     rows = []
     for setting in grid:
         kwargs = dict(zip(names, setting))
@@ -143,7 +152,7 @@ def _rows(counts: pd.DataFrame, days: int, rule, grid, names,
         for day in plants:
             bad, within = planted(day)
             found = replay(bad, lambda c, state, today: rule(c, state, today, **kwargs))
-            caught += any(one in found for one in within)
+            caught += any(one in found and one not in alerts for one in within)
         rows.append({**kwargs, "alerts": len(alerts), "days": days, "on": ", ".join(alerts),
                      "caught": caught, "plants": len(plants),
                      "passes": bool(plants) and caught == len(plants) and len(alerts) <= budget})
@@ -160,10 +169,12 @@ def request_rows(counts: pd.DataFrame, days: int) -> list[dict[str, Any]]:
 
 def cut_rows(counts: pd.DataFrame, days: int) -> list[dict[str, Any]]:
     """G11's grid, each setting judged against a planted run of PLANT_RUN bad days, caught
-    when ccdrift alerts on any day of the run."""
+    when ccdrift alerts on a day of the run it wouldn't have alerted on anyway. Every run
+    is planted whole: the last days of the corpus have no room for one."""
     grid = [(floor, share) for floor in CUT_FLOOR_GRID for share in CUT_SHARE_GRID]
     return _rows(counts, days, cut_short, grid, ("floor", "share"),
-                 lambda day: (plant_run(counts, day, PLANTED_SHARE), run_days(counts, day)))
+                 lambda day: (plant_run(counts, day, PLANTED_SHARE), run_days(counts, day)),
+                 room=PLANT_RUN - 1)
 
 
 def gate(rows: list[dict[str, Any]], chosen: dict[str, Any]) -> tuple[bool, list[str]]:

@@ -1,7 +1,7 @@
 """Failed requests and responses cut short: what the parser keeps, what a day's counts
 say, and when the check alerts."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
@@ -44,6 +44,11 @@ def test_one_request_retried_several_times_is_one_failure(tmp_path):
     assert list(parsed_failures(tmp_path, records)["kind"]) == ["retry"]
     older = [retry_record(at(0), attempt=None, version="2.1.226")]
     assert list(parsed_failures(tmp_path, older)["kind"]) == ["retry"]
+    # Only a later attempt is dropped. An attempt number ccdrift can't read, or a Claude
+    # Code that numbered them from 0, still counts: losing a real failure is the worse
+    # mistake, and a first attempt is a request either way.
+    odd = [retry_record(at(0), attempt="first", version="2.1.226"), retry_record(at(60), attempt=0)]
+    assert list(parsed_failures(tmp_path, odd)["kind"]) == ["retry", "retry"]
 
 
 def test_a_banner_is_not_a_response_and_a_response_keeps_its_stop_reason(tmp_path):
@@ -198,8 +203,13 @@ def test_a_run_that_starts_too_quietly_alerts_on_its_first_day_over_the_floor(tm
     # reach 3.37%, and the regression would never be reported at all.
     counts = cut_days(tmp_path, [(60, 0)] * 5 + [(356, 4), (579, 6)])
     episodes = cut_short(counts, state_with(), date(2026, 9, 8))
-    assert [(e["since"], e["cut"], e["responses"], e["before_share"]) for e in episodes] == [
-        ("2026-09-07", 6, 579, 0.0)]
+    assert [(e["since"], e["cut"], e["responses"], e["before_share"], e["run_days"]) for e in episodes] == [
+        ("2026-09-07", 6, 579, 0.0, 1)]
+    # The baseline was clean only because one day was left out of it, and the alert says so.
+    assert cut_short_message(episodes[0], []) == (
+        "6 of 579 main-thread responses stopped at the token limit on 2026-09-07 (1.04%), against none on the days "
+        "judged in the 14 before, leaving out the 1 day of this run. A Claude Code update may have changed the "
+        "output limit.")
 
 
 def test_the_days_that_carry_a_reported_run_on_stay_silent(tmp_path):
@@ -211,6 +221,20 @@ def test_the_days_that_carry_a_reported_run_on_stay_silent(tmp_path):
     assert [e["since"] for e in cut_short(counts, state, date(2026, 9, 13))] == ["2026-09-07"]
     assert [e["since"] for e in state["cut_short"]] == ["2026-09-07"]
     assert cut_short(counts, state, date(2026, 9, 13)) == []
+
+
+def test_an_episode_that_has_left_the_window_silences_nothing(tmp_path):
+    # A regression 20 days long is reported when it starts and again once the reported day
+    # has fallen out of the 14 days a day is judged against: an episode that is no longer
+    # among the days judged says nothing about today, and a run that outlives the window
+    # must not go unreported for as long as it lasts.
+    counts = cut_days(tmp_path, [(60, 0)] * 5 + [(200, 5)] * 20)
+    state = state_with()
+    said = []
+    for day in counts["day"].astype(str):
+        today = date.fromisoformat(day) + timedelta(days=1)
+        said += [e["since"] for e in cut_short(counts[counts["day"] <= day], state, today)]
+    assert said == ["2026-09-06", "2026-09-21"]
 
 
 def test_a_fresh_run_alerts_again_once_the_level_has_been_back_to_normal(tmp_path):
@@ -297,10 +321,21 @@ def test_the_messages_name_the_kinds_the_counts_and_the_version():
         "before. Claude Code retries these itself; a run of them points at the API or your connection, not your "
         "setup.")
     cut = {"since": "2026-09-20", "days": ["2026-09-20"], "cut": 8, "truncated": 8, "refused": 0,
-           "responses": 640, "before_share": 0.0014, "reported_on": "2026-09-21"}
+           "responses": 640, "before_share": 0.0014, "run_days": 0, "reported_on": "2026-09-21"}
     assert cut_short_message(cut, []) == (
         "8 of 640 main-thread responses stopped at the token limit on 2026-09-20 (1.25%), against at most 0.14% a "
         "day on the days judged in the 14 before. A Claude Code update may have changed the output limit.")
+    # The days of the day's own run are left out of that comparison, so when there were
+    # any, both the message and the status line say how many rather than let "against
+    # none" stand for a fortnight that wasn't clean.
+    carried = {**cut, "before_share": 0.0, "run_days": 3}
+    assert cut_short_message(carried, ["2.1.280"]) == (
+        "8 of 640 main-thread responses stopped at the token limit on 2026-09-20 (1.25%), against none on the days "
+        "judged in the 14 before, leaving out the 3 days of this run, on Claude Code 2.1.280. A Claude Code update "
+        "may have changed the output limit.")
+    assert cut_short_line(carried) == (
+        "responses cut short on 2026-09-20: 8 of 640 main-thread responses, leaving out the 3 days of this run")
+    assert cut_short_line({**carried, "run_days": 1}).endswith("leaving out the 1 day of this run")
     assert failure_line(episode) == (
         "requests failing on 2026-09-20: 9 (7 overloaded, 2 retried), against at most 1 a day on the days judged "
         "in the 14 before")
@@ -312,6 +347,10 @@ def test_the_messages_name_the_kinds_the_counts_and_the_version():
     assert cut_short_message(cut_clean, []) == (
         "8 of 640 main-thread responses stopped at the token limit on 2026-09-20 (1.25%), against none on the days "
         "judged in the 14 before. A Claude Code update may have changed the output limit.")
+    # An episode recorded before 0.7.0 knew about runs still reads.
+    older = {name: value for name, value in cut_clean.items() if name != "run_days"}
+    assert cut_short_message(older, []) == cut_short_message(cut_clean, [])
+    assert cut_short_line(older) == cut_short_line(cut_clean)
 
 
 def test_the_report_line_and_the_weekly_part_say_what_the_days_held(tmp_path):

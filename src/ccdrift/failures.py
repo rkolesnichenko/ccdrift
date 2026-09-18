@@ -13,7 +13,7 @@ import pandas as pd
 from ccdrift.logs import outside_sdk
 # BEFORE_DAYS, the window a day is judged against, lives in texts with before_text: the
 # status line names it too, and nothing that only prints should have to import pandas.
-from ccdrift.texts import BEFORE_DAYS, before_text, kinds_text
+from ccdrift.texts import BEFORE_DAYS, before_text, kinds_text, run_text
 
 # Every kind parse_file records, and those a rule counts: a banner blaming the user's
 # own Mac for going to sleep is no drift, so it is reported but never alerts.
@@ -181,21 +181,28 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
         return cut >= floor and today_share >= share and today_share >= CUT_RATIO * usual
 
     def ongoing(episode: dict[str, Any], row: pd.Series, before: pd.DataFrame) -> bool:
-        """Whether this day only carries on the regression `episode` reported: every
-        judged day from that episode's day to this one stayed at or above `share`. One
-        regression is one alert, however long it lasts. A run that outlives BEFORE_DAYS
-        leaves `before` and may be reported again — a second word after a fortnight is
-        better than silence."""
+        """Whether this day only carries on the regression `episode` reported: the episode
+        is still among the days judged, and every judged day from its day to this one
+        stayed at or above `share`. One regression is one alert while it lasts. An episode
+        whose day has left the comparison window says nothing about this day — otherwise a
+        cut-short alert from months ago would silence a new regression for good, once the
+        window happened to be all bad — so a run outliving BEFORE_DAYS is reported again,
+        about every BEFORE_DAYS: a second word after a fortnight beats silence."""
+        if before.empty or episode["since"] < str(before["day"].astype(str).iloc[0]):
+            return False
         carried = before[before["day"].astype(str) >= episode["since"]]
         return bool(len(carried)) and bool((_cut_shares(carried) >= share).all())
 
     new = []
     for row, before in _judged_days(counts, "cut_short", state, today, hit, ongoing=ongoing):
-        before_share = _worst_share(_usual_days(before, share))
+        usual = _usual_days(before, share)
         episode = {"since": str(row["day"]), "days": [str(row["day"])],
                    "cut": int(row["truncated"] + row["refused"]), "truncated": int(row["truncated"]),
                    "refused": int(row["refused"]), "responses": int(row["responses"]),
-                   "before_share": before_share,
+                   "before_share": _worst_share(usual),
+                   # The days this day's own run took out of the comparison, so the alert
+                   # can't call a fortnight clean that wasn't.
+                   "run_days": len(before) - len(usual),
                    "reported_on": today.isoformat()}
         state["cut_short"].append(episode)
         new.append(episode)
@@ -219,7 +226,7 @@ def cut_short_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
     share = episode["cut"] / episode["responses"] if episode["responses"] else 0.0
     before = before_text(f"{episode['before_share']:.2%}" if episode["before_share"] > 0 else None)
     return (f"{episode['cut']} of {episode['responses']:,} main-thread responses {what} on {episode['since']} "
-            f"({share:.2%}), {before}{_on(versions)}. "
+            f"({share:.2%}), {before}{run_text(episode.get('run_days', 0))}{_on(versions)}. "
             "A Claude Code update may have changed the output limit.")
 
 

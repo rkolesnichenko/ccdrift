@@ -40,23 +40,34 @@ def test_a_planted_run_lasts_three_days_and_is_caught_when_any_of_them_alerts():
     # A release that truncates responses keeps doing it until it is fixed, so the cut
     # gate plants a run. Here the run opens on a day too quiet to be judged at all, and
     # the day after it is the one that alerts — the run is still caught.
-    counts = counts_of([(0, 0)] * 8, responses=[1000] * 6 + [40, 1000])
-    assert run_days(counts, nth_day(6)) == [nth_day(6), nth_day(7)]
+    counts = counts_of([(0, 0)] * 10, responses=[1000] * 6 + [40, 1000, 1000, 1000])
+    assert run_days(counts, nth_day(6)) == [nth_day(6), nth_day(7), nth_day(8)]
     planted = plant_run(counts, nth_day(6), share=0.01)
-    assert [int(value) for value in planted["truncated"]] == [0] * 6 + [0, 10]
+    assert [int(value) for value in planted["truncated"]] == [0] * 6 + [0, 10, 10, 0]
     assert replay(planted, cut_short) == [nth_day(7)]
-    row = next(row for row in cut_rows(counts, days=8) if (row["floor"], row["share"]) == (5, 0.005))
+    row = next(row for row in cut_rows(counts, days=10) if (row["floor"], row["share"]) == (5, 0.005))
     assert (row["caught"], row["plants"]) == (2, 2)
 
 
 def test_a_setting_no_day_of_the_planted_run_reaches_is_not_credited_with_catching_it():
     # A 1% run on 400-response days is 4 responses a day, under a floor of 5 on every day
     # of it, so that setting catches nothing; a floor of 3 catches the same runs.
-    rows = cut_rows(counts_of([(0, 0)] * 8, responses=400), days=8)
+    rows = cut_rows(counts_of([(0, 0)] * 10, responses=400), days=10)
     strict = next(row for row in rows if (row["floor"], row["share"]) == (5, 0.005))
     loose = next(row for row in rows if (row["floor"], row["share"]) == (3, 0.005))
     assert (strict["caught"], strict["plants"], strict["passes"]) == (0, 3, False)
     assert (loose["caught"], loose["plants"]) == (3, 3)
+
+
+def test_a_real_alert_beside_a_planted_run_is_not_credited_to_it():
+    # 2026-09-09 alerts on its own, 50 of 1000 responses cut short. The run planted from
+    # that day tells the check nothing new: its first day is that same alert, and the two
+    # days after it belong to that alert's spell. The setting is credited with catching
+    # the three runs that alert on a day the unplanted history was quiet on, not this one.
+    result = cut_rows(counts_of([(0, 0)] * 8 + [(0, 50)] + [(0, 0)] * 3), days=12)
+    row = next(r for r in result if (r["floor"], r["share"]) == (5, 0.005))
+    assert (row["alerts"], row["on"]) == (1, nth_day(8))
+    assert (row["caught"], row["plants"]) == (3, 5)
 
 
 def test_a_burst_is_planted_on_the_last_judgeable_days_oldest_first():
@@ -65,6 +76,10 @@ def test_a_burst_is_planted_on_the_last_judgeable_days_oldest_first():
     counts = counts_of([(0, 0)] * 12)
     assert plant_days(counts) == [nth_day(i) for i in range(7, 12)]
     assert plant_days(counts, how_many=2) == [nth_day(10), nth_day(11)]
+    # A run needs days to run over: with room for two days after it, the last days of the
+    # corpus can't start one, so the verdict never turns on how the logs happen to end.
+    assert plant_days(counts, room=2) == [nth_day(i) for i in range(5, 10)]
+    assert plant_days(counts_of([(0, 0)] * 7), room=2) == []
     # Days too quiet to be active are neither planted on nor counted among the days before.
     assert plant_days(counts_of([(0, 0)] * 8, responses=10)) == []
     gapped = counts_of([(0, 0)] * 26)
@@ -72,11 +87,15 @@ def test_a_burst_is_planted_on_the_last_judgeable_days_oldest_first():
 
 
 def test_the_grid_rows_say_how_often_each_setting_alerts_and_how_many_bursts_it_catches():
+    # Both settings are planted on 2026-09-06 and 2026-09-07 in turn. The looser one
+    # already alerts on 2026-09-07 with no plant at all — its 4 failed requests clear a
+    # floor of 3 — so the plant on that day tells it nothing and isn't credited; only its
+    # plant on 2026-09-06 counts.
     rows = request_rows(counts_of([(0, 0)] * 6 + [(4, 0)]), days=7)
     tight = next(row for row in rows if (row["floor"], row["ratio"]) == (5, 2))
     loose = next(row for row in rows if (row["floor"], row["ratio"]) == (3, 2))
     assert (tight["alerts"], tight["caught"], tight["plants"]) == (0, 2, 2)
-    assert (loose["alerts"], loose["caught"], loose["plants"]) == (1, 2, 2)
+    assert (loose["alerts"], loose["caught"], loose["plants"]) == (1, 1, 2)
 
 
 def test_a_setting_only_catches_when_the_planted_day_itself_alerts():
@@ -94,10 +113,10 @@ def test_a_setting_only_catches_when_the_planted_day_itself_alerts():
 
 
 def test_a_setting_passes_when_it_stays_within_the_budget_and_catches_every_burst():
-    rows = cut_rows(counts_of([(0, 0)] * 6 + [(0, 1)]), days=7)
+    rows = cut_rows(counts_of([(0, 0)] * 6 + [(0, 1)] + [(0, 0)] * 2), days=9)
     passed, notes = gate(rows, {"floor": 5, "share": 0.005})
     assert passed, notes
-    assert "0 alert(s) over 7 days" in notes[0]
+    assert "0 alert(s) over 9 days" in notes[0]
     assert "planted bursts caught: 2 of 2" in notes[0]
     # Two bad days far enough apart to alert twice are more than 40 days of history allow.
     often = [(0, 0)] * 6 + [(0, 20)] + [(0, 0)] * 23 + [(0, 20)] + [(0, 0)] * 9

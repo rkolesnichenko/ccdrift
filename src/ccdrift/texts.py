@@ -97,6 +97,15 @@ def before_text(most: Any) -> str:
     return f"against at most {most} a day on the days judged in the {BEFORE_DAYS} before"
 
 
+def run_text(days: int) -> str:
+    """", leaving out the 2 days of this run", and nothing when the comparison left no day
+    out. A cut-short day is compared with the days before it that aren't part of its own
+    run, so without this the alert could call a fortnight clean that was not."""
+    if not days:
+        return ""
+    return f", leaving out the {days} day{'' if days == 1 else 's'} of this run"
+
+
 def kinds_text(kinds: dict[str, int]) -> str:
     """"7 overloaded, 2 retried", the most first."""
     ordered = sorted(((kind, count) for kind, count in kinds.items() if count), key=lambda item: (-item[1], item[0]))
@@ -111,7 +120,7 @@ def failure_line(episode: dict[str, Any]) -> str:
 
 def cut_short_line(episode: dict[str, Any]) -> str:
     return (f"responses cut short on {episode['since']}: {episode['cut']} of {episode['responses']:,} "
-            "main-thread responses")
+            f"main-thread responses{run_text(episode.get('run_days', 0))}")
 
 
 def context_change_line(change: dict[str, Any]) -> str:

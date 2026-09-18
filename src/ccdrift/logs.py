@@ -313,9 +313,11 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                     # connection details aren't kept, only that it happened. Claude Code
                     # writes one record per attempt ("retryAttempt of maxRetries"), so
                     # only the first is kept: one failure per request, not per attempt.
-                    # Older transcripts log no attempt number, and those still count.
+                    # Anything but a later attempt counts — no attempt number (older
+                    # transcripts), one ccdrift can't read, or a version numbering them
+                    # from 0 — since dropping a real failure is worse than counting one.
                     attempt = field_get(obj, "retry_attempt")
-                    if attempt is None or _num(attempt) == 1:
+                    if attempt is None or _num(attempt) <= 1:
                         parsed.failures.setdefault(key, {**_record(obj, key, rel), "kind": "retry", "status": None})
                 elif subtype == "stop_hook_summary":
                     infos = field_get(obj, "hook_infos")
