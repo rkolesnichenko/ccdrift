@@ -7,8 +7,9 @@ import pandas as pd
 import pytest
 
 from ccdrift.check import run_check
-from ccdrift.failures import (FAILURE_DAY_COLUMNS, cut_short, cut_short_message, digest_part, failing_requests,
-                              failure_counts, failure_lines, failure_summary, judged_failures, requests_message)
+from ccdrift.failures import (FAILURE_DAY_COLUMNS, _judged_days, cut_short, cut_short_message, digest_part,
+                              failing_requests, failure_counts, failure_lines, failure_summary, judged_failures,
+                              requests_message)
 from ccdrift.history import History, load_history
 from ccdrift.logs import judged_turns, parse_all, parse_source
 from ccdrift.state import load_state, new_state, save_state
@@ -210,6 +211,25 @@ def test_a_run_that_starts_too_quietly_alerts_on_its_first_day_over_the_floor(tm
         "6 of 579 main-thread responses stopped at the token limit on 2026-09-07 (1.04%), against none on the days "
         "judged in the 14 before, leaving out the 1 day of this run. A Claude Code update may have changed the "
         "output limit.")
+
+
+def test_a_judged_day_comes_with_the_episodes_whose_word_covers_it(tmp_path):
+    # An episode covers the days within SPELL_DAYS of it; the caller gets them so it can
+    # ask whether the day is worse than what they said. This call passes no `ongoing`, so
+    # the spell is the only cover and 09-10 is past it. A covered day is otherwise
+    # suppressed (yielding nothing to inspect), so `louder` is given as always-true here
+    # purely to let every candidate through and expose what covers each of them.
+    counts = cut_days(tmp_path, [(60, 0)] * 5 + [(200, 5)] * 5)
+    state = state_with()
+    assert [e["since"] for e in cut_short(counts[counts["day"] <= "2026-09-06"], state, date(2026, 9, 7))] == [
+        "2026-09-06"]
+    covered = [(str(row["day"]), [e["since"] for e in covering])
+               for row, _, covering in _judged_days(counts, "cut_short", state, date(2026, 9, 11),
+                                                    lambda row, before: True,
+                                                    louder=lambda episode, row: True)]
+    assert covered == [("2026-09-06", ["2026-09-06"]), ("2026-09-07", ["2026-09-06"]),
+                       ("2026-09-08", ["2026-09-06"]), ("2026-09-09", ["2026-09-06"]),
+                       ("2026-09-10", [])]
 
 
 def test_the_days_that_carry_a_reported_run_on_stay_silent(tmp_path):

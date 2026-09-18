@@ -78,15 +78,22 @@ def failure_counts(failures: pd.DataFrame, turns: pd.DataFrame) -> pd.DataFrame:
 def _judged_days(counts: pd.DataFrame, state_key: str, state: dict[str, Any], today: date,
                  hit: Callable[[pd.Series, pd.DataFrame], bool], quiet_days: bool = False,
                  ongoing: Optional[Callable[[dict[str, Any], pd.Series, pd.DataFrame], bool]] = None,
-                 ) -> Iterator[tuple[pd.Series, pd.DataFrame]]:
+                 louder: Optional[Callable[[dict[str, Any], pd.Series], bool]] = None,
+                 ) -> Iterator[tuple[pd.Series, pd.DataFrame, list[dict[str, Any]]]]:
     """The days within RECENT_DAYS that `hit` accepts, each with the active days before it
-    that `hit` judged it against, skipping those a reported episode already covers.
-    `quiet_days` says whether a day too quiet to be active may be judged: the harder the
-    API fails, the fewer responses that day holds, so the worst day of an outage can be
-    too quiet to count. The days before are the active ones either way — a quiet day is
-    judged, never a baseline. `ongoing(episode, row, before)` says whether a day merely
-    carries on what `episode` already reported; such a day is skipped however long ago the
-    episode was, so one lasting regression alerts once rather than every SPELL_DAYS.
+    that `hit` judged it against and the reported episodes whose word still covers it,
+    skipping the days an episode already covers. `quiet_days` says whether a day too quiet
+    to be active may be judged: the harder the API fails, the fewer responses that day
+    holds, so the worst day of an outage can be too quiet to count. The days before are the
+    active ones either way — a quiet day is judged, never a baseline.
+    An episode covers a day within SPELL_DAYS of it, and a day that
+    `ongoing(episode, row, before)` says merely carries on what the episode reported,
+    however long ago that was, so one lasting regression alerts once rather than every
+    SPELL_DAYS. `louder(episode, row)` says the day stands so far above what the episode
+    reported that it is the regression deepening rather than that regression carrying on; a
+    day louder than every episode covering it is yielded whatever those episodes would
+    otherwise have said, because both kinds of cover exist to stop one level being reported
+    twice and such a day is not that level.
     A generator on purpose: a rule records each episode as it takes it, so the next day's
     suppression test sees it, and one run over a fortnight — the first check after an
     upgrade, or after days with the machine off — alerts once per spell, just as a
@@ -106,16 +113,17 @@ def _judged_days(counts: pd.DataFrame, state_key: str, state: dict[str, Any], to
         before = active[(active_days < day) & (active_days >= earliest)]
         if len(before) < MIN_BEFORE_DAYS or not hit(candidates.loc[i], before):
             continue
-        # One spell of failures alerts once: a day within SPELL_DAYS of a reported
-        # episode belongs to it. A later burst is judged on its own, and the ratio
-        # test keeps one that isn't worse from alerting again.
+        # One spell of failures alerts once: a day within SPELL_DAYS of a reported episode
+        # belongs to it, as does one carrying its run on. A later burst is judged on its
+        # own, and the ratio test keeps one that isn't worse from alerting again.
         spell = (date.fromisoformat(day) - timedelta(days=SPELL_DAYS)).isoformat()
-        if any(episode["since"] >= spell for episode in state[state_key]):
+        covering = [episode for episode in state[state_key]
+                    if episode["since"] >= spell
+                    or (ongoing is not None and ongoing(episode, candidates.loc[i], before))]
+        if covering and not (louder is not None
+                             and all(louder(episode, candidates.loc[i]) for episode in covering)):
             continue
-        if ongoing is not None and any(ongoing(episode, candidates.loc[i], before)
-                                       for episode in state[state_key]):
-            continue
-        yield candidates.loc[i], before
+        yield candidates.loc[i], before, covering
 
 
 def failing_requests(counts: pd.DataFrame, state: dict[str, Any], today: date,
@@ -129,7 +137,7 @@ def failing_requests(counts: pd.DataFrame, state: dict[str, Any], today: date,
         return row["requests"] >= floor and row["requests"] >= ratio * max(1, int(before["requests"].max()))
 
     new = []
-    for row, before in _judged_days(counts, "failed_requests", state, today, hit, quiet_days=True):
+    for row, before, _ in _judged_days(counts, "failed_requests", state, today, hit, quiet_days=True):
         day = str(row["day"])
         episode = {"since": day, "days": [day], "requests": int(row["requests"]),
                    "kinds": {kind: int(row[kind]) for kind in COUNTED if int(row[kind])},
@@ -194,7 +202,7 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
         return bool(len(carried)) and bool((_cut_shares(carried) >= share).all())
 
     new = []
-    for row, before in _judged_days(counts, "cut_short", state, today, hit, ongoing=ongoing):
+    for row, before, _ in _judged_days(counts, "cut_short", state, today, hit, ongoing=ongoing):
         usual = _usual_days(before, share)
         episode = {"since": str(row["day"]), "days": [str(row["day"])],
                    "cut": int(row["truncated"] + row["refused"]), "truncated": int(row["truncated"]),
