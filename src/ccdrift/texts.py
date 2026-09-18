@@ -119,6 +119,14 @@ def run_text(days: int) -> str:
     return f", leaving out the {days} day{'' if days == 1 else 's'} of this run"
 
 
+def worse_text(worse: dict[str, Any]) -> str:
+    """What a second alert about the same regression compares with: "against the 0.60%
+    reported on 2026-09-03". Not the baseline before the run — by the time a regression has
+    tripled, the level the owner was actually told is the only number that says whether
+    this is news."""
+    return f"against the {worse['share']:.2%} reported on {worse['since']}"
+
+
 def kinds_text(kinds: dict[str, int]) -> str:
     """"7 overloaded, 2 retried", the most first."""
     ordered = sorted(((kind, count) for kind, count in kinds.items() if count), key=lambda item: (-item[1], item[0]))
@@ -132,8 +140,10 @@ def failure_line(episode: dict[str, Any]) -> str:
 
 
 def cut_short_line(episode: dict[str, Any]) -> str:
+    worse = episode.get("worse_than")
+    tail = f", {worse_text(worse)}" if worse else run_text(episode.get("run_days", 0))
     return (f"responses cut short on {episode['since']}: {episode['cut']} of {episode['responses']:,} "
-            f"main-thread responses{run_text(episode.get('run_days', 0))}")
+            f"main-thread responses{tail}")
 
 
 def project_path(project: str) -> str:

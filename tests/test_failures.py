@@ -326,6 +326,31 @@ def test_the_next_word_is_owed_three_times_the_last_one_not_the_first(tmp_path):
         ("2026-09-09", {"share": 0.08, "since": "2026-09-07"})]
 
 
+def test_a_second_alert_names_the_level_it_escalated_from(tmp_path):
+    episode = {"since": "2026-09-20", "days": ["2026-09-20"], "cut": 60, "truncated": 60, "refused": 0,
+               "responses": 400, "before_share": 0.0, "run_days": 3, "reported_on": "2026-09-21",
+               "worse_than": {"share": 0.006, "since": "2026-09-03"}}
+    assert cut_short_message(episode, ["2.1.281"]) == (
+        "60 of 400 main-thread responses stopped at the token limit on 2026-09-20 (15.00%), against the 0.60% "
+        "reported on 2026-09-03, on Claude Code 2.1.281. A Claude Code update may have changed the output limit.")
+    assert cut_short_line(episode) == (
+        "responses cut short on 2026-09-20: 60 of 400 main-thread responses, against the 0.60% reported on "
+        "2026-09-03")
+
+
+def test_an_episode_recorded_before_escalations_still_reads(tmp_path):
+    # An episode written by 0.7.0 to 0.9.0 has no "worse_than" and must read as it always
+    # did: the state file is not rewritten on upgrade.
+    episode = {"since": "2026-09-07", "days": ["2026-09-07"], "cut": 6, "truncated": 6, "refused": 0,
+               "responses": 579, "before_share": 0.0, "run_days": 1, "reported_on": "2026-09-08"}
+    assert cut_short_message(episode, []) == (
+        "6 of 579 main-thread responses stopped at the token limit on 2026-09-07 (1.04%), against none on the days "
+        "judged in the 14 before, leaving out the 1 day of this run. A Claude Code update may have changed the "
+        "output limit.")
+    assert cut_short_line(episode) == (
+        "responses cut short on 2026-09-07: 6 of 579 main-thread responses, leaving out the 1 day of this run")
+
+
 def test_the_days_an_alert_compares_with_are_the_active_ones(tmp_path):
     # 5 quiet active days, then the alerting day; a day within the 14 days before it has
     # far more failures than any of them but too few responses to count, and must be

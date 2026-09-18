@@ -13,7 +13,7 @@ import pandas as pd
 from ccdrift.logs import outside_sdk
 # BEFORE_DAYS, the window a day is judged against, lives in texts with before_text: the
 # status line names it too, and nothing that only prints should have to import pandas.
-from ccdrift.texts import BEFORE_DAYS, before_text, kinds_text, run_text
+from ccdrift.texts import BEFORE_DAYS, before_text, kinds_text, run_text, worse_text
 
 # Every kind parse_file records, and those a rule counts: a banner blaming the user's
 # own Mac for going to sleep is no drift, so it is reported but never alerts.
@@ -261,9 +261,12 @@ def requests_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
 def cut_short_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
     what = "stopped at the token limit or refused" if episode["refused"] else "stopped at the token limit"
     share = episode["cut"] / episode["responses"] if episode["responses"] else 0.0
-    before = before_text(f"{episode['before_share']:.2%}" if episode["before_share"] > 0 else None)
+    worse = episode.get("worse_than")
+    against = (worse_text(worse) if worse else
+               before_text(f"{episode['before_share']:.2%}" if episode["before_share"] > 0 else None)
+               + run_text(episode.get("run_days", 0)))
     return (f"{episode['cut']} of {episode['responses']:,} main-thread responses {what} on {episode['since']} "
-            f"({share:.2%}), {before}{run_text(episode.get('run_days', 0))}{_on(versions)}. "
+            f"({share:.2%}), {against}{_on(versions)}. "
             "A Claude Code update may have changed the output limit.")
 
 
