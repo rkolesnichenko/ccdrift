@@ -41,9 +41,13 @@ def test_a_step_is_only_planted_where_the_rule_could_see_it():
 
 
 def test_an_alert_that_names_no_moved_project_fails_the_gate():
-    steady = starts_of([("-a", 100_000)] * 12)
-    sound, notes = every_alert_names_a_project(steady)
-    assert (sound, notes) == (True, [])
+    # A 3-session spike the rule reports as a step, diluted back to the project's usual
+    # level by the ten sessions that follow it: before and after the step's own day, the
+    # project's median is unchanged, so moved_projects finds nothing behind the alert.
+    starts = starts_of([("-a", 100_000)] * 8 + [("-a", 140_000)] * 3 + [("-a", 100_000)] * 10)
+    sound, notes = every_alert_names_a_project(starts)
+    assert sound is False
+    assert any("0 of 1 projects moved" in note for note in notes)
 
 
 def test_the_gate_passes_when_the_rule_is_quiet_on_a_switch_and_catches_a_planted_step():

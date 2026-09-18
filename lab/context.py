@@ -32,7 +32,8 @@ import pandas as pd
 
 from ccdrift.logs import default_source, parse_all
 from ccdrift.sessions import (MIN_BASELINE, MIN_PROJECT_SESSIONS, WINDOW, context_alerts, context_changes_in,
-                              first_of_each, moved_projects, project_path, ratio_starts, session_starts)
+                              first_of_each, found_changes, moved_projects, project_path, ratio_starts,
+                              session_starts)
 from ccdrift.state import new_state
 
 PLANT_FACTOR = 0.5   # what a planted step does to every project's session starts
@@ -100,7 +101,7 @@ def every_alert_names_a_project(starts: pd.DataFrame) -> tuple[bool, list[str]]:
     """Whether every change the rule reports names a project whose own level moved."""
     judged = ratio_starts(starts)
     notes, sound = [], True
-    for change in first_of_each(context_changes_in(judged)):
+    for change in first_of_each(found_changes(judged)):
         moved = moved_projects(starts, change)
         notes.append(f"{change.since}: {change.before / 1000:.0f}k -> {change.after / 1000:.0f}k, "
                      f"{len(moved['moved'])} of {moved['seen']} projects moved"
@@ -111,13 +112,18 @@ def every_alert_names_a_project(starts: pd.DataFrame) -> tuple[bool, list[str]]:
 
 
 def switch_history() -> pd.DataFrame:
-    """Sessions that simply move to a smaller project: twelve in one project at 128k, then
-    five in a new one at 54k. Nothing inside either project changed."""
+    """The shape of the real case this gate stands for: twelve sessions in one project at
+    128k, then five in a new, smaller one at 54k, then two more back in the first project
+    a week later, still at 128k — the project that had been running kept running,
+    unchanged, rather than vanishing once the work moved. Nothing inside either project
+    changed."""
     rows = []
     for i in range(12):
         rows.append({"project": "-big", "day": f"2026-09-{i + 1:02d}", "prompt_tokens": 128_000.0})
     for i in range(5):
         rows.append({"project": "-small", "day": f"2026-09-{i + 13:02d}", "prompt_tokens": 54_000.0})
+    for i in range(2):
+        rows.append({"project": "-big", "day": f"2026-09-{i + 18:02d}", "prompt_tokens": 128_000.0})
     starts = pd.DataFrame(rows)
     starts["source_file"] = [f"{row['project']}/{i}.jsonl" for i, row in enumerate(rows)]
     starts["timestamp"] = pd.to_datetime([f"{row['day']}T10:00:00Z" for row in rows])
