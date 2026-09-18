@@ -20,7 +20,8 @@ from tests.helpers import DAY, at, busy_days, line, main_thread_days, prompt, te
 
 
 BASELINE_NOTE = ("Before is the baseline ccdrift judged the incident against: the days it compared with, which skip "
-                 "the days of other incidents, so they need not run up to the day it started.\n\n")
+                 "the days of other incidents, except ones dismissed or taken as the new normal, so they need not "
+                 "run up to the day it started.\n\n")
 
 
 def incident(metric, start, end, **fields):
@@ -101,7 +102,8 @@ CACHE_METHOD = (
     "after a compaction. A turn misses the cache when it reads less than half of its input from it. "
     "A day is a UTC day, and only complete ones are judged. Each day is compared with the median of "
     "up to 14 days before it, in units of their spread, which never falls below the noise a day of "
-    "that many turns shows anyway; those days skip the days of other incidents. Then an incident "
+    "that many turns shows anyway; those days skip the days of other incidents, except ones dismissed "
+    "or taken as the new normal. Then an incident "
     "opens when 3 of 4 days in a row fall below z = −3.0 and closes once 3 pooled days are back "
     "inside the cutoff on 3 days in a row, or after 30 days, when it takes the change as the new "
     "normal.\n")
@@ -243,7 +245,8 @@ def test_a_haiku_incident_draft_compares_haiku_share_and_the_models_during(tmp_p
         "responses outside Agent SDK sessions and the share answered by a Haiku model. A day is a UTC day, and only "
         "complete ones are judged. Each day is compared with the median of up to 14 days before it, in units of "
         "their spread, which never falls below the noise a day of that many turns shows anyway; those days skip the "
-        "days of other incidents. Then an incident opens when 3 of 4 days in a row fall above z = +3.5 and closes "
+        "days of other incidents, except ones dismissed or taken as the new normal. Then an incident opens when 3 "
+        "of 4 days in a row fall above z = +3.5 and closes "
         "once 3 pooled days are back inside the cutoff on 3 days in a row, or after 30 days, when it takes the "
         "change as the new normal.\n")
 

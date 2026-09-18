@@ -146,7 +146,8 @@ def _cache_sections(responses: pd.DataFrame, turns: pd.DataFrame, incident: dict
         f"open with a new prompt ({_rate(*counts['during'])}) missed the prompt cache"
         f"{_compared(counts, periods)}. ccdrift estimates {beyond} beyond the usual miss rate.",
         "### Before, during and after\n\nBefore is the baseline ccdrift judged the incident against: the days it "
-        "compared with, which skip the days of other incidents, so they need not run up to the day it started.\n\n"
+        "compared with, which skip the days of other incidents, except ones dismissed or taken as "
+        "the new normal, so they need not run up to the day it started.\n\n"
         + _table(
             ["", "Days", "New-prompt turns", "Misses", "Miss rate", "Cache read ratio"],
             [[f"{name.capitalize()} ({_span(periods[name])})", len(periods[name]), f"{counts[name][1]:,}",
@@ -223,7 +224,8 @@ def _haiku_sections(turns: pd.DataFrame, incident: dict[str, Any], periods: dict
         f"{_lead(incident, periods)}, Haiku answered {counts['during'][0]:,} of {counts['during'][1]:,} main-thread "
         f"responses ({_rate(*counts['during'])}){_compared(counts, periods)}: {extra} by ccdrift's estimate.",
         "### Before, during and after\n\nBefore is the baseline ccdrift judged the incident against: the days it "
-        "compared with, which skip the days of other incidents, so they need not run up to the day it started.\n\n"
+        "compared with, which skip the days of other incidents, except ones dismissed or taken as "
+        "the new normal, so they need not run up to the day it started.\n\n"
         + _table(
             ["", "Days", "Responses", "Haiku responses", "Haiku share"],
             [[f"{name.capitalize()} ({_span(periods[name])})", len(periods[name]), f"{counts[name][1]:,}",
@@ -278,7 +280,8 @@ def _method(metric: str, cfg: DetectorConfig) -> str:
     return ("### How this was measured\n\nccdrift reads Claude Code's local session transcripts. " + counted
             + " A day is a UTC day, and only complete ones are judged. Each day is compared with the median of up "
             f"to {cfg.baseline_window} days before it, in units of their spread, which never falls below the noise "
-            "a day of that many turns shows anyway; those days skip the days of other incidents. Then "
+            "a day of that many turns shows anyway; those days skip the days of other incidents, except ones "
+            "dismissed or taken as the new normal. Then "
             + rule)
 
 
