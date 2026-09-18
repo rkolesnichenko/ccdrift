@@ -3,17 +3,24 @@
 import platform
 import sys
 from datetime import date
+from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from ccdrift import __version__
-from ccdrift.changelog import load_changelog
+import ccdrift.draft
+from ccdrift.changelog import TOPIC_OF, load_changelog
 from ccdrift.cli import main
 from ccdrift.detector import DetectorConfig
-from ccdrift.draft import draft_markdown, draft_periods, find_incident, os_text, run_draft
+from ccdrift.draft import _version_span, draft_markdown, draft_periods, find_incident, os_text, run_draft
 from ccdrift.logs import judged_turns, parse_source
 from ccdrift.state import new_state, save_state
-from tests.helpers import busy_days, main_thread_days, tool_loop_days
+from tests.helpers import DAY, at, busy_days, line, main_thread_days, prompt, text, tool_loop_days, write
+
+
+BASELINE_NOTE = ("Before is the baseline ccdrift judged the incident against: the days it compared with, which skip "
+                 "the days of other incidents, so they need not run up to the day it started.\n\n")
 
 
 def incident(metric, start, end, **fields):
@@ -91,10 +98,13 @@ def drafted(path, found, today, os_name="macOS 26.5.2"):
 CACHE_METHOD = (
     "### How this was measured\n\nccdrift reads Claude Code's local session transcripts. It counts main-thread turns "
     "that open with a new prompt within an hour of the previous response, outside Agent SDK sessions and not right "
-    "after a compaction. A turn misses the cache when it reads less than half of its input from it. Each day is "
-    "compared with up to 14 days before it; an incident opens when 3 of 4 days in a row fall below z = −3.0 and "
-    "closes once 3 pooled days are back inside the cutoff on 3 days in a row, or after 30 days, when it takes the "
-    "change as the new normal.\n")
+    "after a compaction. A turn misses the cache when it reads less than half of its input from it. "
+    "A day is a UTC day, and only complete ones are judged. Each day is compared with the median of "
+    "up to 14 days before it, in units of their spread, which never falls below the noise a day of "
+    "that many turns shows anyway; those days skip the days of other incidents. Then an incident "
+    "opens when 3 of 4 days in a row fall below z = −3.0 and closes once 3 pooled days are back "
+    "inside the cutoff on 3 days in a row, or after 30 days, when it takes the change as the new "
+    "normal.\n")
 
 
 def test_a_cache_incident_draft_holds_the_evidence_as_aggregates(tmp_path):
@@ -107,6 +117,7 @@ def test_a_cache_incident_draft_holds_the_evidence_as_aggregates(tmp_path):
         "prompt cache, against 0 of 826 (0.00%) on the 14 days before and 0 of 177 (0.00%) on the 3 days after. "
         "ccdrift estimates ~24k tokens were written to the cache again beyond the usual miss rate.\n\n"
         "### Before, during and after\n\n"
+        + BASELINE_NOTE +
         "|  | Days | New-prompt turns | Misses | Miss rate | Cache read ratio |\n"
         "|---|---|---|---|---|---|\n"
         "| Before (09-01..09-14) | 14 | 826 | 0 | 0.00% | 0.900 |\n"
@@ -122,6 +133,7 @@ def test_a_cache_incident_draft_holds_the_evidence_as_aggregates(tmp_path):
         "The 24 missed turns during read a median 0 tokens from the cache (middle half 0–0) and wrote a median 1,000 "
         "(middle half 1,000–1,000), so each wrote most of its input to the cache again.\n\n"
         "### Pause before the prompt\n\n"
+        "How long the turn waited between the previous response and the prompt that opened it.\n\n"
         "| Pause | Turns | Misses | Miss rate |\n"
         "|---|---|---|---|\n"
         "| ≤1 min | 236 | 24 | 10.17% |\n"
@@ -207,6 +219,7 @@ def test_a_haiku_incident_draft_compares_haiku_share_and_the_models_during(tmp_p
         "(0.00%) on the 14 days before and 0 of 180 (0.00%) on the 3 days after: ~36 extra Haiku responses by "
         "ccdrift's estimate.\n\n"
         "### Before, during and after\n\n"
+        + BASELINE_NOTE +
         "|  | Days | Responses | Haiku responses | Haiku share |\n"
         "|---|---|---|---|---|\n"
         "| Before (09-01..09-14) | 14 | 840 | 0 | 0.00% |\n"
@@ -219,8 +232,6 @@ def test_a_haiku_incident_draft_compares_haiku_share_and_the_models_during(tmp_p
         "| 2.1.233 | during | 180 | 36 | 20.00% |\n"
         "| 2.1.259 | during | 120 | 0 | 0.00% |\n"
         "| 2.1.259 | after | 180 | 0 | 0.00% |\n\n"
-        "### Models during\n\n"
-        "claude-opus-5 88.00%, claude-haiku-4-5 12.00%\n\n"
         "### Environment\n\n"
         "- Claude Code: 2.1.233, 2.1.259 (entrypoint cli)\n"
         "- Models during: claude-opus-5 (88.00% of responses), claude-haiku-4-5 (12.00% of responses)\n"
@@ -229,10 +240,12 @@ def test_a_haiku_incident_draft_compares_haiku_share_and_the_models_during(tmp_p
         "- OS: macOS 26.5.2\n"
         f"- Measured with ccdrift {__version__} from local session transcripts (aggregates only)\n\n"
         "### How this was measured\n\nccdrift reads Claude Code's local session transcripts. It counts main-thread "
-        "responses outside Agent SDK sessions and the share answered by a Haiku model. Each day is compared with up "
-        "to 14 days before it; an incident opens when 3 of 4 days in a row fall above z = +3.5 and closes once 3 "
-        "pooled days are back inside the cutoff on 3 days in a row, or after 30 days, when it takes the change as "
-        "the new normal.\n")
+        "responses outside Agent SDK sessions and the share answered by a Haiku model. A day is a UTC day, and only "
+        "complete ones are judged. Each day is compared with the median of up to 14 days before it, in units of "
+        "their spread, which never falls below the noise a day of that many turns shows anyway; those days skip the "
+        "days of other incidents. Then an incident opens when 3 of 4 days in a row fall above z = +3.5 and closes "
+        "once 3 pooled days are back inside the cutoff on 3 days in a row, or after 30 days, when it takes the "
+        "change as the new normal.\n")
 
 
 def test_the_environment_names_several_entrypoints_most_responses_first(tmp_path):
@@ -306,3 +319,50 @@ def test_the_draft_command_reads_the_metric_day_and_options(tmp_path, capsys):
         main(["incident", "draft", "cache", "Sep 15", "--state", str(tmp_path / "state.json")])
     assert exited.value.code == 2
     assert "expected a day like 2026-08-18, not 'Sep 15'" in capsys.readouterr().err
+
+
+def test_the_title_names_the_versions_the_incident_ran_on_not_a_stale_session(tmp_path):
+    # A session left open on an old version runs a few turns during the incident; naming it
+    # would widen the range past what the incident was about.
+    main_thread_days(tmp_path / "logs", [{"version": "2.1.279"}] * 14
+                     + [{"misses": 6, "version": "2.1.280"}] * 4 + [{"version": "2.1.281"}] * 3)
+    # Five turns a minute apart, so they count: the metric needs a previous response within the hour.
+    stale = []
+    for k in range(5):
+        ts = at(15 * DAY + 60 * k)
+        stale += [prompt(ts, sid="stale"),
+                  line(f"stale-{k}", text(40), ts=ts, sid="stale", cache_read=900, cache_creation=100,
+                       version="2.1.100", entrypoint="cli")]
+    write(tmp_path / "logs" / "stale.jsonl", stale)
+    found = incident("cache_ratio", "2026-09-15", "2026-09-18")
+    drafted = draft_markdown(parse_source(tmp_path / "logs"), found, [found], {}, date(2026, 9, 25),
+                             DetectorConfig(), "macOS 26.5.2")
+    assert drafted.splitlines()[0].endswith("on Claude Code 2.1.280 (usually 0.00%)")
+    # The floor is a share, not a rank: a version behind a tenth of the turns is still named.
+    assert _version_span(pd.Series(["2.1.233"] * 73 + ["2.1.235"] * 221)) == "2.1.233–2.1.235"
+    # It is still counted everywhere else: the version table keeps its row.
+    assert "| 2.1.100 | during |" in drafted
+
+
+def test_the_draft_picks_release_notes_without_the_check():
+    # TOPIC_OF lives beside the release notes it chooses, so a draft needs nothing of the check.
+    assert "ccdrift.check" not in Path(ccdrift.draft.__file__).read_text()
+    assert TOPIC_OF["cache_ratio"] == "cache"
+
+
+def test_run_draft_says_when_the_history_cant_be_read(tmp_path, capsys):
+    cache_logs(tmp_path)
+    save_state(tmp_path / "state.json",
+               {**new_state(), "incidents": [incident("cache_ratio", "2026-09-15", "2026-09-18")]})
+    (tmp_path / "history.sqlite").write_text("not a database")
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "cache_ratio", today=date(2026, 9, 25)) == 1
+    assert "history store" in capsys.readouterr().err
+
+
+def test_a_dismissed_incident_is_drafted_when_its_day_is_asked_for(tmp_path, capsys):
+    cache_logs(tmp_path)
+    save_state(tmp_path / "state.json", {**new_state(), "incidents": [
+        incident("cache_ratio", "2026-09-15", "2026-09-18", status="dismissed", closed_by="user")]})
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "cache_ratio", "2026-09-15",
+                     today=date(2026, 9, 25), os_name="macOS 26.5.2") == 0
+    assert capsys.readouterr().out.startswith("New prompts miss the prompt cache 10.17% of the time")

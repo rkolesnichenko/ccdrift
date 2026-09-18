@@ -20,6 +20,10 @@ from ccdrift.texts import version_key
 # menu fixes, so they aren't used; "effort", "transcript" and "usage" alone matched
 # mostly display fixes, so they count only together with another word ("Now defaults
 # to high effort", "reporting as 0 in transcript and result usage").
+# Which release notes explain an alert or a draft about each metric or setting.
+TOPIC_OF = {"cache_ratio": "cache", "haiku_fraction": "haiku", "cache_tier": "cache", "effort": "effort",
+            "subagent_model": "subagents"}
+
 TOPICS: dict[str, dict[str, int]] = {
     "cache": {"cache": 2, "prompt-cache": 1, "prompt cache": 1, "cache miss": 1, "cache reuse": 1},
     "haiku": {"haiku": 2, "small model": 2, "small-model": 2, "fallback model": 2, "default model": 2},

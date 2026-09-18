@@ -11,7 +11,8 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from ccdrift.changelog import changelog_path, days_before, load_changelog, note_lines, note_versions, release_notes
+from ccdrift.changelog import (TOPIC_OF, changelog_path, days_before, load_changelog, note_lines, note_versions,
+                               release_notes)
 from ccdrift.detector import DetectorConfig
 from ccdrift.digest import digest_due, digest_week, weekly_digest
 from ccdrift.early import early_message, early_warning
@@ -40,11 +41,6 @@ LOG_ONLY = frozenset({"context_dropped"})
 
 # The alert kind of a tool-loop warning for each stream.
 LOOP_KINDS = {"main": "loop", "subagent": "subagent_loop"}
-
-# Which release notes explain an alert about each metric or setting.
-TOPIC_OF = {"cache_ratio": "cache", "haiku_fraction": "haiku", "cache_tier": "cache", "effort": "effort",
-            "subagent_model": "subagents"}
-
 
 # A stretch of active days without usable cache values means the cache metric
 # can't be computed, most likely because Claude Code's log format changed: it

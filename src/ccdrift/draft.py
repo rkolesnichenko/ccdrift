@@ -17,8 +17,8 @@ import numpy as np
 import pandas as pd
 
 from ccdrift import __version__
-from ccdrift.changelog import changelog_path, days_before, load_changelog, note_versions, release_notes
-from ccdrift.check import TOPIC_OF
+from ccdrift.changelog import (TOPIC_OF, changelog_path, days_before, load_changelog, note_versions,
+                               release_notes)
 from ccdrift.detector import DetectorConfig, baseline_bins
 from ccdrift.history import HistoryError, load_history
 from ccdrift.incidents import OPEN_END, RECOVERY_BINS, exclusions, incident_cost, incident_versions
@@ -87,9 +87,23 @@ def _shares(values: pd.Series) -> list[tuple[str, float]]:
     return [(str(value), count / counts.sum()) for value, count in counts.items()]
 
 
-def _version_span(versions: Sequence[str]) -> str:
-    ordered = sorted(set(versions), key=version_key)
-    return ordered[0] if len(ordered) == 1 else f"{ordered[0]}–{ordered[-1]}"
+TITLE_SHARE = 0.02  # of the turns during, for a version to be named in the title
+
+
+def _version_span(versions: pd.Series) -> str:
+    """The versions the title names: those behind at least TITLE_SHARE of the turns, as a
+    range. A session left open on an old version runs a handful of turns weeks later, and
+    naming it would widen the range past what the incident was about. The floor is low on
+    purpose — the version an incident starts on may carry only a tenth of its turns, and
+    dropping it would understate when the regression began."""
+    known = versions.dropna().astype(str)
+    if known.empty:
+        return ""
+    shares = known.value_counts(normalize=True)
+    named = sorted((version for version, share in shares.items() if share >= TITLE_SHARE), key=version_key)
+    if not named:
+        named = sorted(shares.index.astype(str), key=version_key)
+    return named[0] if len(named) == 1 else f"{named[0]}–{named[-1]}"
 
 
 def _compared(parts: dict[str, tuple[int, int]], periods: dict[str, list[str]]) -> str:
@@ -120,7 +134,7 @@ def _cache_sections(responses: pd.DataFrame, turns: pd.DataFrame, incident: dict
     by_period = {name: _on_days(prompts, periods[name]) for name in PERIODS}
     counts = {name: (int(rows["is_miss"].astype(bool).sum()), len(rows)) for name, rows in by_period.items()}
     during = by_period["during"]
-    span = _version_span(during["version"].dropna().astype(str)) if during["version"].notna().any() else ""
+    span = _version_span(during["version"]) if "version" in during else ""
     usually = f" (usually {_rate(*counts['before'])})" if counts["before"][1] else ""
     title = (f"New prompts miss the prompt cache {_rate(*counts['during'])} of the time"
              + (f" on Claude Code {span}" if span else "") + usually)
@@ -131,7 +145,9 @@ def _cache_sections(responses: pd.DataFrame, turns: pd.DataFrame, incident: dict
         f"{_lead(incident, periods)}, {counts['during'][0]:,} of {counts['during'][1]:,} main-thread turns that "
         f"open with a new prompt ({_rate(*counts['during'])}) missed the prompt cache"
         f"{_compared(counts, periods)}. ccdrift estimates {beyond} beyond the usual miss rate.",
-        "### Before, during and after\n\n" + _table(
+        "### Before, during and after\n\nBefore is the baseline ccdrift judged the incident against: the days it "
+        "compared with, which skip the days of other incidents, so they need not run up to the day it started.\n\n"
+        + _table(
             ["", "Days", "New-prompt turns", "Misses", "Miss rate", "Cache read ratio"],
             [[f"{name.capitalize()} ({_span(periods[name])})", len(periods[name]), f"{counts[name][1]:,}",
               f"{counts[name][0]:,}", _rate(*counts[name]),
@@ -158,7 +174,9 @@ def _cache_sections(responses: pd.DataFrame, turns: pd.DataFrame, incident: dict
             misses = int(pause["is_miss"].astype(bool).sum())
             rows.append([label, f"{len(pause):,}", f"{misses:,}", _rate(misses, len(pause))])
             low = float(high)
-        sections.append("### Pause before the prompt\n\n" + _table(["Pause", "Turns", "Misses", "Miss rate"], rows))
+        sections.append("### Pause before the prompt\n\nHow long the turn waited between the previous response and "
+                        "the prompt that opened it.\n\n"
+                        + _table(["Pause", "Turns", "Misses", "Miss rate"], rows))
     loops = loop_turns(responses, "main")
     loop_parts = []
     for name in PERIODS:
@@ -195,7 +213,7 @@ def _haiku_sections(turns: pd.DataFrame, incident: dict[str, Any], periods: dict
     by_period = {name: _on_days(turns, periods[name]) for name in PERIODS}
     counts = {name: (int(rows["is_haiku"].sum()), len(rows)) for name, rows in by_period.items()}
     during = by_period["during"]
-    span = _version_span(during["version"].dropna().astype(str)) if during["version"].notna().any() else ""
+    span = _version_span(during["version"]) if "version" in during else ""
     usually = f" (usually {_rate(*counts['before'])})" if counts["before"][1] else ""
     title = (f"Haiku answers {_rate(*counts['during'])} of main-thread responses"
              + (f" on Claude Code {span}" if span else "") + usually)
@@ -204,7 +222,9 @@ def _haiku_sections(turns: pd.DataFrame, incident: dict[str, Any], periods: dict
         "### What happened\n\n"
         f"{_lead(incident, periods)}, Haiku answered {counts['during'][0]:,} of {counts['during'][1]:,} main-thread "
         f"responses ({_rate(*counts['during'])}){_compared(counts, periods)}: {extra} by ccdrift's estimate.",
-        "### Before, during and after\n\n" + _table(
+        "### Before, during and after\n\nBefore is the baseline ccdrift judged the incident against: the days it "
+        "compared with, which skip the days of other incidents, so they need not run up to the day it started.\n\n"
+        + _table(
             ["", "Days", "Responses", "Haiku responses", "Haiku share"],
             [[f"{name.capitalize()} ({_span(periods[name])})", len(periods[name]), f"{counts[name][1]:,}",
               f"{counts[name][0]:,}", _rate(counts[name][0], counts[name][1])]
@@ -213,9 +233,6 @@ def _haiku_sections(turns: pd.DataFrame, incident: dict[str, Any], periods: dict
     versions = _version_table(by_period, "is_haiku", ["Responses", "Haiku responses", "Haiku share"])
     if versions:
         sections.append("### By Claude Code version\n\n" + versions)
-    if len(during):
-        sections.append("### Models during\n\n" + ", ".join(f"{model} {share:.2%}"
-                                                              for model, share in _shares(during["model"])))
     return title, sections
 
 
@@ -259,7 +276,10 @@ def _method(metric: str, cfg: DetectorConfig) -> str:
         counted = ("It counts main-thread responses outside Agent SDK sessions and the share answered by a Haiku "
                    "model.")
     return ("### How this was measured\n\nccdrift reads Claude Code's local session transcripts. " + counted
-            + f" Each day is compared with up to {cfg.baseline_window} days before it; " + rule)
+            + " A day is a UTC day, and only complete ones are judged. Each day is compared with the median of up "
+            f"to {cfg.baseline_window} days before it, in units of their spread, which never falls below the noise "
+            "a day of that many turns shows anyway; those days skip the days of other incidents. Then "
+            + rule)
 
 
 def draft_markdown(responses: pd.DataFrame, incident: dict[str, Any], incidents: Sequence[dict[str, Any]],
