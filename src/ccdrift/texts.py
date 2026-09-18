@@ -127,7 +127,10 @@ def project_path(project: str) -> str:
     """A project folder read back as the path it stands for, for the owner's eyes: Claude
     Code writes "/Users/me/dev/app" as "-Users-me-dev-app". A directory whose own name
     holds a dash reads back with an extra slash — the folder name is all Claude Code
-    keeps, so this is a convenience, not a promise."""
+    keeps, so this is a convenience, not a promise. The nameless project a source with no
+    project folders makes (sessions.SOURCE_PROJECT) is the source folder itself."""
+    if not project:
+        return "the source folder"
     return "/" + project.lstrip("-").replace("-", "/")
 
 
@@ -148,9 +151,12 @@ def projects_text(paths: Sequence[str]) -> str:
 
 
 def context_change_line(change: dict[str, Any]) -> str:
-    where = projects_text([project_path(p) for p in change.get("projects", [])])
-    seen = change.get("of_projects", 0)
-    of = f" of {seen}" if seen and len(change.get("projects", [])) < seen else ""
+    """"session start ~130k -> ~64k tokens from 2026-09-09 in /Users/me/a, 1 of 3 projects
+    compared" — the count says what the projects named are a share of, since ccdrift can
+    only compare a project that has sessions each side of the change."""
+    moved = [project_path(p) for p in change.get("projects", [])]
+    where, seen = projects_text(moved), change.get("of_projects", 0)
+    of = f", {len(moved)} of {seen} projects compared" if seen and len(moved) < seen else ""
     return (f"session start ~{approx(change['from'])} -> ~{approx(change['to'])} tokens from {change['since']}"
             + (f" {where}{of}" if where else ""))
 

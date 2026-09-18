@@ -6,8 +6,9 @@ import pandas as pd
 import pytest
 
 from ccdrift.logs import parse_source
-from ccdrift.sessions import (ContextChange, context_alerts, context_changes_in, context_message, first_of_each,
-                              project_lines, project_of, project_summary, ratio_starts, rejudged, session_starts)
+from ccdrift.sessions import (ContextChange, MIN_BASELINE, WINDOW, context_alerts, context_changes_in,
+                              context_message, first_of_each, found_changes, project_lines, project_of,
+                              project_summary, ratio_starts, rejudged, session_starts)
 from ccdrift.texts import context_change_line, project_path
 from ccdrift.state import new_state
 from tests.helpers import DAY, at, line, nth_day, prompt, text, write
@@ -181,11 +182,43 @@ def test_a_step_in_every_project_says_so_and_names_the_version_when_one_arrived(
     # The sessions after the step run a version none of the baseline sessions ran.
     assert changes[0]["new_version"] is True
     assert context_message(changes[0], ["2.1.267 (since 09-09)"]).endswith(
-        "in every project you used (2 of 2), on a Claude Code version none of the sessions before it ran — "
-        "the likeliest cause.")
+        "in every project ccdrift could compare (2 of 2), on a Claude Code version none of the sessions before it "
+        "ran — the likeliest cause.")
     assert context_message({**changes[0], "new_version": False}, []).endswith(
-        "in every project you used (2 of 2), with no new Claude Code version, so look at your global "
+        "in every project ccdrift could compare (2 of 2), with no new Claude Code version, so look at your global "
         "configuration in ~/.claude.")
+
+
+def test_the_count_is_of_the_projects_compared_not_of_the_projects_used(tmp_path):
+    # Two projects step together while four more are in use; those four have no sessions
+    # each side of the step, so the alert says what it counted rather than "every project
+    # you used", which would be false about the other four.
+    sessions(tmp_path, "-a", [128_000] * 8)
+    sessions(tmp_path, "-b", [64_000] * 8)
+    sessions(tmp_path, "-a", [64_000] * 3, first_day=8)
+    sessions(tmp_path, "-b", [32_000] * 3, first_day=8)
+    for i, project in enumerate(["-c", "-d", "-e", "-f"]):
+        sessions(tmp_path, project, [96_000], first_day=i)
+    changes = context_alerts(starts_in(tmp_path), new_state(), date(2026, 9, 14))
+    assert [(sorted(c["projects"]), c["of_projects"]) for c in changes] == [(["-a", "-b"], 2)]
+    assert context_message(changes[0], []).endswith("in every project ccdrift could compare (2 of 2), with no new "
+                                                    "Claude Code version, so look at your global configuration in "
+                                                    "~/.claude.")
+
+
+def test_a_project_with_too_few_sessions_each_side_does_not_vote(tmp_path):
+    # -b has two sessions before the step and two after, 20% apart -- ordinary sessions of
+    # a settled project range that far. Counting it would make this "2 of 2 projects" and
+    # blame Claude Code for a step only -a took.
+    sessions(tmp_path, "-a", [128_000] * 8)
+    sessions(tmp_path, "-a", [64_000] * 3, first_day=8)
+    sessions(tmp_path, "-b", [100_000] * 2, first_day=6)
+    sessions(tmp_path, "-b", [80_000] * 2, first_day=8)
+    changes = context_alerts(starts_in(tmp_path), new_state(), date(2026, 9, 14))
+    assert [(c["since"], c["projects"], c["of_projects"]) for c in changes] == [("2026-09-09", ["-a"], 1)]
+    assert context_message(changes[0], []).endswith(
+        "in the one project ccdrift could compare with itself, so its CLAUDE.md, MCP servers or skills explain it "
+        "as readily as Claude Code does.")
 
 
 def test_a_step_in_one_project_of_several_blames_that_projects_own_files(tmp_path):
@@ -196,14 +229,46 @@ def test_a_step_in_one_project_of_several_blames_that_projects_own_files(tmp_pat
     changes = context_alerts(starts_in(tmp_path), new_state(), date(2026, 9, 14))
     assert [(c["projects"], c["of_projects"]) for c in changes] == [(["-a"], 2)]
     assert context_message(changes[0], []).endswith(
-        "in 1 of 2 projects you used. That project's CLAUDE.md, MCP servers or skills explain it, not Claude Code.")
+        "in 1 of the 2 projects ccdrift could compare. That project's CLAUDE.md, MCP servers or skills explain it, "
+        "not Claude Code.")
+
+
+def test_a_step_in_some_projects_alongside_a_new_version_rules_neither_out():
+    # The opening clause names a version new to these days, so the ending can't answer
+    # "not Claude Code": the projects that held their level say the cause isn't global,
+    # and the version that arrived says it might be.
+    change = {"since": "2026-09-09", "from": 128_000.0, "to": 64_000.0, "days": ["2026-09-09", "2026-09-11"],
+              "projects": ["-a", "-b"], "of_projects": 5, "new_version": True, "reported_on": "2026-09-12"}
+    assert context_message(change, ["2.1.267 (since 09-09)"]) == (
+        "New sessions start with ~64k tokens of context from 2026-09-09, on Claude Code 2.1.267 (since 09-09), "
+        "down from ~130k, in 2 of the 5 projects ccdrift could compare. Those projects' own files may explain it, "
+        "though a Claude Code version none of the sessions before it ran also arrived.")
+    assert context_message({**change, "projects": ["-a"]}, ["2.1.267 (since 09-09)"]).endswith(
+        "in 1 of the 5 projects ccdrift could compare. That project's own files may explain it, though a Claude "
+        "Code version none of the sessions before it ran also arrived.")
+
+
+def test_a_step_no_compared_project_took_blames_nothing_yet():
+    # The pooled pass can find a step that no single project's own median clears SIDE on.
+    # Ending "not Claude Code" or "look at ~/.claude" would both be inventions.
+    change = {"since": "2026-09-09", "from": 128_000.0, "to": 64_000.0, "days": ["2026-09-09", "2026-09-11"],
+              "projects": [], "of_projects": 3, "reported_on": "2026-09-12"}
+    assert context_message(change, []).endswith(
+        ", in none of the 3 projects ccdrift could compare, so something outside them changed.")
+    assert context_message({**change, "of_projects": 1}, []).endswith(
+        ", though the one project ccdrift could compare with itself didn't move, so something outside it changed.")
+    # With no project comparable at all, the alert still says nothing about where it came from.
+    assert context_message({**change, "of_projects": 0}, []).endswith(
+        "down from ~130k. Your MCP servers, plugins or CLAUDE.md can change this too.")
 
 
 def test_the_status_line_names_the_projects_and_the_alert_never_does():
     change = {"since": "2026-09-09", "from": 128_000.0, "to": 64_000.0, "days": ["2026-09-09", "2026-09-11"],
               "projects": ["-Users-me-dev-app"], "of_projects": 2, "reported_on": "2026-09-12"}
     assert context_change_line(change) == (
-        "session start ~130k -> ~64k tokens from 2026-09-09 in /Users/me/dev/app of 2")
+        "session start ~130k -> ~64k tokens from 2026-09-09 in /Users/me/dev/app, 1 of 2 projects compared")
+    assert context_change_line({**change, "of_projects": 1}) == (
+        "session start ~130k -> ~64k tokens from 2026-09-09 in /Users/me/dev/app")
     assert "/Users" not in context_message(change, ["2.1.267"])
 
 
@@ -221,6 +286,62 @@ def test_an_older_states_recorded_changes_are_rejudged_once(tmp_path):
     # The pooled rule's project switch goes; a change older than the sessions read stays.
     assert [d["since"] for d in dropped] == ["2026-09-13"]
     assert [c["since"] for c in state["context_changes"]] == ["2026-08-01"]
+
+
+def test_a_recorded_change_the_new_rule_dates_differently_is_kept(tmp_path):
+    # Both rules see this step; they judge different sessions, so they date it differently.
+    # Deleting the record would alert the owner about the same step again next run.
+    sessions(tmp_path, "-a", [128_000] * 14 + [54_000] * 3)
+    state = new_state()
+    state["context_changes"] = [
+        {"since": "2026-09-12", "from": 128_000.0, "to": 54_000.0, "days": ["2026-09-12", "2026-09-14"],
+         "reported_on": "2026-09-15"},
+        {"since": "2026-09-12", "from": 54_000.0, "to": 128_000.0, "days": ["2026-09-12", "2026-09-14"],
+         "reported_on": "2026-09-15"},
+    ]
+    # The new rule dates the step 2026-09-15, three days after the record, and it is a
+    # drop: the record of a drop stays, the record of a rise on the same day goes.
+    assert {c.since for c in found_changes(ratio_starts(starts_in(tmp_path)))} == {"2026-09-15"}
+    dropped = rejudged(starts_in(tmp_path), state, date(2026, 9, 18))
+    assert [(d["since"], d["to"]) for d in dropped] == [("2026-09-12", 128_000.0)]
+    assert [(c["since"], c["to"]) for c in state["context_changes"]] == [("2026-09-12", 54_000.0)]
+
+
+def test_a_record_from_days_the_new_rule_cannot_report_on_is_kept(tmp_path):
+    # The rule can report nothing before its 8th judged session (MIN_BASELINE + WINDOW),
+    # so a record from the days before it is kept unjudged rather than deleted for not
+    # being reproduced -- ccdrift doesn't drop what it can't re-check.
+    sessions(tmp_path, "-a", [128_000] * 14 + [54_000] * 3)
+    judged = ratio_starts(starts_in(tmp_path))
+    assert judged["day"].tolist()[MIN_BASELINE + WINDOW - 1] == "2026-09-11"
+    state = new_state()
+    state["context_changes"] = [{"since": "2026-09-10", "from": 54_000.0, "to": 128_000.0,
+                                 "days": ["2026-09-10", "2026-09-12"], "reported_on": "2026-09-13"}]
+    assert rejudged(starts_in(tmp_path), state, date(2026, 9, 18)) == []
+    assert [c["since"] for c in state["context_changes"]] == ["2026-09-10"]
+
+    # With too few judged sessions to report anything, every record is kept.
+    sessions(tmp_path / "few", "-a", [128_000] * 9)
+    state["context_changes"] = [{"since": "2026-09-08", "from": 54_000.0, "to": 128_000.0,
+                                 "days": ["2026-09-08", "2026-09-09"], "reported_on": "2026-09-10"}]
+    assert len(ratio_starts(starts_in(tmp_path / "few"))) == 6
+    assert rejudged(starts_in(tmp_path / "few"), state, date(2026, 9, 18)) == []
+    assert [c["since"] for c in state["context_changes"]] == ["2026-09-08"]
+
+
+def test_a_source_holding_only_transcripts_is_one_project(tmp_path):
+    # --source pointed at a single project's folder: every transcript lies directly in it,
+    # so reading each as its own project would leave every session unjudged for ever.
+    for d, size in enumerate([128_000] * 8 + [54_000] * 3):
+        write(tmp_path / f"session-{d}.jsonl",
+              [prompt(at(d * DAY), sid=f"s{d}"),
+               line(f"m{d}", text(40), ts=at(d * DAY), sid=f"s{d}", cache_creation=100, cache_read=size - 110,
+                    entrypoint="cli")])
+    starts = starts_in(tmp_path)
+    assert starts["project"].unique().tolist() == [""]
+    assert project_path("") == "the source folder"
+    assert len(ratio_starts(starts)) == 8
+    assert [c["since"] for c in context_alerts(starts, new_state(), date(2026, 9, 12))] == ["2026-09-09"]
 
 
 def test_the_report_names_each_projects_typical_session_start(tmp_path):

@@ -28,14 +28,14 @@ START_COLUMNS = ["source_file", "project", "timestamp", "day", "version", "promp
 RATIO_COLUMNS = [*START_COLUMNS, "level", "ratio"]
 
 
+SOURCE_PROJECT = ""   # the name every session gets when the source holds no project folder
+
+
 def project_of(source_file: str) -> str:
     """The project folder a transcript belongs to: the first segment of its path under
     the transcripts folder. A transcript lying directly in it is its own project."""
     head, sep, _ = str(source_file).partition("/")
     return head if sep else str(source_file)
-
-
-
 
 
 def session_starts(responses: pd.DataFrame) -> pd.DataFrame:
@@ -52,9 +52,15 @@ def session_starts(responses: pd.DataFrame) -> pd.DataFrame:
     if main.empty:
         return pd.DataFrame(columns=START_COLUMNS)
     first = main.sort_values("timestamp", kind="stable").groupby("source_file", sort=False).head(1)
+    files = first["source_file"].astype(str)
+    # Pointing --source at one project's own folder leaves every transcript directly under
+    # it, so project_of would make each session a project of its own and none would ever
+    # have the sessions to be judged — a watch that reports nothing and says nothing. With
+    # no project folder anywhere in the source, the source itself is the one project.
+    loose = not files.str.contains("/").any()
     starts = pd.DataFrame({
-        "source_file": first["source_file"].astype(str),
-        "project": first["source_file"].astype(str).map(project_of),
+        "source_file": files,
+        "project": pd.Series(SOURCE_PROJECT, index=files.index) if loose else files.map(project_of),
         "timestamp": first["timestamp"],
         "day": first["day"].astype(str),
         "version": first["version"] if "version" in first else None,
@@ -87,8 +93,11 @@ def ratio_starts(starts: pd.DataFrame) -> pd.DataFrame:
 
 @dataclass
 class ContextChange:
-    """A step in session-start size; `window` and `baseline` are row positions in the
-    starts table."""
+    """A step in session-start size. `window` and `baseline` are row positions in the
+    frame the change was found in, which is not always the judged table: `found_changes`
+    runs the detector over all the judged sessions and over each project's own rows, and
+    returns changes from several frames together, so a change's positions mean nothing
+    outside the frame it came from. Read its days instead."""
     since: str
     until: str
     before: float
@@ -167,7 +176,7 @@ def project_summary(starts: pd.DataFrame, days: Sequence[str]) -> list[dict[str,
     window = starts[starts["day"].astype(str).isin(list(days))] if not starts.empty else starts
     if window.empty:
         return []
-    rows = [{"project": str(project), "path": project_path(str(project)), "sessions": len(group),
+    rows = [{"path": project_path(str(project)), "sessions": len(group),
              "median_tokens": float(group["prompt_tokens"].median())}
             for project, group in window.groupby(window["project"].astype(str), sort=False)]
     return sorted(rows, key=lambda row: -row["median_tokens"])
@@ -198,10 +207,17 @@ def found_changes(judged: pd.DataFrame) -> list[ContextChange]:
 
 
 def moved_projects(starts: pd.DataFrame, change: ContextChange) -> dict[str, Any]:
-    """Which projects moved with a change: for every project with sessions on both sides
-    of its first day, within SIDE_DAYS each way, whether its own median moved by at least
-    SIDE in the change's direction. `seen` counts the projects that could be judged at
-    all, so an alert can say "1 of 4"."""
+    """Which projects moved with a change: for every project with at least
+    MIN_PROJECT_SESSIONS sessions on each side of its first day, within SIDE_DAYS each
+    way, whether its own median moved by at least SIDE in the change's direction. `seen`
+    counts the projects that cleared that bar, so an alert can say "1 of 4".
+
+    The bar is the same one a project must clear before any of its sessions are judged at
+    all, and for the same reason: a median of one or two sessions is noise, and ordinary
+    sessions of a settled project range over 0.92x-1.30x of its level, so a pair of them
+    can differ by more than SIDE with nothing behind it. This count is what the alert's
+    cause rests on -- "in every project" reads as Claude Code or the global config -- so a
+    project with nothing to say does not vote."""
     days = starts["day"].astype(str)
     earliest = (date.fromisoformat(change.since) - timedelta(days=SIDE_DAYS)).isoformat()
     latest = (date.fromisoformat(change.until) + timedelta(days=SIDE_DAYS)).isoformat()
@@ -211,7 +227,7 @@ def moved_projects(starts: pd.DataFrame, change: ContextChange) -> dict[str, Any
         on_days = rows["day"].astype(str)
         before = rows.loc[on_days < change.since, "prompt_tokens"].astype(float)
         after = rows.loc[on_days >= change.since, "prompt_tokens"].astype(float)
-        if before.empty or after.empty or before.median() <= 0:
+        if len(before) < MIN_PROJECT_SESSIONS or len(after) < MIN_PROJECT_SESSIONS or before.median() <= 0:
             continue
         seen += 1
         move = after.median() / before.median() - 1
@@ -243,10 +259,20 @@ def context_alerts(starts: pd.DataFrame, state: dict[str, Any], today: date) -> 
 
 def _where(change: dict[str, Any], new_version: bool) -> str:
     """Which projects a change reached, and what that says about its cause; "" when no
-    project could be judged on both sides of it."""
+    project had the sessions each side to be compared with itself. Every branch counts the
+    projects ccdrift could compare, not the projects the owner used: a machine with six
+    active projects can have two that clear the bar, and "every project you used" would be
+    false about the other four."""
     moved, seen = len(change.get("projects", [])), change.get("of_projects", 0)
-    if not seen or not moved:
+    if not seen:
         return ""
+    if not moved:
+        # Every project that could be compared held its level, so whatever moved the
+        # sessions isn't in any of them -- and isn't pinned on anything yet.
+        if seen == 1:
+            return (", though the one project ccdrift could compare with itself didn't move, so something outside "
+                    "it changed.")
+        return f", in none of the {seen} projects ccdrift could compare, so something outside them changed."
     if seen == 1:
         # One project is no evidence either way: Claude Code and that project's own files
         # both move it, and there is nothing to compare it with.
@@ -257,28 +283,50 @@ def _where(change: dict[str, Any], new_version: bool) -> str:
                 "explain it as readily as Claude Code does.")
     if moved < seen:
         that = "That project's" if moved == 1 else "Those projects'"
-        return (f", in {moved} of {seen} projects you used. "
+        # A version new to these sessions is named in the message's own opening clause, so
+        # ruling Claude Code out here would contradict it: the projects that didn't move
+        # say the cause isn't global, and a version that arrived says it might be.
+        if new_version:
+            return (f", in {moved} of the {seen} projects ccdrift could compare. {that} own files may explain it, "
+                    "though a Claude Code version none of the sessions before it ran also arrived.")
+        return (f", in {moved} of the {seen} projects ccdrift could compare. "
                 f"{that} CLAUDE.md, MCP servers or skills explain it, not Claude Code.")
     if new_version:
-        return (f", in every project you used ({moved} of {seen}), on a Claude Code version none of the sessions "
-                "before it ran — the likeliest cause.")
-    return (f", in every project you used ({moved} of {seen}), with no new Claude Code version, so look at your "
-            "global configuration in ~/.claude.")
+        return (f", in every project ccdrift could compare ({moved} of {seen}), on a Claude Code version none of "
+                "the sessions before it ran — the likeliest cause.")
+    return (f", in every project ccdrift could compare ({moved} of {seen}), with no new Claude Code version, so "
+            "look at your global configuration in ~/.claude.")
 
 
 def rejudged(starts: pd.DataFrame, state: dict[str, Any], today: date) -> list[dict[str, Any]]:
-    """The recorded changes an older ccdrift found that this version's rule doesn't, among
-    those inside the history read — the pooled rule counted a move between projects as a
-    change. Records reaching further back than the starts are kept: ccdrift doesn't drop
-    what it can't re-check. The records are removed from state["context_changes"]."""
+    """The recorded changes an older ccdrift found that this version's rule doesn't — the
+    pooled rule counted a move between projects as a change. Two rules keep a record that
+    this one can't reproduce exactly, because deleting it would only alert the owner about
+    the same step again next run:
+
+    - a record is the same step when the new rule finds a change in the same direction
+      within DEDUPE_DAYS of it, not only on its own day: the two rules judge different
+      sessions, so they date one step differently, and `first_of_each` already reads that
+      as the same step;
+    - a record before the earliest day the new rule could report on — the day of the
+      judged session at MIN_BASELINE + WINDOW - 1, the first a window can end on — is kept
+      unjudged, as are all of them when there are too few judged sessions to report
+      anything. ccdrift doesn't drop what it can't re-check.
+
+    The dropped records are removed from state["context_changes"]."""
     if starts.empty:
         return []
     complete = starts[starts["day"].astype(str) < today.isoformat()].reset_index(drop=True)
-    earliest = str(complete["day"].astype(str).min()) if not complete.empty else today.isoformat()
-    found = {c.since for c in found_changes(ratio_starts(complete))}
+    judged = ratio_starts(complete)
+    if len(judged) <= MIN_BASELINE + WINDOW - 1:
+        return []
+    earliest = str(judged["day"].astype(str).iloc[MIN_BASELINE + WINDOW - 1])
+    found = [(date.fromisoformat(c.since), c.up) for c in found_changes(judged)]
     kept, dropped = [], []
     for record in state["context_changes"]:
-        if record["since"] >= earliest and record["since"] not in found:
+        since, up = date.fromisoformat(record["since"]), record["to"] > record["from"]
+        same_step = any(rose == up and abs((day - since).days) <= DEDUPE_DAYS for day, rose in found)
+        if record["since"] >= earliest and not same_step:
             dropped.append(record)
         else:
             kept.append(record)

@@ -12,9 +12,16 @@ The gate asks three things of the new rule and reports what the pooled one did b
   finds one);
 - every change it does report on the real logs names a project whose own level moved, so
   no alert is left without something behind it;
-- a planted step — every project's sessions from one day on multiplied by PLANT_FACTOR —
-  is caught, planted on each of the last PLANT_DAYS judgeable days in turn, and credited
-  only when the unplanted history was quiet on that day.
+- two planted steps are caught, planted on each of the last PLANT_DAYS judgeable days in
+  turn and credited only when the unplanted history was quiet on that day.
+
+The two plants are the two shapes `found_changes` exists for, and each tests a different
+half of it. A step in every project — every project's sessions from one day on multiplied
+by PLANT_FACTOR — is the shape a Claude Code change takes, and the pooled pass finds it on
+its own. A step in one project, the shape its own CLAUDE.md, skills or MCP servers take, is
+diluted by the other projects' sessions and only the per-project pass sees it; planting
+only the first shape would leave that half of the rule — the half both fixed Criticals of
+this build were about — unexercised.
 
 Run from the repo root:
 
@@ -36,7 +43,7 @@ from ccdrift.sessions import (MIN_BASELINE, MIN_PROJECT_SESSIONS, WINDOW, contex
                               session_starts)
 from ccdrift.state import new_state
 
-PLANT_FACTOR = 0.5   # what a planted step does to every project's session starts
+PLANT_FACTOR = 0.5   # what a planted step multiplies the session starts it reaches by
 PLANT_DAYS = 5       # days a step is planted on in turn, one replay each
 GATE = "G12"
 
@@ -67,6 +74,31 @@ def plant(starts: pd.DataFrame, day: str, factor: float = PLANT_FACTOR) -> pd.Da
     from_day = planted["day"].astype(str) >= str(day)
     planted.loc[from_day, "prompt_tokens"] = planted.loc[from_day, "prompt_tokens"].astype(float) * factor
     return planted
+
+
+def plant_in(starts: pd.DataFrame, day: str, project: str, factor: float = PLANT_FACTOR) -> pd.DataFrame:
+    """The starts with one project's sessions from `day` on multiplied by `factor`, every
+    other project untouched — a step in that project's own files, which the pooled pass
+    dilutes and only the per-project pass can see."""
+    planted = starts.copy()
+    step = (planted["day"].astype(str) >= str(day)) & (planted["project"].astype(str) == str(project))
+    planted.loc[step, "prompt_tokens"] = planted.loc[step, "prompt_tokens"].astype(float) * factor
+    return planted
+
+
+def plantable_project(starts: pd.DataFrame, day: str) -> str | None:
+    """The largest project a one-project step can be planted in on `day`: one with
+    MIN_PROJECT_SESSIONS sessions to set its level and MIN_BASELINE more before the day to
+    be a baseline, and WINDOW sessions from the day on for the step to fill a window with.
+    None when no project of this history has that many — where the question can't be put,
+    not where the rule fails it."""
+    enough = []
+    for project, rows in starts.groupby(starts["project"].astype(str), sort=True):
+        on_days = rows["day"].astype(str)
+        if (int((on_days < str(day)).sum()) >= MIN_PROJECT_SESSIONS + MIN_BASELINE
+                and int((on_days >= str(day)).sum()) >= WINDOW):
+            enough.append((len(rows), str(project)))
+    return max(enough)[1] if enough else None
 
 
 def plant_days(starts: pd.DataFrame, how_many: int = PLANT_DAYS) -> list[str]:
@@ -141,20 +173,35 @@ def gate(starts: pd.DataFrame) -> tuple[bool, list[str]]:
 
     sound, alert_notes = every_alert_names_a_project(starts)
     notes += [f"on the logs: {note}" for note in alert_notes] or ["on the logs: no change found"]
-    notes.append(f"pooling these logs found {len(pooled_changes(starts))}: "
-                 f"{', '.join(pooled_changes(starts)) or 'none'}")
+    pooled = pooled_changes(starts)
+    notes.append(f"pooling these logs found {len(pooled)}: {', '.join(pooled) or 'none'}")
 
     quiet = replay(starts)
     # A plant is credited only when the planted history alerts on a day the unplanted one
     # was quiet on, so a day the logs already report a change on can give no answer:
     # planting there is skipped rather than counted as a miss.
-    plants = [day for day in plant_days(starts) if day not in quiet]
-    skipped = [day for day in plant_days(starts) if day in quiet]
+    days = plant_days(starts)
+    plants = [day for day in days if day not in quiet]
+    skipped = [day for day in days if day in quiet]
     caught = sum(1 for day in plants if any(one not in quiet for one in replay(plant(starts, day))))
     notes.append(f"planted steps caught: {caught} of {len(plants)}"
                  + (f" (planted on {', '.join(plants)})" if plants else "")
                  + (f"; skipped {', '.join(skipped)}, where the logs already report a change" if skipped else ""))
-    passed = not switch_alerts and sound and bool(plants) and caught == len(plants)
+
+    # The same days, stepped in one project only: the half of the rule the pooled pass
+    # can't answer for.
+    in_one = [(day, plantable_project(starts, day)) for day in plants]
+    one_project = [(day, project) for day, project in in_one if project]
+    caught_one = sum(1 for day, project in one_project
+                     if any(one not in quiet for one in replay(plant_in(starts, day, project))))
+    if one_project:
+        notes.append(f"planted one-project steps caught: {caught_one} of {len(one_project)} (planted in "
+                     + ", ".join(f"{project_path(project)} on {day}" for day, project in one_project) + ")")
+    else:
+        notes.append("planted one-project steps caught: not measurable here — no project has "
+                     f"{MIN_PROJECT_SESSIONS + MIN_BASELINE} sessions before a plantable day and {WINDOW} from it on")
+    passed = (not switch_alerts and sound and bool(plants) and caught == len(plants)
+              and caught_one == len(one_project))
     return passed, notes
 
 

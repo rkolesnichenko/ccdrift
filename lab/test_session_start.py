@@ -2,6 +2,7 @@
 
 import pandas as pd
 
+from ccdrift.sessions import context_changes_in, first_of_each, ratio_starts
 from lab.harness import generate_synthetic
 from lab.session_start import gate, main, version_table
 from tests.helpers import nth_day
@@ -15,6 +16,14 @@ def starts_of(rows, project="p"):
                          "timestamp": pd.to_datetime([f"{nth_day(i)}T10:00:00Z" for i in range(len(rows))]),
                          "day": [nth_day(i) for i in range(len(rows))],
                          "version": [v for v, _ in rows], "prompt_tokens": [float(t) for _, t in rows]})
+
+
+def projects_of(rows, version="2.1.261"):
+    """rows: (project, prompt tokens) in time order, one session a day, every session on
+    the same version."""
+    return starts_of([(version, tokens) for _, tokens in rows]).assign(
+        project=[project for project, _ in rows],
+        source_file=[f"{project}/{i}.jsonl" for i, (project, _) in enumerate(rows)])
 
 
 def test_version_table_shows_each_versions_median_and_spread():
@@ -31,10 +40,24 @@ def test_gate_passes_when_versions_are_steady_and_steps_come_with_a_new_version(
     assert passed, notes
 
 
-def test_gate_fails_when_a_step_comes_without_a_new_version():
+def test_gate_passes_when_a_step_comes_without_a_new_version_and_says_so():
+    # A project's own CLAUDE.md, skills or MCP servers step its sessions with no new
+    # Claude Code version, which is what G12 measures, so the version is reported beside
+    # the step rather than deciding the gate.
     rows = [("2.1.261", 128_000)] * 8 + [("2.1.261", 54_000)] * 4
-    passed, _ = gate(starts_of(rows))
-    assert not passed
+    passed, notes = gate(starts_of(rows))
+    assert passed, notes
+    assert notes[1] == "steps found: 1; with a version new to their baseline: 0"
+
+
+def test_the_gate_reads_the_steps_the_shipped_rule_finds_not_the_pooled_pass_alone():
+    # One project of two steps; pooled, the other project's sessions dilute it away.
+    rows = [("-a", 128_000), ("-a", 128_000), ("-b", 60_000)] * 4 + [("-a", 54_000), ("-a", 54_000),
+                                                                     ("-b", 60_000)] * 3
+    starts = projects_of(rows)
+    assert first_of_each(context_changes_in(ratio_starts(starts))) == []
+    _, notes = gate(starts)
+    assert notes[1] == "steps found: 1; with a version new to their baseline: 0"
 
 
 def test_gate_fails_when_a_version_varies_too_much():

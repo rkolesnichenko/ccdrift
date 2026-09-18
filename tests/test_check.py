@@ -478,10 +478,12 @@ def test_a_state_from_an_older_ccdrift_is_rejudged_once_and_keeps_a_real_change(
                         cache_read=size - 110, entrypoint="cli")])
     # A state as ccdrift 0.7.0 left it: no context_rule, and a recorded change (an "up" move,
     # so it isn't deduped against the real "down" one below) that the new rule can't find.
+    # It sits on 09-08, past the 8th judged session, which is the earliest day the new rule
+    # could report on: a record before that is kept unjudged instead.
     state = new_state()
     del state["context_rule"]
-    state["context_changes"] = [{"since": "2026-09-03", "from": 60_000.0, "to": 90_000.0,
-                                 "days": ["2026-09-03", "2026-09-05"], "reported_on": "2026-09-06"}]
+    state["context_changes"] = [{"since": "2026-09-08", "from": 60_000.0, "to": 90_000.0,
+                                 "days": ["2026-09-08", "2026-09-10"], "reported_on": "2026-09-11"}]
     state["last_ok"] = "2026-09-01T09:00:00+00:00"
     save_state(tmp_path / "state.json", state)
 
@@ -489,9 +491,9 @@ def test_a_state_from_an_older_ccdrift_is_rejudged_once_and_keeps_a_real_change(
     out = capsys.readouterr().out
     assert sent == ["ccdrift: session start changed"]
     assert ("ccdrift: session start changed: New sessions start with ~64k tokens of context from 2026-09-09, "
-            "down from ~130k, in 1 of 2 projects you used. That project's CLAUDE.md, MCP servers or skills "
-            "explain it, not Claude Code.") in out
-    assert ("ccdrift: a recorded session-start change was dropped: 2026-09-03, ~60k -> ~90k tokens: judged "
+            "down from ~130k, in 1 of the 2 projects ccdrift could compare. That project's CLAUDE.md, MCP servers "
+            "or skills explain it, not Claude Code.") in out
+    assert ("ccdrift: a recorded session-start change was dropped: 2026-09-08, ~60k -> ~90k tokens: judged "
             "against each project's own level, it isn't a change.") in out
     state = load_state(tmp_path / "state.json")
     assert [c["since"] for c in state["context_changes"]] == ["2026-09-09"]

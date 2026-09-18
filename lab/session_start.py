@@ -1,9 +1,14 @@
 """Is the context a Claude Code session starts with steady enough to alert on? (G2)
 
-For each version: how many sessions, their median prompt size and spread; then the
-session-start alert rule replayed over all sessions, with the versions around each
-step. The gate passes when every version with 3+ sessions has a spread (MAD over
-median) of at most 0.10 and every step comes with a version its baseline never ran.
+For each version: how many sessions, their median prompt size and spread; then the steps
+the shipped rule finds — `found_changes` over the ratios, pooled and per project, the same
+call the check makes — with the versions their sessions ran.
+
+The gate passes when every version with 3+ sessions has a spread (MAD over median) of at
+most 0.10. It used to demand that every step come with a version its baseline never ran,
+and 0.8.0's whole thesis contradicts that: a project's own CLAUDE.md, skills or MCP servers
+step its sessions with no new version at all, which is what G12 measures. The version is
+reported beside each step instead of deciding the gate.
 
 Run from the repo root:
 
@@ -21,7 +26,7 @@ import numpy as np
 import pandas as pd
 
 from ccdrift.logs import default_source, parse_source
-from ccdrift.sessions import MIN_SESSIONS, context_changes_in, first_of_each, ratio_starts, session_starts
+from ccdrift.sessions import ContextChange, MIN_SESSIONS, first_of_each, found_changes, ratio_starts, session_starts
 
 MAX_SPREAD = 0.10
 
@@ -40,19 +45,26 @@ def version_table(starts: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["version", "sessions", "median", "low", "high", "spread"])
 
 
+def step_versions(judged: pd.DataFrame, change: ContextChange) -> list[str]:
+    """The versions the sessions of a step's own days ran, read back from the days: a
+    change from the per-project pass carries row positions in that project's frame, which
+    mean nothing in the judged table."""
+    days = judged["day"].astype(str)
+    on = judged.loc[(days >= change.since) & (days <= change.until), "version"]
+    return sorted(set(on.fillna("unknown").astype(str)))
+
+
 def gate(starts: pd.DataFrame) -> tuple[bool, list[str]]:
     judged = ratio_starts(starts)
     table = version_table(starts)
     steady = table[table["sessions"] >= MIN_SESSIONS]
     spread_ok = bool(len(steady)) and bool((steady["spread"] <= MAX_SPREAD).all())
-    # The positions a change carries are rows of the judged table, not of `starts`.
-    versions = judged["version"].fillna("unknown").tolist()
-    kept = first_of_each(context_changes_in(judged))
-    with_new_version = [bool({versions[i] for i in c.window} - {versions[i] for i in c.baseline}) for c in kept]
+    kept = first_of_each(found_changes(judged))
+    with_new_version = sum(1 for change in kept if change.new_version)
     notes = [f"versions with {MIN_SESSIONS}+ sessions: {len(steady)}; largest spread "
              f"{steady['spread'].max():.3f}" if len(steady) else "no version has 3+ sessions",
-             f"steps found: {len(kept)}; with a version new to their baseline: {sum(with_new_version)}"]
-    return spread_ok and all(with_new_version), notes
+             f"steps found: {len(kept)}; with a version new to their baseline: {with_new_version}"]
+    return spread_ok, notes
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -66,10 +78,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"  {row.version:<10} sessions {row.sessions:>3}  median {row.median / 1000:>6.1f}k  "
               f"range {row.low / 1000:.1f}-{row.high / 1000:.1f}k  spread {row.spread:.3f}")
     judged = ratio_starts(starts)
-    versions = judged["version"].fillna("unknown").tolist()
-    for change in first_of_each(context_changes_in(judged)):
-        print(f"  step from {change.since}: {change.before / 1000:.0f}k -> {change.after / 1000:.0f}k; window on "
-              f"{sorted({versions[i] for i in change.window})}, baseline on {sorted({versions[i] for i in change.baseline})}")
+    for change in first_of_each(found_changes(judged)):
+        print(f"  step from {change.since} to {change.until}: {change.before / 1000:.0f}k -> "
+              f"{change.after / 1000:.0f}k; its sessions on {step_versions(judged, change)}, "
+              f"{'on a version new to its baseline' if change.new_version else 'on no new version'}")
     passed, notes = gate(starts)
     for note in notes:
         print(note)

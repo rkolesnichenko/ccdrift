@@ -2,8 +2,9 @@
 
 import pandas as pd
 
-from ccdrift.sessions import START_COLUMNS
-from lab.context import every_alert_names_a_project, gate, plant, plant_days, pooled_changes, replay, switch_history
+from ccdrift.sessions import START_COLUMNS, context_changes_in, first_of_each, found_changes, ratio_starts
+from lab.context import (every_alert_names_a_project, gate, plant, plant_days, plant_in, plantable_project,
+                         pooled_changes, replay, switch_history)
 from tests.helpers import nth_day
 
 
@@ -50,8 +51,37 @@ def test_an_alert_that_names_no_moved_project_fails_the_gate():
     assert any("0 of 1 projects moved" in note for note in notes)
 
 
-def test_the_gate_passes_when_the_rule_is_quiet_on_a_switch_and_catches_a_planted_step():
-    starts = starts_of([("-a", 100_000), ("-b", 60_000)] * 10)
+def test_a_planted_step_in_one_project_is_invisible_to_the_pooled_pass_and_found_anyway():
+    # The half of found_changes the every-project plant can't test: -b's sessions dilute
+    # -a's step until the pooled pass sees nothing, and the per-project pass still finds it.
+    starts = starts_of([("-a", 100_000), ("-a", 100_000), ("-b", 60_000)] * 8)
+    day = plant_days(starts)[0]
+    assert plantable_project(starts, day) == "-a"
+    planted = plant_in(starts, day, "-a")
+    assert set(planted.loc[planted["day"].astype(str) >= day, "prompt_tokens"]) == {50_000.0, 60_000.0}
+    judged = ratio_starts(planted)
+    assert first_of_each(context_changes_in(judged)) == []
+    assert [c.since for c in first_of_each(found_changes(judged))] == ["2026-09-19"]
+    assert replay(planted) == ["2026-09-19"]
+    assert replay(starts) == []
+
+
+def test_the_gate_passes_when_the_rule_is_quiet_on_a_switch_and_catches_both_planted_steps():
+    starts = starts_of([("-a", 100_000), ("-a", 100_000), ("-b", 60_000)] * 8)
     passed, notes = gate(starts)
     assert passed, notes
-    assert any("planted steps caught" in note for note in notes)
+    assert [note for note in notes if note.startswith("planted")] == [
+        "planted steps caught: 5 of 5 (planted on 2026-09-18, 2026-09-19, 2026-09-20, 2026-09-21, 2026-09-22)",
+        "planted one-project steps caught: 3 of 3 (planted in /a on 2026-09-18, /a on 2026-09-19, "
+        "/a on 2026-09-20)"]
+
+
+def test_a_history_too_thin_for_a_one_project_plant_says_so_rather_than_passing_silently():
+    # Every project alternates, so none has the sessions each side of a plantable day to
+    # carry a step of its own. The gate says the question couldn't be put here.
+    starts = starts_of([("-a", 100_000), ("-b", 60_000)] * 10)
+    assert [plantable_project(starts, day) for day in plant_days(starts)] == [None] * 5
+    passed, notes = gate(starts)
+    assert passed, notes
+    assert notes[-1] == ("planted one-project steps caught: not measurable here — no project has 8 sessions "
+                         "before a plantable day and 3 from it on")
