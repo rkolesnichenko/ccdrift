@@ -1,4 +1,4 @@
-"""Do the failure rules stay quiet on a real history and still catch a burst? (G10, G11)
+"""Do the failure rules stay quiet on a real history and still catch a burst? (G10, G11, G13)
 
 Failed requests and responses cut short are rare — 13 banners and 2 truncated responses
 in the six weeks this was designed on — so neither rule can lean on a usual rate. Each
@@ -23,6 +23,13 @@ stayed quiet on: an alert the logs were going to raise anyway proves nothing.
 - G11 (responses cut short) passes the same way, with PLANTED_SHARE of each planted day's
   responses stopping at the token limit, counting a run as caught when any day of it
   alerts.
+- G13 (a cut-short run that deepens) passes when a run planted at OPEN_SHARE for
+  PLANT_RUN days and WORSE_SHARE for PLANT_WORSE more is reported twice — once when it
+  starts and once when it deepens — and a flat run of the same length is still reported
+  once. G11 plants only flat runs, so without this nothing measures the suppression at all.
+  G13 plants harder than G11 on purpose: its premise is a run ccdrift already reported,
+  deepening, so its opening days have to clear CUT_FLOOR on their own, where G11's smaller
+  plant is only asking whether a run gets caught at all.
 
 Run from the repo root:
 
@@ -57,7 +64,17 @@ PLANT_DAYS = 5          # days a burst is planted on in turn, one replay each
 PLANT_RUN = 3           # days a planted run lasts: a bad release truncates responses
                         # until it is fixed, so the cut gate plants three days in a row
                         # and asks whether ccdrift says so within them
-GATES = {"requests": "G10", "cut": "G11"}
+PLANT_WORSE = 3         # days a planted run keeps going after it worsens
+OPEN_SHARE = 0.05       # of a day's responses over a planted run's opening days. Higher
+                        # than PLANTED_SHARE on purpose: G11 asks whether a small run is
+                        # caught at all, G13 asks what happens to a run already reported,
+                        # so its opening days have to clear CUT_FLOOR on the quietest day
+                        # it plants on — a run ccdrift never reported has no second word
+                        # to test, and planting one would measure the corpus, not the rule
+WORSE_SHARE = 0.25      # of a day's responses once the planted run deepens: five times
+                        # OPEN_SHARE, comfortably past the three a second word needs, so
+                        # the gate asks about the rule and not about where rounding fell
+GATES = {"requests": "G10", "cut": "G11", "worse": "G13"}
 
 
 def replay(counts: pd.DataFrame, rule: Callable[[pd.DataFrame, dict[str, Any], date], list[dict[str, Any]]],
@@ -102,14 +119,28 @@ def run_days(counts: pd.DataFrame, day: str, how_many: int = PLANT_RUN) -> list[
     return days[start:start + how_many]
 
 
-def plant_run(counts: pd.DataFrame, day: str, share: float) -> pd.DataFrame:
-    """The counts with a run of bad days from `day`: each day of run_days(counts, day)
-    with `share` of its responses stopping at the token limit. A release that truncates
-    responses does it until someone fixes it, so this, not a single bad day, is the shape
-    the cut-short rule has to catch; each day is still only ever made worse."""
+def plant_run(counts: pd.DataFrame, day: str, share: float, how_many: int = PLANT_RUN) -> pd.DataFrame:
+    """The counts with a run of bad days from `day`: each day of run_days(counts, day,
+    how_many) with `share` of its responses stopping at the token limit. A release that
+    truncates responses does it until someone fixes it, so this, not a single bad day, is
+    the shape the cut-short rule has to catch; each day is still only ever made worse."""
     planted = counts
-    for one in run_days(counts, day):
+    for one in run_days(counts, day, how_many):
         planted = plant(planted, one, share=share)
+    return planted
+
+
+def plant_worse(counts: pd.DataFrame, day: str, share: float = OPEN_SHARE,
+                worse: float = WORSE_SHARE) -> pd.DataFrame:
+    """The counts with a run from `day` that gets worse partway: PLANT_RUN days at `share`,
+    then PLANT_WORSE days at `worse`. This is the shape the escalation exists for — a
+    regression ccdrift has already reported, deepening — and no other gate plants it."""
+    run = run_days(counts, day, PLANT_RUN + PLANT_WORSE)
+    planted = counts
+    for one in run[:PLANT_RUN]:
+        planted = plant(planted, one, share=share)
+    for one in run[PLANT_RUN:]:
+        planted = plant(planted, one, share=worse)
     return planted
 
 
@@ -177,6 +208,37 @@ def cut_rows(counts: pd.DataFrame, days: int) -> list[dict[str, Any]]:
                  room=PLANT_RUN - 1)
 
 
+def worse_rows(counts: pd.DataFrame, days: int) -> list[dict[str, Any]]:
+    """G13's grid, each setting judged on a run that gets worse partway. A setting catches
+    a plant only when the planted replay alerts both on a day of the run's first half and
+    on a day of its worse half that the unplanted history stayed quiet on: the regression
+    reported when it starts, and reported again when it deepens. It passes only if the flat
+    run of the same length still alerts exactly once — a rule that spoke every day of a flat
+    run would catch every escalation and tell the owner nothing."""
+    grid = [(floor, share) for floor in CUT_FLOOR_GRID for share in CUT_SHARE_GRID]
+    budget = ALERT_BUDGET * max(1, days / BUDGET_DAYS)
+    plants = plant_days(counts, room=PLANT_RUN + PLANT_WORSE - 1)
+    rows = []
+    for floor, share in grid:
+        def rule(c, state, today, floor=floor, share=share):
+            return cut_short(c, state, today, floor=floor, share=share)
+        alerts = replay(counts, rule)
+        caught = flat = 0
+        for day in plants:
+            run = run_days(counts, day, PLANT_RUN + PLANT_WORSE)
+            found = replay(plant_worse(counts, day), rule)
+            opened = [one for one in run[:PLANT_RUN] if one in found and one not in alerts]
+            again = [one for one in run[PLANT_RUN:] if one in found and one not in alerts]
+            caught += bool(opened and again)
+            steady = replay(plant_run(counts, day, OPEN_SHARE, PLANT_RUN + PLANT_WORSE), rule)
+            flat += len([one for one in run if one in steady and one not in alerts]) == 1
+        rows.append({"floor": floor, "share": share, "alerts": len(alerts), "days": days,
+                     "on": ", ".join(alerts), "caught": caught, "plants": len(plants), "flat": flat,
+                     "passes": bool(plants) and caught == len(plants) and flat == len(plants)
+                     and len(alerts) <= budget})
+    return rows
+
+
 def gate(rows: list[dict[str, Any]], chosen: dict[str, Any]) -> tuple[bool, list[str]]:
     """Whether the settings ccdrift ships pass, and what to say about them."""
     keys = [key for key in chosen]
@@ -220,15 +282,20 @@ def main(argv: list[str] | None = None) -> int:
           f"{int(counts['truncated'].sum() + counts['refused'].sum())} responses cut short")
     requests = request_rows(counts, days)
     cuts = cut_rows(counts, days)
+    worse = worse_rows(counts, days)
     for row in requests:
         print(f"{GATES['requests']} floor={row['floor']:<3} ratio={row['ratio']:<2} alerts={row['alerts']} "
               f"caught={row['caught']}/{row['plants']}  {row['on']}")
     for row in cuts:
         print(f"{GATES['cut']} floor={row['floor']:<3} share={row['share']:<6} alerts={row['alerts']} "
               f"caught={row['caught']}/{row['plants']}  {row['on']}")
+    for row in worse:
+        print(f"{GATES['worse']} floor={row['floor']:<3} share={row['share']:<6} alerts={row['alerts']} "
+              f"caught={row['caught']}/{row['plants']} flat-runs-said-once={row['flat']}/{row['plants']}")
     passed = True
     for name, rows, chosen in (("requests", requests, {"floor": REQUEST_FLOOR, "ratio": REQUEST_RATIO}),
-                               ("cut", cuts, {"floor": CUT_FLOOR, "share": CUT_SHARE})):
+                               ("cut", cuts, {"floor": CUT_FLOOR, "share": CUT_SHARE}),
+                               ("worse", worse, {"floor": CUT_FLOOR, "share": CUT_SHARE})):
         ok, notes = gate(rows, chosen)
         passed = passed and ok
         print(f"{GATES[name]}: {'PASS' if ok else 'FAIL'}")
