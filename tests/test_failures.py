@@ -495,6 +495,24 @@ def test_the_check_alerts_when_responses_are_cut_short(tmp_path, capsys):
             "(10.00%)") in capsys.readouterr().out
 
 
+def test_the_check_alerts_twice_when_a_run_escalates_and_the_escalation_survives_state(tmp_path, capsys):
+    # 2026-09-06 opens the run at 2.50% and is reported; 2026-09-07 triples it to 8.00%,
+    # which speaks again in the same check run, naming the level it escalated from.
+    failure_days(tmp_path / "logs", [{}] * 5 + [{"truncated": 5}, {"truncated": 16}], per_day=200)
+    save_state(tmp_path / "state.json", new_state())
+    assert run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 8),
+                     now=datetime(2026, 9, 8, 9, 0, tzinfo=timezone.utc), digest=False) == 0
+    out = capsys.readouterr().out
+    assert ("ccdrift: responses cut short: 5 of 200 main-thread responses stopped at the token limit on 2026-09-06 "
+            "(2.50%), against none on the days judged in the 14 before, on Claude Code 2.1.226") in out
+    assert ("ccdrift: responses cut short: 16 of 200 main-thread responses stopped at the token limit on 2026-09-07 "
+            "(8.00%), against the 2.50% reported on 2026-09-06, on Claude Code 2.1.226") in out
+    # The escalation episode round-trips through save_state/load_state as JSON, worse_than intact.
+    state = load_state(tmp_path / "state.json")
+    assert [(e["since"], e.get("worse_than")) for e in state["cut_short"]] == [
+        ("2026-09-06", None), ("2026-09-07", {"share": 0.025, "since": "2026-09-06"})]
+
+
 def test_a_quiet_history_alerts_about_nothing(tmp_path, capsys):
     failure_days(tmp_path / "logs", [{}] * 7)
     save_state(tmp_path / "state.json", new_state())
