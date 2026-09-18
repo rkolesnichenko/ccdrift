@@ -229,7 +229,7 @@ def worse_rows(counts: pd.DataFrame, days: int) -> list[dict[str, Any]]:
             found = replay(plant_worse(counts, day), rule)
             opened = [one for one in run[:PLANT_RUN] if one in found and one not in alerts]
             again = [one for one in run[PLANT_RUN:] if one in found and one not in alerts]
-            caught += bool(opened and again)
+            caught += len(opened) == 1 and len(again) == 1
             steady = replay(plant_run(counts, day, OPEN_SHARE, PLANT_RUN + PLANT_WORSE), rule)
             flat += len([one for one in run if one in steady and one not in alerts]) == 1
         rows.append({"floor": floor, "share": share, "alerts": len(alerts), "days": days,
