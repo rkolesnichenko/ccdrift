@@ -4,7 +4,7 @@ import pandas as pd
 
 from ccdrift.sessions import START_COLUMNS, context_changes_in, first_of_each, found_changes, ratio_starts
 from lab.context import (caught_per_project, every_alert_names_a_project, gate, plant, plant_days, plant_in,
-                         plantable_project, pooled_changes, replay, switch_history)
+                         plantable_project, pooled_changes, pooled_pass, replay, separable, switch_history)
 from tests.helpers import nth_day
 
 
@@ -66,17 +66,37 @@ def test_a_planted_step_in_one_project_is_invisible_to_the_pooled_pass_and_found
     assert replay(starts) == []
 
 
-def test_a_one_project_plant_the_pooled_rule_also_finds_is_not_credited():
-    # -a carries two sessions in three, at a higher level than -b, so halving it drags the
-    # pooled medians with it. The planted history alerts, but the alert is no evidence
-    # that the pass this plant exists for is what found it.
-    starts = starts_of([("-a", 100_000), ("-a", 100_000), ("-b", 60_000)] * 8)
+def corpus_history():
+    """One project holding all but one of the judged sessions, as the owner's logs do: -a
+    is 17 of 18, so a window of the pooled pass is made of -a's sessions whatever it is."""
+    return starts_of(([("-a", 100_000)] * 5 + [("-b", 60_000)]) * 4)
+
+
+def test_a_one_project_plant_the_pooled_pass_also_finds_is_not_credited():
+    # Halving a project that is the judged sessions halves the pooled ratios with it: the
+    # planted history alerts, and the pooled pass names the same day, so the alert is no
+    # evidence that the pass this plant exists for is what found it.
+    starts = corpus_history()
     quiet = replay(starts)
     assert replay(plant_in(starts, "2026-09-20", "-a")) == ["2026-09-20"]
-    assert pooled_changes(plant_in(starts, "2026-09-20", "-a")) == ["2026-09-20"]
+    assert "2026-09-20" in pooled_pass(plant_in(starts, "2026-09-20", "-a"))
     assert caught_per_project(starts, "2026-09-20", "-a", quiet) is False
-    # Planted three days earlier, the alert lands on a day pooling is silent on.
-    assert caught_per_project(starts, "2026-09-18", "-a", quiet) is True
+    # Where the planted project is half the judged sessions, the same plant is credited:
+    # the pooled pass stays quiet and only the per-project pass has the step.
+    balanced = starts_of([("-a", 100_000), ("-b", 100_000)] * 12)
+    assert "2026-09-18" not in pooled_pass(plant_in(balanced, "2026-09-18", "-b"))
+    assert caught_per_project(balanced, "2026-09-18", "-b", replay(balanced)) is True
+
+
+def test_a_history_where_one_project_is_the_corpus_cannot_answer_the_one_project_plant():
+    # The owner's shape. The gate says so and scores neither a catch nor a miss on it: the
+    # question needs a project that halving doesn't take the pooled set with it.
+    starts = corpus_history()
+    assert separable(starts, "-a") == (17, 18)
+    passed, notes = gate(starts)
+    assert passed, notes
+    assert notes[-1] == ("planted one-project steps: not measurable here — the project the plant lands in holds "
+                         "17 of 18 judged sessions, so halving it also halves the pooled set")
 
 
 def test_the_gate_passes_when_the_rule_is_quiet_on_a_switch_and_catches_both_planted_steps():
@@ -98,5 +118,5 @@ def test_a_history_too_thin_for_a_one_project_plant_says_so_rather_than_passing_
     assert [plantable_project(starts, day) for day in plant_days(starts)] == [None] * 5
     passed, notes = gate(starts)
     assert passed, notes
-    assert notes[-1] == ("planted one-project steps caught by the per-project pass: not measurable here — no "
-                         "project has 8 sessions before a plantable day and 3 from it on")
+    assert notes[-1] == ("planted one-project steps: not measurable here — no project has 8 sessions before a "
+                         "plantable day and 3 from it on")

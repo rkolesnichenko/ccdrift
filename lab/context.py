@@ -21,10 +21,19 @@ by PLANT_FACTOR — is the shape a Claude Code change takes, and the pooled pass
 its own. A step in one project, the shape its own CLAUDE.md, skills or MCP servers take, is
 diluted by the other projects' sessions and only the per-project pass sees it; planting
 only the first shape would leave that half of the rule — the half both fixed Criticals of
-this build were about — unexercised. The one-project plant is credited only when the pooled
-rule is quiet on the day it was caught as well: where the planted project holds most of the
-judged sessions, halving it moves the pooled medians too, and an alert alone would not say
-which pass found it.
+this build were about — unexercised.
+
+The one-project plant asks an answerable question only where the project it lands in is a
+minority of the judged sessions: a project holding more than half of them *is* the pooled
+set, so halving it halves the pooled ratios too and no credit rule can say which pass found
+the step. Where that holds, the plant is credited only when the pooled pass —
+`context_changes_in` over every judged session's ratio, the half `found_changes` contrasts
+with — is silent on the day the alert lands. Where it does not, and where no project has
+the sessions to carry a plant at all, the gate prints "not measurable here" with the reason
+and neither passes nor fails on it: a missing number is a question this history couldn't
+put, never a silent pass. The owner's logs are such a history — one project holds 19 of the
+20 judged sessions — so what pins the per-project pass there is `lab/test_context.py`'s
+balanced two-project history, where halving one project moves no pooled median.
 
 Run from the repo root:
 
@@ -104,14 +113,32 @@ def plantable_project(starts: pd.DataFrame, day: str) -> str | None:
     return max(enough)[1] if enough else None
 
 
+def pooled_pass(starts: pd.DataFrame) -> set[str]:
+    """The days the pooled half of `found_changes` starts a change on: the detector over
+    the ratios of every judged session together. This, not `pooled_changes`, is the half
+    the per-project pass is contrasted with — `pooled_changes` is the pre-0.8.0 rule over
+    raw token counts, and a day can clear that one merely because the two rules date the
+    same step a day apart. Every window counts, not just the first of each step: a step the
+    pooled pass finds on any window is one it can see."""
+    return {change.since for change in context_changes_in(ratio_starts(starts))}
+
+
+def separable(starts: pd.DataFrame, project: str) -> tuple[int, int]:
+    """How many of the judged sessions belong to `project`, and how many there are. A
+    project holding more than half of them is the pooled set: halving it halves the pooled
+    ratios too, so no credit rule can tell the two passes apart on that history, and the
+    question the one-project plant asks can't be put there at all."""
+    judged = ratio_starts(starts)
+    return int((judged["project"].astype(str) == str(project)).sum()), len(judged)
+
+
 def caught_per_project(starts: pd.DataFrame, day: str, project: str, quiet: list[str]) -> bool:
     """Whether a step planted in `project` alone on `day` is caught by the pass that exists
     for it: the planted history alerts on a day the unplanted one (`quiet`) didn't, and the
-    pooled rule stays silent on that day. Without the second half the line would credit the
-    per-project pass for a step that pooling found because the planted project happens to
-    carry most of the judged sessions."""
+    pooled pass is silent on that day. Without the second half the line would credit the
+    per-project pass for a step the pooled pass found on its own."""
     planted = plant_in(starts, day, project)
-    pooled = pooled_changes(planted)
+    pooled = pooled_pass(planted)
     return any(one not in quiet and one not in pooled for one in replay(planted))
 
 
@@ -203,22 +230,31 @@ def gate(starts: pd.DataFrame) -> tuple[bool, list[str]]:
                  + (f"; skipped {', '.join(skipped)}, where the logs already report a change" if skipped else ""))
 
     # The same days, stepped in one project only: the half of the rule the pooled pass
-    # can't answer for. Where that project holds most of the judged rows, halving it moves
-    # the pooled medians as well, so an alert alone proves nothing about which pass found
-    # it: the plant is credited only where pooling stays quiet on the day too.
+    # can't answer for. It only answers it where that project is a minority of the judged
+    # sessions and the pooled pass stays quiet on the day the alert lands; where neither
+    # holds, the gate says the question couldn't be put rather than scoring it.
     in_one = [(day, plantable_project(starts, day)) for day in plants]
     one_project = [(day, project) for day, project in in_one if project]
-    caught_one = sum(1 for day, project in one_project if caught_per_project(starts, day, project, quiet))
-    if one_project:
-        notes.append(f"planted one-project steps caught by the per-project pass: {caught_one} of "
-                     f"{len(one_project)} (planted in "
-                     + ", ".join(f"{project_path(project)} on {day}" for day, project in one_project) + ")")
-    else:
-        notes.append("planted one-project steps caught by the per-project pass: not measurable here — no project "
-                     f"has {MIN_PROJECT_SESSIONS + MIN_BASELINE} sessions before a plantable day and {WINDOW} "
+    shares = {project: separable(starts, project) for _, project in one_project}
+    corpus = [(project, mine, judged) for project, (mine, judged) in shares.items() if 2 * mine > judged]
+    if not one_project:
+        notes.append("planted one-project steps: not measurable here — no project has "
+                     f"{MIN_PROJECT_SESSIONS + MIN_BASELINE} sessions before a plantable day and {WINDOW} "
                      "from it on")
+        caught_one = measurable = 0
+    elif corpus:
+        _, mine, judged = corpus[0]
+        notes.append("planted one-project steps: not measurable here — the project the plant lands in holds "
+                     f"{mine} of {judged} judged sessions, so halving it also halves the pooled set")
+        caught_one = measurable = 0
+    else:
+        measurable = len(one_project)
+        caught_one = sum(1 for day, project in one_project if caught_per_project(starts, day, project, quiet))
+        notes.append(f"planted one-project steps caught by the per-project pass: {caught_one} of {measurable} "
+                     "(planted in "
+                     + ", ".join(f"{project_path(project)} on {day}" for day, project in one_project) + ")")
     passed = (not switch_alerts and sound and bool(plants) and caught == len(plants)
-              and caught_one == len(one_project))
+              and caught_one == measurable)
     return passed, notes
 
 
