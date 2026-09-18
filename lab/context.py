@@ -28,12 +28,16 @@ minority of the judged sessions: a project holding more than half of them *is* t
 set, so halving it halves the pooled ratios too and no credit rule can say which pass found
 the step. Where that holds, the plant is credited only when the pooled pass —
 `context_changes_in` over every judged session's ratio, the half `found_changes` contrasts
-with — is silent on the day the alert lands. Where it does not, and where no project has
-the sessions to carry a plant at all, the gate prints "not measurable here" with the reason
-and neither passes nor fails on it: a missing number is a question this history couldn't
-put, never a silent pass. The owner's logs are such a history — one project holds 19 of the
-20 judged sessions — so what pins the per-project pass there is `lab/test_context.py`'s
-balanced two-project history, where halving one project moves no pooled median.
+with — is silent on the day the alert lands. Each plant day is judged on its own, since
+each picks its own project and they need not be the same one: the days landing in a
+minority project are scored, and any others are reported beside them as not measurable.
+Where no plant is measurable, or no project has the sessions to carry one at all, the
+gate prints "not measurable here" with the reason and neither passes nor fails on it: a
+missing number is a question this history couldn't put, never a silent pass, and a
+screened-out plant never helps the gate pass. The owner's logs are such a history — one
+project holds 19 of the 20 judged sessions — so what pins the per-project pass there is
+`lab/test_context.py`'s balanced two-project history, where halving one project moves no
+pooled median.
 
 Run from the repo root:
 
@@ -233,28 +237,31 @@ def gate(starts: pd.DataFrame) -> tuple[bool, list[str]]:
     # can't answer for. It only answers it where that project is a minority of the judged
     # sessions and the pooled pass stays quiet on the day the alert lands; where neither
     # holds, the gate says the question couldn't be put rather than scoring it.
+    # Each day picks its own project, so the screen is per plant, not per run: one day
+    # landing in a project that is the judged sessions says nothing about another day that
+    # lands in a minority one, and throwing that day away would let the gate pass on a
+    # claim it never measured.
     in_one = [(day, plantable_project(starts, day)) for day in plants]
     one_project = [(day, project) for day, project in in_one if project]
     shares = {project: separable(starts, project) for _, project in one_project}
-    corpus = [(project, mine, judged) for project, (mine, judged) in shares.items() if 2 * mine > judged]
-    if not one_project:
+    measurable = [(day, project) for day, project in one_project if 2 * shares[project][0] <= shares[project][1]]
+    screened = [(day, project) for day, project in one_project if 2 * shares[project][0] > shares[project][1]]
+    corpus = f"the project the plant lands in holds {shares[screened[0][1]][0]} of {shares[screened[0][1]][1]} " \
+             "judged sessions, so halving it also halves the pooled set" if screened else ""
+    caught_one = sum(1 for day, project in measurable if caught_per_project(starts, day, project, quiet))
+    if measurable:
+        notes.append(f"planted one-project steps caught by the per-project pass: {caught_one} of "
+                     f"{len(measurable)} (planted in "
+                     + ", ".join(f"{project_path(project)} on {day}" for day, project in measurable) + ")"
+                     + (f"; {len(screened)} more not measurable: {corpus}" if screened else ""))
+    elif screened:
+        notes.append(f"planted one-project steps: not measurable here — {corpus}")
+    else:
         notes.append("planted one-project steps: not measurable here — no project has "
                      f"{MIN_PROJECT_SESSIONS + MIN_BASELINE} sessions before a plantable day and {WINDOW} "
                      "from it on")
-        caught_one = measurable = 0
-    elif corpus:
-        _, mine, judged = corpus[0]
-        notes.append("planted one-project steps: not measurable here — the project the plant lands in holds "
-                     f"{mine} of {judged} judged sessions, so halving it also halves the pooled set")
-        caught_one = measurable = 0
-    else:
-        measurable = len(one_project)
-        caught_one = sum(1 for day, project in one_project if caught_per_project(starts, day, project, quiet))
-        notes.append(f"planted one-project steps caught by the per-project pass: {caught_one} of {measurable} "
-                     "(planted in "
-                     + ", ".join(f"{project_path(project)} on {day}" for day, project in one_project) + ")")
     passed = (not switch_alerts and sound and bool(plants) and caught == len(plants)
-              and caught_one == measurable)
+              and caught_one == len(measurable))
     return passed, notes
 
 

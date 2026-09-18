@@ -88,6 +88,24 @@ def test_a_one_project_plant_the_pooled_pass_also_finds_is_not_credited():
     assert caught_per_project(balanced, "2026-09-18", "-b", replay(balanced)) is True
 
 
+def test_a_plant_in_a_minority_project_is_scored_even_when_another_days_project_is_the_corpus():
+    # -a runs out of sessions partway through the plant days, so the first two land in it
+    # (16 of 24 judged: unanswerable) and the last three land in -b (8 of 24: answerable).
+    # -b's plants are all missed — its sessions are the only ones left at the end, so the
+    # pooled pass names the same day — and the gate must say 0 of 3 and fail, not throw
+    # the three answerable days away on the strength of the two that aren't.
+    starts = starts_of([("-a", 100_000)] * 14 + [("-b", 100_000)] * 8 + [("-a", 100_000)] * 5
+                       + [("-b", 100_000)] * 3)
+    assert (separable(starts, "-a"), separable(starts, "-b")) == ((16, 24), (8, 24))
+    assert [plantable_project(starts, day) for day in plant_days(starts)] == ["-a", "-a", "-b", "-b", "-b"]
+    passed, notes = gate(starts)
+    assert notes[-1] == ("planted one-project steps caught by the per-project pass: 0 of 3 (planted in "
+                         "/b on 2026-09-26, /b on 2026-09-27, /b on 2026-09-28); 2 more not measurable: the "
+                         "project the plant lands in holds 16 of 24 judged sessions, so halving it also halves "
+                         "the pooled set")
+    assert passed is False
+
+
 def test_a_history_where_one_project_is_the_corpus_cannot_answer_the_one_project_plant():
     # The owner's shape. The gate says so and scores neither a catch nor a miss on it: the
     # question needs a project that halving doesn't take the pooled set with it.
