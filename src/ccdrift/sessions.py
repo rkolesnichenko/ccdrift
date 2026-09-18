@@ -7,7 +7,7 @@ from __future__ import annotations
 import statistics
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence
 
 import pandas as pd
 
@@ -97,7 +97,9 @@ class ContextChange:
     frame the change was found in, which is not always the judged table: `found_changes`
     runs the detector over all the judged sessions and over each project's own rows, and
     returns changes from several frames together, so a change's positions mean nothing
-    outside the frame it came from. Read its days instead."""
+    outside the frame it came from. `project` names that frame — the project whose own
+    sessions the step was found in, or None when it came from the pass over all of them —
+    so a reader can find the step's own sessions without its positions."""
     since: str
     until: str
     before: float
@@ -107,6 +109,7 @@ class ContextChange:
     # Whether a Claude Code version ran in the window that none of the baseline sessions
     # ran: the same test lab/session_start.py's G2 gate asks of a step.
     new_version: bool = False
+    project: Optional[str] = None
 
     @property
     def up(self) -> bool:
@@ -197,12 +200,15 @@ def project_lines(summary: list[dict[str, Any]]) -> list[str]:
 def found_changes(judged: pd.DataFrame) -> list[ContextChange]:
     """Steps in the judged sessions: over all of them together, which is where a change
     that reaches every project shows, and over each project's own sessions, where a change
-    in one project of several would otherwise be diluted by the others. Sorted by the day
-    they start; `first_of_each` drops the same step found twice."""
+    in one project of several would otherwise be diluted by the others. A change from the
+    second pass carries the project it was found in. Sorted by the day they start;
+    `first_of_each` drops the same step found twice."""
     changes = list(context_changes_in(judged))
     if not judged.empty:
-        for _, rows in judged.groupby(judged["project"].astype(str), sort=True):
-            changes += context_changes_in(rows.reset_index(drop=True))
+        for project, rows in judged.groupby(judged["project"].astype(str), sort=True):
+            for change in context_changes_in(rows.reset_index(drop=True)):
+                change.project = str(project)
+                changes.append(change)
     return sorted(changes, key=lambda change: (change.since, change.until))
 
 

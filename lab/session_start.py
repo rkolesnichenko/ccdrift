@@ -46,12 +46,15 @@ def version_table(starts: pd.DataFrame) -> pd.DataFrame:
 
 
 def step_versions(judged: pd.DataFrame, change: ContextChange) -> list[str]:
-    """The versions the sessions of a step's own days ran, read back from the days: a
-    change from the per-project pass carries row positions in that project's frame, which
-    mean nothing in the judged table."""
+    """The versions a step's own sessions ran: the days it spans, and — when it was found
+    in one project's own rows — that project alone. Its row positions can't be used, since
+    they index the frame it was found in rather than the judged table, and its days alone
+    would credit it with every other project's versions on them."""
     days = judged["day"].astype(str)
-    on = judged.loc[(days >= change.since) & (days <= change.until), "version"]
-    return sorted(set(on.fillna("unknown").astype(str)))
+    rows = judged[(days >= change.since) & (days <= change.until)]
+    if change.project is not None:
+        rows = rows[rows["project"].astype(str) == change.project]
+    return sorted(set(rows["version"].fillna("unknown").astype(str)))
 
 
 def gate(starts: pd.DataFrame) -> tuple[bool, list[str]]:

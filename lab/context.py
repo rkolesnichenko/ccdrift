@@ -21,7 +21,10 @@ by PLANT_FACTOR — is the shape a Claude Code change takes, and the pooled pass
 its own. A step in one project, the shape its own CLAUDE.md, skills or MCP servers take, is
 diluted by the other projects' sessions and only the per-project pass sees it; planting
 only the first shape would leave that half of the rule — the half both fixed Criticals of
-this build were about — unexercised.
+this build were about — unexercised. The one-project plant is credited only when the pooled
+rule is quiet on the day it was caught as well: where the planted project holds most of the
+judged sessions, halving it moves the pooled medians too, and an alert alone would not say
+which pass found it.
 
 Run from the repo root:
 
@@ -99,6 +102,17 @@ def plantable_project(starts: pd.DataFrame, day: str) -> str | None:
                 and int((on_days >= str(day)).sum()) >= WINDOW):
             enough.append((len(rows), str(project)))
     return max(enough)[1] if enough else None
+
+
+def caught_per_project(starts: pd.DataFrame, day: str, project: str, quiet: list[str]) -> bool:
+    """Whether a step planted in `project` alone on `day` is caught by the pass that exists
+    for it: the planted history alerts on a day the unplanted one (`quiet`) didn't, and the
+    pooled rule stays silent on that day. Without the second half the line would credit the
+    per-project pass for a step that pooling found because the planted project happens to
+    carry most of the judged sessions."""
+    planted = plant_in(starts, day, project)
+    pooled = pooled_changes(planted)
+    return any(one not in quiet and one not in pooled for one in replay(planted))
 
 
 def plant_days(starts: pd.DataFrame, how_many: int = PLANT_DAYS) -> list[str]:
@@ -189,17 +203,20 @@ def gate(starts: pd.DataFrame) -> tuple[bool, list[str]]:
                  + (f"; skipped {', '.join(skipped)}, where the logs already report a change" if skipped else ""))
 
     # The same days, stepped in one project only: the half of the rule the pooled pass
-    # can't answer for.
+    # can't answer for. Where that project holds most of the judged rows, halving it moves
+    # the pooled medians as well, so an alert alone proves nothing about which pass found
+    # it: the plant is credited only where pooling stays quiet on the day too.
     in_one = [(day, plantable_project(starts, day)) for day in plants]
     one_project = [(day, project) for day, project in in_one if project]
-    caught_one = sum(1 for day, project in one_project
-                     if any(one not in quiet for one in replay(plant_in(starts, day, project))))
+    caught_one = sum(1 for day, project in one_project if caught_per_project(starts, day, project, quiet))
     if one_project:
-        notes.append(f"planted one-project steps caught: {caught_one} of {len(one_project)} (planted in "
+        notes.append(f"planted one-project steps caught by the per-project pass: {caught_one} of "
+                     f"{len(one_project)} (planted in "
                      + ", ".join(f"{project_path(project)} on {day}" for day, project in one_project) + ")")
     else:
-        notes.append("planted one-project steps caught: not measurable here — no project has "
-                     f"{MIN_PROJECT_SESSIONS + MIN_BASELINE} sessions before a plantable day and {WINDOW} from it on")
+        notes.append("planted one-project steps caught by the per-project pass: not measurable here — no project "
+                     f"has {MIN_PROJECT_SESSIONS + MIN_BASELINE} sessions before a plantable day and {WINDOW} "
+                     "from it on")
     passed = (not switch_alerts and sound and bool(plants) and caught == len(plants)
               and caught_one == len(one_project))
     return passed, notes

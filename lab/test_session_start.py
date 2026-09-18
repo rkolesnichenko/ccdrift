@@ -2,9 +2,9 @@
 
 import pandas as pd
 
-from ccdrift.sessions import context_changes_in, first_of_each, ratio_starts
+from ccdrift.sessions import context_changes_in, first_of_each, found_changes, ratio_starts
 from lab.harness import generate_synthetic
-from lab.session_start import gate, main, version_table
+from lab.session_start import gate, main, step_versions, version_table
 from tests.helpers import nth_day
 
 
@@ -58,6 +58,24 @@ def test_the_gate_reads_the_steps_the_shipped_rule_finds_not_the_pooled_pass_alo
     assert first_of_each(context_changes_in(ratio_starts(starts))) == []
     _, notes = gate(starts)
     assert notes[1] == "steps found: 1; with a version new to their baseline: 0"
+
+
+def test_a_step_is_reported_with_its_own_projects_versions_only():
+    # -a steps on 2.1.267 while -b runs 9.9.9 throughout, untouched. Reading the step's
+    # days across the judged table would credit it with 9.9.9, which no session of the
+    # step ever ran.
+    rows = [("-a", 128_000), ("-a", 128_000), ("-b", 60_000)] * 4 + [("-a", 54_000), ("-a", 54_000),
+                                                                     ("-b", 60_000)] * 3
+    starts = projects_of(rows).assign(
+        version=["2.1.261" if project == "-a" else "9.9.9" for project, _ in rows[:12]]
+        + ["2.1.267" if project == "-a" else "9.9.9" for project, _ in rows[12:]])
+    judged = ratio_starts(starts)
+    steps = first_of_each(found_changes(judged))
+    assert [(c.since, c.until, c.project) for c in steps] == [("2026-09-13", "2026-09-16", "-a")]
+    days = judged["day"].astype(str)
+    on_the_days = judged[(days >= steps[0].since) & (days <= steps[0].until)]
+    assert sorted(set(on_the_days["version"])) == ["2.1.267", "9.9.9"]
+    assert step_versions(judged, steps[0]) == ["2.1.267"]
 
 
 def test_gate_fails_when_a_version_varies_too_much():

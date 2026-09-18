@@ -160,6 +160,20 @@ def test_a_session_is_judged_against_its_own_projects_earlier_level(tmp_path):
     assert (judged["level"].iloc[0], round(float(judged["ratio"].iloc[0]), 2)) == (100_000.0, 1.2)
 
 
+def test_a_change_names_the_project_its_own_pass_found_it_in(tmp_path):
+    # The positions a change carries index the frame it was found in, so the project is
+    # the only way back to its own sessions: None for the pass over all of them.
+    sessions(tmp_path, "-a", [128_000] * 8)
+    sessions(tmp_path, "-b", [64_000] * 8)
+    sessions(tmp_path, "-a", [64_000] * 3, first_day=8)
+    sessions(tmp_path, "-b", [32_000] * 3, first_day=8)
+    changes = found_changes(ratio_starts(starts_in(tmp_path)))
+    # The pooled pass has both projects' rows, so it re-finds the step on a second window;
+    # `first_of_each` collapses them. Each project's own pass finds it once, under its name.
+    assert sorted({(c.since, c.project or "all") for c in changes}) == [
+        ("2026-09-09", "-a"), ("2026-09-09", "-b"), ("2026-09-09", "all"), ("2026-09-10", "all")]
+
+
 def test_moving_to_a_smaller_project_is_not_a_change(tmp_path):
     # The owner's own history in miniature: one project steady, then work moves to a new
     # one that starts smaller. Pooled, this reads as context halving; per project, nothing

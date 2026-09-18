@@ -3,8 +3,8 @@
 import pandas as pd
 
 from ccdrift.sessions import START_COLUMNS, context_changes_in, first_of_each, found_changes, ratio_starts
-from lab.context import (every_alert_names_a_project, gate, plant, plant_days, plant_in, plantable_project,
-                         pooled_changes, replay, switch_history)
+from lab.context import (caught_per_project, every_alert_names_a_project, gate, plant, plant_days, plant_in,
+                         plantable_project, pooled_changes, replay, switch_history)
 from tests.helpers import nth_day
 
 
@@ -66,14 +66,29 @@ def test_a_planted_step_in_one_project_is_invisible_to_the_pooled_pass_and_found
     assert replay(starts) == []
 
 
-def test_the_gate_passes_when_the_rule_is_quiet_on_a_switch_and_catches_both_planted_steps():
+def test_a_one_project_plant_the_pooled_rule_also_finds_is_not_credited():
+    # -a carries two sessions in three, at a higher level than -b, so halving it drags the
+    # pooled medians with it. The planted history alerts, but the alert is no evidence
+    # that the pass this plant exists for is what found it.
     starts = starts_of([("-a", 100_000), ("-a", 100_000), ("-b", 60_000)] * 8)
+    quiet = replay(starts)
+    assert replay(plant_in(starts, "2026-09-20", "-a")) == ["2026-09-20"]
+    assert pooled_changes(plant_in(starts, "2026-09-20", "-a")) == ["2026-09-20"]
+    assert caught_per_project(starts, "2026-09-20", "-a", quiet) is False
+    # Planted three days earlier, the alert lands on a day pooling is silent on.
+    assert caught_per_project(starts, "2026-09-18", "-a", quiet) is True
+
+
+def test_the_gate_passes_when_the_rule_is_quiet_on_a_switch_and_catches_both_planted_steps():
+    # Both projects start at the same size, so halving one moves no pooled median: every
+    # one-project plant that is caught here is caught by the per-project pass.
+    starts = starts_of([("-a", 100_000), ("-b", 100_000)] * 12)
     passed, notes = gate(starts)
     assert passed, notes
     assert [note for note in notes if note.startswith("planted")] == [
         "planted steps caught: 5 of 5 (planted on 2026-09-18, 2026-09-19, 2026-09-20, 2026-09-21, 2026-09-22)",
-        "planted one-project steps caught: 3 of 3 (planted in /a on 2026-09-18, /a on 2026-09-19, "
-        "/a on 2026-09-20)"]
+        "planted one-project steps caught by the per-project pass: 3 of 3 (planted in /b on 2026-09-18, "
+        "/b on 2026-09-19, /b on 2026-09-20)"]
 
 
 def test_a_history_too_thin_for_a_one_project_plant_says_so_rather_than_passing_silently():
@@ -83,5 +98,5 @@ def test_a_history_too_thin_for_a_one_project_plant_says_so_rather_than_passing_
     assert [plantable_project(starts, day) for day in plant_days(starts)] == [None] * 5
     passed, notes = gate(starts)
     assert passed, notes
-    assert notes[-1] == ("planted one-project steps caught: not measurable here — no project has 8 sessions "
-                         "before a plantable day and 3 from it on")
+    assert notes[-1] == ("planted one-project steps caught by the per-project pass: not measurable here — no "
+                         "project has 8 sessions before a plantable day and 3 from it on")
