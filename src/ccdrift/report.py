@@ -21,7 +21,7 @@ from ccdrift.hooks import hooks_lines, hooks_summary, judged_hook_runs
 from ccdrift.incidents import exclusions, incident_cost
 from ccdrift.logs import judged_subagent_turns, judged_turns, no_transcripts_message, outside_sdk
 from ccdrift.loops import COUNT_COLUMNS, loop_counts
-from ccdrift.sessions import MIN_SESSIONS, session_starts
+from ccdrift.sessions import MIN_SESSIONS, project_lines, project_summary, session_starts
 from ccdrift.settings import settings_lines, settings_summary, subagent_lines, subagent_summary
 from ccdrift.state import load_state
 from ccdrift.texts import INCIDENT_METRICS, SHORT_NAMES, approx, incident_line, version_key
@@ -260,7 +260,10 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
         hooks = hooks_summary(judged_hook_runs(tables.hook_runs, today), window)
         subagents = subagent_summary(judged_subagent_turns(df, today), window)
         fails = failure_summary(failure_counts(judged_failures(tables.failures, today), turns), window)
-        extra_lines = hooks_lines(hooks) + subagent_lines(subagents) + failure_lines(fails)
+        projects = project_summary(starts, window)
+        extra_lines = hooks_lines(hooks) + subagent_lines(subagents) + failure_lines(fails) + project_lines(projects)
+        # The day view names the project folders; --json keeps its promise of holding no
+        # paths, so the projects stay out of it.
         extra_json = {"hooks": hooks, "subagents": subagents, "failures": fails}
     summary = settings_summary(turns, window)
     if as_json:

@@ -15,7 +15,8 @@ from tests.helpers import (DAY, HAIKU, QUIET, at, busy_days, compact_boundary, d
 
 
 def test_report_lists_recent_days_with_their_metrics(tmp_path, capsys):
-    busy_days(tmp_path / "logs", days=3, per_day=60, cache_read=900, cache_creation=100)
+    # Under a project folder, as Claude Code writes them, so the report can name it.
+    busy_days(tmp_path / "logs" / "-Users-me-app", days=3, per_day=60, cache_read=900, cache_creation=100)
     assert run_report(tmp_path / "logs", tmp_path / "state.json", days=2, today=date(2026, 9, 4)) == 0
     assert capsys.readouterr().out.splitlines() == [
         "Last 2 complete UTC days with main-thread activity.",
@@ -30,6 +31,8 @@ def test_report_lists_recent_days_with_their_metrics(tmp_path, capsys):
         "",
         "Settings on the CLI main thread over these days (share of responses):",
         "  claude-opus-5: effort not logged 100%; speed not logged 100%; service tier not logged 100%",
+        "",
+        "Session starts by project over these days: /Users/me/app ~1k (2 sessions)",
     ]
 
 
