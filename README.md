@@ -107,10 +107,12 @@ set this in `~/.claude/settings.json`:
 | **ccdrift: weekly summary** | Monday's one-line summary of the week before. | Nothing. `--no-digest` turns it off. |
 | **ccdrift check failed** | The check itself stopped with an error. | `~/.ccdrift/check.log` has the details. |
 
-Each alert is sent once. A failing check is logged on every run and notifies at most
-once in 20 hours. Claude Code's documentation says the transcript format "is internal to
-Claude Code and changes between versions, so scripts that parse these files directly
-can break on any release", which is why the cache-metric alert exists.
+Each alert is sent once, except responses cut short: a run that deepens to 3 times the
+share last reported is sent again, naming the level it escalated from. A failing check is
+logged on every run and notifies at most once in 20 hours. Claude Code's documentation
+says the transcript format "is internal to Claude Code and changes between versions, so
+scripts that parse these files directly can break on any release", which is why the
+cache-metric alert exists.
 
 ## Incidents
 
