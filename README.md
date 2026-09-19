@@ -31,7 +31,7 @@ folder that holds the transcripts: `~/.claude/cache/changelog.md`, or
 
 It can't tell you whether responses think less: in one person's logs, effort swings
 more from day to day than a 70% cut in thinking moves it. See
-[docs/findings.md](docs/findings.md).
+[docs/findings.md](https://github.com/rkolesnichenko/ccdrift/blob/main/docs/findings.md).
 
 Everything stays on your machine. ccdrift reads the transcripts and keeps a state
 file, a log, its own history of responses and, once a failing check has notified you,
@@ -47,10 +47,13 @@ nothing anywhere, unless you give it a command to run with `--exec`.
 Needs Python 3.10 or newer.
 
 ```sh
-uv tool install git+https://github.com/rkolesnichenko/ccdrift
+uv tool install ccdrift
 # or
-pipx install git+https://github.com/rkolesnichenko/ccdrift
+pipx install ccdrift
 ```
+
+For the code that hasn't been released yet, install from the repository instead:
+`uv tool install git+https://github.com/rkolesnichenko/ccdrift`.
 
 Then schedule the check:
 
@@ -236,12 +239,12 @@ recovered incidents, using their median and spread, with the spread floored at
 sampling noise. A day is deviant past z = −3.0 for the cache ratio or z = +3.5 for
 Haiku share, and a metric is flagged once 3 of any 4 days in a row are deviant. These
 defaults were tuned on one person's logs; the research harness in
-[lab/](lab/README.md) measures how small a change they catch on yours.
+[lab/](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/README.md) measures how small a change they catch on yours.
 
 Every run also follows new-prompt turns one by one with a likelihood-ratio CUSUM that
 tests the usual miss rate of the 14 days before the last week against 5%, the August
 regression's rate. It warns when the sum passes h = 4 (measured in
-[lab/early_warning.py](lab/early_warning.py)) within the last day, at most once a
+[lab/early_warning.py](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/early_warning.py)) within the last day, at most once a
 week, and not while a cache incident is open. It needs 200 or more new-prompt turns in
 those 14 days, so it stays quiet for the first three weeks or so of history.
 
@@ -252,7 +255,7 @@ misses the cache when it reads less than half of what that response had cached.
 Every run follows these turns one by one on the main thread and in subagents, each
 apart, with the same kind of CUSUM against the usual miss rate of the 14 days before the
 last week (at least 1,000 turns): on the main thread against 2% with h = 3, and in
-subagents against 5% with h = 5 (measured in [lab/loop_cache.py](lab/loop_cache.py)). It
+subagents against 5% with h = 5 (measured in [lab/loop_cache.py](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/loop_cache.py)). It
 warns when the sum passes h within the last day, at most once a week per stream, and
 also while a cache incident is open.
 
