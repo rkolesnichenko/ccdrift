@@ -196,9 +196,17 @@ class Launchd:
     def status(self) -> list[str]:
         if not self.plist.exists():
             return ["not installed"]
-        job = plistlib.loads(self.plist.read_bytes())
-        when = job.get("StartCalendarInterval")
-        schedule = f"daily at {when['Hour']:02d}:{when['Minute']:02d}" if when else "every hour"
+        # The plist is ccdrift's own, but a half-written or hand-edited one must read as a
+        # status rather than as a traceback: `status` is what someone runs to find out why
+        # the job is misbehaving.
+        try:
+            job = plistlib.loads(self.plist.read_bytes())
+        except (OSError, ValueError, plistlib.InvalidFileException) as exc:
+            raise ScheduleError(f"{self.plist} isn't a readable plist: {exc}. "
+                                "Run `ccdrift schedule install` again.") from exc
+        when = job.get("StartCalendarInterval") or {}
+        schedule = (f"daily at {when.get('Hour', 0):02d}:{when.get('Minute', 0):02d}" if when
+                    else "every hour")
         lines = [f"installed: launchd agent {LAUNCHD_LABEL}, {schedule}"]
         printed = self.run(["launchctl", "print", self.service])
         if printed.returncode != 0:
@@ -207,7 +215,8 @@ class Launchd:
             found = re.search(rf"^\s*{key} = (.+)$", printed.stdout or "", re.MULTILINE)
             if found:
                 lines.append(f"{key}: {found.group(1).strip()}")
-        lines.append(last_log_line(Path(job["StandardOutPath"])))
+        log = job.get("StandardOutPath")
+        lines.append(last_log_line(Path(log)) if log else "log: the agent names no log file")
         return lines
 
 
@@ -331,6 +340,22 @@ def cron_line(job: Job) -> str:
     return f"{timing} {command} >> {log} 2>&1 {CRON_MARKER}"
 
 
+def _cron_schedule(line: str) -> str:
+    """How a crontab line reads as a schedule. ccdrift writes `0 * * * *` or `M H * * *`,
+    but the crontab is the user's, and a line they edited into a range or a step is still
+    ccdrift's job: it is described as unreadable rather than crashing the status."""
+    fields = line.split()
+    if len(fields) < 2:
+        return "an unreadable schedule"
+    minute, hour = fields[0], fields[1]
+    if hour == "*":
+        return "every hour" if minute == "0" else f"every hour at minute {minute}"
+    try:
+        return f"daily at {int(hour):02d}:{int(minute):02d}"
+    except ValueError:
+        return f"on the schedule `{' '.join(fields[:5])}`"
+
+
 def _spawn(argv: list[str], log: Path) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("a") as out:
@@ -393,9 +418,7 @@ class Cron:
         ours = [line for line in self._lines() if self._ours(line)]
         if not ours:
             return ["not installed"]
-        minute, hour = ours[0].split()[:2]
-        schedule = "every hour" if hour == "*" else f"daily at {int(hour):02d}:{int(minute):02d}"
-        lines = [f"installed: crontab line, {schedule}",
+        lines = [f"installed: crontab line, {_cron_schedule(ours[0])}",
                  "cron keeps no run history; the log shows each run"]
         # The line ends `>> LOG 2>&1 # ccdrift check`; an --exec command can hold `>> ` too.
         try:

@@ -160,6 +160,25 @@ def test_launchd_status_says_when_nothing_is_installed(tmp_path):
     assert backend.status() == ["not installed"]
 
 
+def test_launchd_status_says_so_when_the_plist_cant_be_read(tmp_path):
+    """`status` is what someone runs to find out why the job is misbehaving, so a plist
+    that is half-written or was edited by hand must read as a status, not a traceback."""
+    run, backend = launchd(tmp_path)
+    backend.plist.parent.mkdir(parents=True)
+    backend.plist.write_text("not a plist")
+    with pytest.raises(ScheduleError, match="isn't a readable plist"):
+        backend.status()
+
+
+def test_launchd_status_reads_a_plist_that_names_no_log(tmp_path):
+    run, backend = launchd(tmp_path)
+    backend.plist.parent.mkdir(parents=True)
+    backend.plist.write_bytes(plistlib.dumps({"Label": "io.github.rkolesnichenko.ccdrift",
+                                              "StartCalendarInterval": {"Hour": 9}}))
+    assert backend.status()[0].endswith("daily at 09:00")
+    assert backend.status()[-1] == "log: the agent names no log file"
+
+
 def test_install_creates_the_log_folder_and_sends_a_test_notification(tmp_path):
     run, backend = launchd(tmp_path)
     sent = []
@@ -452,6 +471,16 @@ def test_cron_status_shows_the_time_and_the_last_log_line(tmp_path):
         "cron keeps no run history; the log shows each run",
         "last log line: [check 2026-09-16 09:00] no new flags",
     ]
+
+
+def test_cron_status_describes_a_line_edited_into_a_schedule_it_didnt_write():
+    """The crontab is the user's file. A ccdrift line they edited into a range or a step is
+    still ccdrift's job, so `status` describes it rather than failing on it."""
+    marked = "# ccdrift check"
+    assert Cron(run=FakeCrontab(f"0 8-9 * * * ccdrift check {marked}\n")).status()[0] == \
+        "installed: crontab line, on the schedule `0 8-9 * * *`"
+    assert Cron(run=FakeCrontab(f"*/15 * * * * ccdrift check {marked}\n")).status()[0] == \
+        "installed: crontab line, every hour at minute */15"
 
 
 def test_cron_status_finds_the_log_when_the_exec_command_appends_to_a_file(tmp_path):
