@@ -11,7 +11,28 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "Roman Kolesnichenko" }]
-dependencies = ["pandas>=2.2", "numpy"]
+keywords = ["claude-code", "claude", "prompt-cache", "monitoring", "regression-detection", "observability"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Monitoring",
+    "Topic :: Utilities",
+]
+dependencies = ["pandas>=2.2", "numpy>=1.23"]
+
+[project.urls]
+Homepage = "https://github.com/rkolesnichenko/ccdrift"
+Repository = "https://github.com/rkolesnichenko/ccdrift"
+Issues = "https://github.com/rkolesnichenko/ccdrift/issues"
+Changelog = "https://github.com/rkolesnichenko/ccdrift/releases"
 
 [project.scripts]
 ccdrift = "ccdrift.cli:main"
