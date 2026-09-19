@@ -10,3 +10,5 @@ dist/
 .venv/
 .remember/
 docs/superpowers/
+CLAUDE.local.md
+.claude/settings.local.json
