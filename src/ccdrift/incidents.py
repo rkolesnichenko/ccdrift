@@ -21,7 +21,7 @@ from ccdrift.detector import DetectorConfig, baseline_bins, bin_metrics, detect,
 from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import first_days_by_version, judged_turns
 from ccdrift.state import load_state
-from ccdrift.texts import (INCIDENT_METRICS, METRIC_ARGS, MOVES, PERSISTENT_DAYS, SHORT_NAMES, approx, cost_text,
+from ccdrift.texts import (INCIDENT_METRICS, MOVES, PERSISTENT_DAYS, SHORT_NAMES, approx, cost_text,
                            incident_line)
 
 # A first run stays quiet about flags from weeks ago but covers a week or so
