@@ -173,8 +173,8 @@ def test_one_run_alerts_once_for_a_spell_of_responses_cut_short(tmp_path):
 
 def test_a_run_that_escalates_says_the_same_in_one_call_as_day_by_day(tmp_path):
     # The escalation records its episode in the middle of the run, and the day after is
-    # judged against it. A fortnight judged in one call — a first check after an upgrade,
-    # or after days with the Mac off — must reach the same two words a check running each
+    # judged against it. A fortnight judged in one call (a first check after an upgrade,
+    # or after days with the Mac off) must reach the same two words a check running each
     # morning would: this is what _judged_days being a generator is for, and an escalation
     # is the second way its state grows while it runs.
     counts = counts_of(tmp_path, [{}] * 6 + [{"truncated": 10}, {"truncated": 40}])
@@ -218,7 +218,7 @@ def test_a_run_that_starts_too_quietly_alerts_on_its_first_day_over_the_floor(tm
     # The shape the owner's logs would have taken: a release truncates about 1% of
     # responses from 2026-09-06, but that day holds only 356 responses, so its 4 cut short
     # are under the floor and it can't be reported. 2026-09-07 is the first day that can
-    # be — and only because the day before it belongs to the same run and is left out of
+    # be, and only because the day before it belongs to the same run and is left out of
     # the usual level it is compared with. Judged against 1.12%, its 1.04% would have to
     # reach 3.37%, and the regression would never be reported at all.
     counts = cut_days(tmp_path, [(60, 0)] * 5 + [(356, 4), (579, 6)])
@@ -289,7 +289,7 @@ def test_a_fresh_run_alerts_again_once_the_level_has_been_back_to_normal(tmp_pat
 
 def test_a_run_that_gets_three_times_worse_is_reported_again(tmp_path):
     # 2026-09-06 opens the run at 2.50% and is reported. 09-07 to 09-09 hold it there and
-    # stay silent. 09-10 cuts 8.00% — over three times what ccdrift said — so it says so,
+    # stay silent. 09-10 cuts 8.00%, over three times what ccdrift said, so it says so,
     # naming the level it was last told about rather than the baseline before the run.
     counts = cut_days(tmp_path, [(60, 0)] * 5 + [(200, 5)] * 4 + [(200, 16)])
     state = state_with()
@@ -307,7 +307,7 @@ def test_a_run_that_worsens_by_less_than_three_times_stays_silent(tmp_path):
 
 def test_an_escalation_speaks_inside_the_spell_window(tmp_path):
     # The day after the one reported is three times worse. SPELL_DAYS would have swallowed
-    # it — the whole point is that a regression deepening is not one burst reported twice.
+    # it: the whole point is that a regression deepening is not one burst reported twice.
     counts = cut_days(tmp_path, [(60, 0)] * 5 + [(200, 5), (200, 16)])
     episodes = cut_short(counts, state_with(), date(2026, 9, 8))
     assert [(e["since"], e.get("worse_than")) for e in episodes] == [

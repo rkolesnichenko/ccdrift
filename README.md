@@ -101,7 +101,7 @@ set this in `~/.claude/settings.json`:
 | **ccdrift: tool-loop cache misses rising** | Several of the latest main-thread turns inside the tool loop missed the cache, far above your usual rate, within the last day. | Nothing yet. `ccdrift report` shows loop misses per day; the weekly summary shows whether it lasts. |
 | **ccdrift: subagent cache misses rising** | The same, for turns inside subagents. | Nothing yet. `ccdrift report` shows subagent misses per day; the weekly summary shows whether it lasts. |
 | **ccdrift: setting changed** | The cache tier or effort level a model usually gets on the main thread changed, 2 days in a row. | If you didn't change it, Claude Code's default did. |
-| **ccdrift: session start changed** | Sessions start with at least 25% more or less context than the 10 before them, on 3 in a row. Each session is measured against its own project's recent level, so moving between projects is not a change; the alert then counts the projects ccdrift could compare — those with at least 3 sessions each side of the change — and says whether every one of them moved (Claude Code, or your global config when no new version arrived) or only some did (those projects' CLAUDE.md, MCP servers or skills; when a Claude Code version new to those sessions arrived as well, it names that too rather than choosing between them). | `ccdrift report` names each project's typical session start; `ccdrift report --by version` compares versions. |
+| **ccdrift: session start changed** | Sessions start with at least 25% more or less context than the 10 before them, on 3 in a row. Each session is measured against its own project's recent level, so moving between projects is not a change; the alert then counts the projects ccdrift could compare, those with at least 3 sessions each side of the change, and says whether every one of them moved (Claude Code, or your global config when no new version arrived) or only some did (those projects' CLAUDE.md, MCP servers or skills; when a Claude Code version new to those sessions arrived as well, it names that too rather than choosing between them). | `ccdrift report` names each project's typical session start; `ccdrift report --by version` compares versions. |
 | **ccdrift: hooks failing** | Stop hooks failed on at least half their runs on 2 active days in a row, after 2 quiet weeks. | Run your hooks by hand; a Claude Code update may have changed their input. |
 | **ccdrift: requests failing** | A day had at least 5 failed requests (API errors Claude Code showed, or requests it retried), at least twice the busiest of the judged days in the 2 weeks before, with at least 5 such days to compare with. Banners blaming your Mac for going to sleep are counted in `ccdrift report` but never alert. | Usually the API or your connection, not your setup. `ccdrift report` shows the days; check status.claude.com. |
 | **ccdrift: responses cut short** | At least 5 responses stopped at the token limit (or were refused) on a day, on at least 0.5% of that day's main-thread responses and 3 times the worst share of the judged days before, a clean fortnight counting as 0.1%. The comparison leaves out the days of the same run, so a regression that starts on a quiet day is still reported. | A Claude Code update may have changed the output limit. `ccdrift report --by version` compares versions. |
@@ -211,7 +211,7 @@ Haiku share drawn per day, with the days of a recorded incident on that metric s
 the flagged ones marked, a strip of each day's z under the chart with the cutoff across
 it, a line saying what those marks mean, then the table and the sections the terminal
 prints. It has no scripts and fetches nothing when opened, so it works offline, and it
-names your project folders as the terminal report does — its last line says so, since a
+names your project folders as the terminal report does. Its last line says so, since a
 page is easier to send on than a terminal.
 
 Transcripts are read from `$CLAUDE_CONFIG_DIR/projects` when that variable is set,
@@ -229,8 +229,8 @@ CLI (Agent SDK sessions are your own scripts and are left out) and computes:
   previous response and not right after a compaction;
 - the share of responses from a Haiku model.
 
-It counts failed requests the same way, on the main thread and in subagents alike — a
-request a subagent made is one Claude Code made — and the responses that stop at the
+It counts failed requests the same way, on the main thread and in subagents alike (a
+request a subagent made is one Claude Code made), and the responses that stop at the
 token limit or refuse. Those are far too rare for a usual rate (13 failures in the six
 weeks this was built on), so each day is judged against the days before it instead.
 

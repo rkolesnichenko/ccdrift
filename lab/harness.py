@@ -65,7 +65,7 @@ from ccdrift.logs import (CACHE_TTL_SECONDS, SUBAGENT_CACHE_TTL_SECONDS, TOKENS_
 
 
 # ---------------------------------------------------------------------------
-# Injection harness (Pass B) — plant a controlled regime change, measure floor
+# Injection harness (Pass B): plant a controlled regime change, measure floor
 # ---------------------------------------------------------------------------
 
 def inject(df: pd.DataFrame, kind: str, magnitude: float, seed: int = 0,
@@ -212,12 +212,12 @@ def compare_thinking(df: pd.DataFrame, incidents: Optional[list[tuple[str, str]]
 # ---------------------------------------------------------------------------
 # The batch detector is retrospective by construction: a day must aggregate
 # before it can speak. Real-time onset detection needs a per-turn sequential
-# test. CUSUM is the right tool — it accumulates standardized evidence and
+# test. CUSUM is the right tool: it accumulates standardized evidence and
 # fires as soon as the cumulative drift crosses a threshold h, with a
 # controllable false-alarm budget (ARL0). This section measures the only number
 # that matters for v2: detection latency (turns after a shift) at a fixed
-# false-alarm rate — and whether single-user turn volume is enough to make that
-# latency tolerable, or whether the signal genuinely requires the fleet.
+# false-alarm rate, and whether single-user turn volume is enough to make that
+# latency tolerable, or whether the signal requires the fleet.
 
 # Per-metric streaming config: (turn-level column, direction, is_binary)
 STREAM_METRICS = {
@@ -383,7 +383,7 @@ def plot_cusum_curve(curve: pd.DataFrame, out_dir: Path) -> Path:
                     xytext=(3, 3), textcoords="offset points")
     ax.set_xlabel("false alarms per 1,000 turns  (lower = stricter)")
     ax.set_ylabel("median detection latency (turns after shift)")
-    title = f"Streaming CUSUM tradeoff — {kind} @ magnitude {curve.attrs.get('magnitude')}"
+    title = f"Streaming CUSUM tradeoff: {kind} @ magnitude {curve.attrs.get('magnitude')}"
     if tpd:
         title += f"   (~{tpd:.0f} turns/day → secondary axis in days)"
     ax.set_title(title, fontsize=9)
@@ -399,7 +399,7 @@ def plot_cusum_curve(curve: pd.DataFrame, out_dir: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Synthetic log generator — makes the harness runnable with zero real data
+# Synthetic log generator: makes the harness runnable with zero real data
 # ---------------------------------------------------------------------------
 
 # Synthetic logs start on a fixed day. Anchored to the current time, the UTC day
@@ -413,7 +413,7 @@ def generate_synthetic(out_dir: Path, days: int = 40, seed: int = 1) -> Path:
     message.id and usage, thinking stored as a bare signature, user prompts and
     tool results between main-thread responses, and subagents in
     <sess>/subagents/agent-*.jsonl.
-    Clean baseline only (no planted incident) — use --sweep to plant one."""
+    Clean baseline only (no planted incident); use --sweep to plant one."""
     rng = random.Random(seed)
     proj = out_dir / "synthetic-project"
     proj.mkdir(parents=True, exist_ok=True)
@@ -436,7 +436,7 @@ def generate_synthetic(out_dir: Path, days: int = 40, seed: int = 1) -> Path:
             transcripts: dict[Path, list[dict]] = {}
             last_seen: dict[Path, datetime] = {}
             for turn in range(n_turns):
-                # Subagent bursts: mirror reality — Haiku concentrates in
+                # Subagent bursts mirror reality: Haiku concentrates in
                 # dense sidechain runs, main thread stays ~Haiku-free.
                 if sidechain_left == 0 and rng.random() < 0.03:
                     sidechain_left = rng.randint(4, 40)
@@ -605,7 +605,7 @@ def plot_sweep(res: pd.DataFrame, out_dir: Path) -> Path:
     colors = ["#3b6" if r >= 0.5 else "#d33" for r in rate]
     ax.bar(rate.index.astype(str), rate.to_numpy(), color=colors)
     floor = res.attrs.get("detection_floor")
-    ax.set_title(f"Detection by injected magnitude — {res.attrs.get('metric')}  "
+    ax.set_title(f"Detection by injected magnitude: {res.attrs.get('metric')}  "
                  f"(median floor={floor}, {res['start'].nunique()} starts)", fontsize=10)
     ax.set_xlabel("injected regime-change magnitude")
     ax.set_ylabel("share of starts caught")
@@ -658,7 +658,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--warmup", type=int, default=150,
                     help="turns used to set the streaming baseline before detection")
     ap.add_argument("--main-thread-only", action="store_true",
-                    help="drop subagent/sidechain turns before analysis — the fix for the Haiku-burst confound (requires isSidechain in logs)")
+                    help="drop subagent/sidechain turns before analysis; the fix for the Haiku-burst confound (requires isSidechain in logs)")
     ap.add_argument("--thinking", choices=["estimate", "logged"], default="estimate",
                     help="effort from the estimate from signature length (default) or from the thinking "
                          "token counts Claude Code logs")
@@ -832,7 +832,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             else:
                 print(f"  ok    {name}: no sustained deviation")
         if not any_flag:
-            print("  (clean baseline — expected when no incident is present. "
+            print("  (clean baseline, expected when no incident is present. "
                   "Use --sweep to plant one and measure the floor.)")
         for p in plots:
             print(f"[plot] {p}")

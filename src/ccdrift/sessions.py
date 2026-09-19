@@ -1,6 +1,6 @@
 """Session starts: how much context a new Claude Code session sends with its first
-request — system prompt, tool definitions, CLAUDE.md, skills and MCP servers. Every
-new session, and every cache miss, pays for it again."""
+request, meaning system prompt, tool definitions, CLAUDE.md, skills and MCP servers.
+Every new session, and every cache miss, pays for it again."""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ def session_starts(responses: pd.DataFrame) -> pd.DataFrame:
     files = first["source_file"].astype(str)
     # Pointing --source at one project's own folder leaves every transcript directly under
     # it, so project_of would make each session a project of its own and none would ever
-    # have the sessions to be judged — a watch that reports nothing and says nothing. With
+    # have the sessions to be judged: a watch that reports nothing and says nothing. With
     # no project folder anywhere in the source, the source itself is the one project.
     loose = not files.str.contains("/").any()
     starts = pd.DataFrame({
@@ -71,8 +71,8 @@ def session_starts(responses: pd.DataFrame) -> pd.DataFrame:
 
 
 def ratio_starts(starts: pd.DataFrame) -> pd.DataFrame:
-    """Every session start with the level its own project was starting at — the median of
-    that project's previous PROJECT_BASELINE sessions — and its ratio to it. A session
+    """Every session start with the level its own project was starting at (the median of
+    that project's previous PROJECT_BASELINE sessions) and its ratio to it. A session
     whose project has fewer than MIN_PROJECT_SESSIONS earlier sessions is left out, but
     still counts towards the level of the sessions after it. Judging ratios rather than
     token counts is what keeps moving between projects from reading as a change: a project
@@ -97,8 +97,8 @@ class ContextChange:
     frame the change was found in, which is not always the judged table: `found_changes`
     runs the detector over all the judged sessions and over each project's own rows, and
     returns changes from several frames together, so a change's positions mean nothing
-    outside the frame it came from. `project` names that frame — the project whose own
-    sessions the step was found in, or None when it came from the pass over all of them —
+    outside the frame it came from. `project` names that frame: the project whose own
+    sessions the step was found in, or None when it came from the pass over all of them,
     so a reader can find the step's own sessions without its positions."""
     since: str
     until: str
@@ -299,13 +299,13 @@ def _where(change: dict[str, Any], new_version: bool) -> str:
                 f"{that} CLAUDE.md, MCP servers or skills explain it, not Claude Code.")
     if new_version:
         return (f", in every project ccdrift could compare ({moved} of {seen}), on a Claude Code version none of "
-                "the sessions before it ran — the likeliest cause.")
+                "the sessions before it ran, the likeliest cause.")
     return (f", in every project ccdrift could compare ({moved} of {seen}), with no new Claude Code version, so "
             "look at your global configuration in ~/.claude.")
 
 
 def rejudged(starts: pd.DataFrame, state: dict[str, Any], today: date) -> list[dict[str, Any]]:
-    """The recorded changes an older ccdrift found that this version's rule doesn't — the
+    """The recorded changes an older ccdrift found that this version's rule doesn't: the
     pooled rule counted a move between projects as a change. Two rules keep a record that
     this one can't reproduce exactly, because deleting it would only alert the owner about
     the same step again next run:
@@ -314,8 +314,8 @@ def rejudged(starts: pd.DataFrame, state: dict[str, Any], today: date) -> list[d
       within DEDUPE_DAYS of it, not only on its own day: the two rules judge different
       sessions, so they date one step differently, and `first_of_each` already reads that
       as the same step;
-    - a record before the earliest day the new rule could report on — the day of the
-      judged session at MIN_BASELINE + WINDOW - 1, the first a window can end on — is kept
+    - a record before the earliest day the new rule could report on (the day of the
+      judged session at MIN_BASELINE + WINDOW - 1, the first a window can end on) is kept
       unjudged, as are all of them when there are too few judged sessions to report
       anything. ccdrift doesn't drop what it can't re-check.
 

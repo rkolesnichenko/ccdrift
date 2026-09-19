@@ -204,13 +204,13 @@ def report_json(view: str, rows: pd.DataFrame, entries: Sequence[Entry], reporte
 
 
 def _incident_days(entries: Sequence[Entry], days: Sequence[str], metric: str) -> list[str]:
-    """The days shown that belong to a recorded incident on `metric` — only that metric,
+    """The days shown that belong to a recorded incident on `metric`, and only that metric,
     since a Haiku incident accounts for nothing on the cache chart. The page shades them, so
     a dip already accounted for doesn't read as news.
 
     A dismissed incident shades nothing: ccdrift puts its days back in the baseline and
     scores them like any other, so shading them would tell the reader to discount a dip
-    ccdrift itself counts as normal. Open, recovered and persistent incidents all shade —
+    ccdrift itself counts as normal. Open, recovered and persistent incidents all shade:
     those are days ccdrift stands behind, whatever it later decided about them."""
     shaded = set()
     for incident, _ in entries:

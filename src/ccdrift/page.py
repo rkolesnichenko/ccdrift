@@ -27,7 +27,7 @@ LABEL_EVERY = 5      # days between the labels under a chart
 
 
 def escape(value: Any) -> str:
-    """Whatever the page prints, safe to put in it — project paths included."""
+    """Whatever the page prints, safe to put in it, including project paths."""
     return html.escape(str(value), quote=True)
 
 
@@ -150,8 +150,8 @@ def section(title: str, lines: Sequence[str]) -> str:
     """A heading and the lines the terminal report already writes, escaped as they arrive:
     a body that came in nested stays nested, since the `<pre>` keeps the whitespace it is
     given. The page keeps one wording for both views rather than a second to hold in step.
-    A part the terminal writes as a single sentence — "Session starts by project over these
-    days: …" — has no body to head, so it stays a sentence."""
+    A part the terminal writes as a single sentence ("Session starts by project over these
+    days: …") has no body to head, so it stays a sentence."""
     kept = [line for line in lines if line.strip()]
     heading = title.rstrip(":")
     if not kept:
@@ -163,8 +163,8 @@ def blocks(lines: Sequence[str]) -> list[tuple[str, list[str]]]:
     """The terminal report's tail split into (heading, body) by the blank lines it already
     puts between its parts, so the page and the terminal never drift apart in wording. Each
     part is expected to open with a heading line (no leading space) followed by its indented
-    body lines, but a body line that arrives before any heading — a shape no tail helper
-    produces today — starts its own block instead of being dropped, so a future helper that
+    body lines, but a body line that arrives before any heading (a shape no tail helper
+    produces today) starts its own block instead of being dropped, so a future helper that
     broke that shape would still show up on the page rather than vanish from it.
 
     A body is dedented by the whitespace every one of its lines shares rather than line by

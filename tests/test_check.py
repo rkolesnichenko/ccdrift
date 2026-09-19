@@ -589,7 +589,7 @@ def test_the_first_check_replays_its_history_and_says_once_what_it_found(tmp_pat
 
 def test_a_first_check_that_finds_a_regression_still_going_flags_it_as_well(tmp_path, sent, capsys):
     # The summary says what the history held; the flag says this is happening now, with the
-    # days and z values that opened it — the alert the owner would have had all along.
+    # days and z values that opened it: the alert the owner would have had all along.
     main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12}] * 10)
     check_logs(tmp_path, today=date(2026, 10, 1))
     assert sent == ["ccdrift: past incidents found", "ccdrift flag"]

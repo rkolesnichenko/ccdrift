@@ -45,7 +45,7 @@ def failure_counts(failures: pd.DataFrame, turns: pd.DataFrame) -> pd.DataFrame:
     """Per day over the judged turns' days and the judged failures' days together:
     main-thread responses, failures of each kind, the counted ones together, and the
     responses that stopped at the token limit or refused. Failures count wherever they
-    happened — a request a subagent made is one Claude Code made — while responses and
+    happened (a request a subagent made is one Claude Code made), while responses and
     cut-short responses stay main-thread, as every other daily verdict is. A day whose
     requests failed has few responses to show for them, and one whose requests all failed
     has none: such a day still gets a row, so a rule can judge it, though only active days
@@ -85,7 +85,7 @@ def _judged_days(counts: pd.DataFrame, state_key: str, state: dict[str, Any], to
     skipping the days an episode already covers. `quiet_days` says whether a day too quiet
     to be active may be judged: the harder the API fails, the fewer responses that day
     holds, so the worst day of an outage can be too quiet to count. The days before are the
-    active ones either way — a quiet day is judged, never a baseline.
+    active ones either way: a quiet day is judged, never a baseline.
     An episode covers a day within SPELL_DAYS of it, and a day that
     `ongoing(episode, row, before)` says merely carries on what the episode reported,
     however long ago that was, so one lasting regression alerts once rather than every
@@ -95,8 +95,8 @@ def _judged_days(counts: pd.DataFrame, state_key: str, state: dict[str, Any], to
     otherwise have said, because both kinds of cover exist to stop one level being reported
     twice and such a day is not that level.
     A generator on purpose: a rule records each episode as it takes it, so the next day's
-    suppression test sees it, and one run over a fortnight — the first check after an
-    upgrade, or after days with the machine off — alerts once per spell, just as a
+    suppression test sees it, and one run over a fortnight (the first check after an
+    upgrade, or after days with the machine off) alerts once per spell, just as a
     day-by-day sequence of runs would."""
     if counts.empty:
         return
@@ -171,7 +171,7 @@ def _worst_share(frame: pd.DataFrame) -> float:
 def _usual_days(before: pd.DataFrame, share: float) -> pd.DataFrame:
     """The days before a candidate that stand for its usual level: `before` without the
     unbroken run of days at or above `share` that ends at its latest day. A day inside the
-    same run of bad days is the regression, not the usual level — the idea
+    same run of bad days is the regression, not the usual level: the idea
     incidents.exclusions applies to the cache metric, in the small. Without it a
     regression that began on a day too small for the floor would set a bar the days
     carrying it on could never clear, so it would never be reported at all."""
@@ -193,7 +193,7 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
     active can't support. The lab tries other floors and shares; the check keeps the
     defaults. A day standing CUT_RATIO above the share a covering episode reported is the
     regression deepening rather than that episode carrying on, and is reported again,
-    carrying "worse_than" — the level and day it escalated from."""
+    carrying "worse_than", the level and day it escalated from."""
     def hit(row: pd.Series, before: pd.DataFrame) -> bool:
         cut = int(row["truncated"] + row["refused"])
         today_share = _day_share(row)
@@ -204,9 +204,9 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
         """Whether this day only carries on the regression `episode` reported: the episode
         is still among the days judged, and every judged day from its day to this one
         stayed at or above `share`. One regression is one alert while it lasts. An episode
-        whose day has left the comparison window says nothing about this day — otherwise a
+        whose day has left the comparison window says nothing about this day. Otherwise a
         cut-short alert from months ago would silence a new regression for good, once the
-        window happened to be all bad — so a run outliving BEFORE_DAYS is reported again,
+        window happened to be all bad, so a run outliving BEFORE_DAYS is reported again,
         about every BEFORE_DAYS: a second word after a fortnight beats silence."""
         if before.empty or episode["since"] < str(before["day"].astype(str).iloc[0]):
             return False
@@ -214,7 +214,7 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
         return bool(len(carried)) and bool((_cut_shares(carried) >= share).all())
 
     def louder(episode: dict[str, Any], row: pd.Series) -> bool:
-        """Whether this day stands CUT_RATIO above the share `episode` reported — the same
+        """Whether this day stands CUT_RATIO above the share `episode` reported: the same
         factor a first alert needs over its baseline, so no second number decides this.
         A regression that deepens that far is not the reported one carrying on, and says so
         whatever would have held it: both the spell and the run exist to stop one level

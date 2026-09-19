@@ -1,8 +1,8 @@
 """Is the context a Claude Code session starts with steady enough to alert on? (G2)
 
 For each version: how many sessions, their median prompt size and spread; then the steps
-the shipped rule finds — `found_changes` over the ratios, pooled and per project, the same
-call the check makes — with the versions their sessions ran.
+the shipped rule finds (`found_changes` over the ratios, pooled and per project, the same
+call the check makes) with the versions their sessions ran.
 
 The gate passes when every version with 3+ sessions has a spread (MAD over median) of at
 most 0.10. It used to demand that every step come with a version its baseline never ran,
@@ -46,8 +46,8 @@ def version_table(starts: pd.DataFrame) -> pd.DataFrame:
 
 
 def step_versions(judged: pd.DataFrame, change: ContextChange) -> list[str]:
-    """The versions a step's own sessions ran: the days it spans, and — when it was found
-    in one project's own rows — that project alone. Its row positions can't be used, since
+    """The versions a step's own sessions ran: the days it spans, and, when it was found
+    in one project's own rows, that project alone. Its row positions can't be used, since
     they index the frame it was found in rather than the judged table, and its days alone
     would credit it with every other project's versions on them."""
     days = judged["day"].astype(str)

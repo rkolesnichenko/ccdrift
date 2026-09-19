@@ -24,7 +24,7 @@ from ccdrift.texts import CONTROL_CHARS
 # ---------------------------------------------------------------------------
 # Claude Code's JSONL schema has shifted across versions. Rather than hard-code
 # one path, every field is resolved by trying a list of candidate dotted paths
-# and taking the first that exists. If you discover a new variant, add it here —
+# and taking the first that exists. If you discover a new variant, add it here:
 # this is the single place schema drift is absorbed.
 
 CANDIDATES: dict[str, list[str]] = {
@@ -313,9 +313,9 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                     # connection details aren't kept, only that it happened. Claude Code
                     # writes one record per attempt ("retryAttempt of maxRetries"), so
                     # only the first is kept: one failure per request, not per attempt.
-                    # Anything but a later attempt counts — no attempt number (older
+                    # Anything but a later attempt counts: no attempt number (older
                     # transcripts), one ccdrift can't read, or a version numbering them
-                    # from 0 — since dropping a real failure is worse than counting one.
+                    # from 0. Dropping a real failure is worse than counting one.
                     attempt = field_get(obj, "retry_attempt")
                     if attempt is None or _num(attempt) <= 1:
                         parsed.failures.setdefault(key, {**_record(obj, key, rel), "kind": "retry", "status": None})

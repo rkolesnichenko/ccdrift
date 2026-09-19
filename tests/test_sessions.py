@@ -197,7 +197,7 @@ def test_a_step_in_every_project_says_so_and_names_the_version_when_one_arrived(
     assert changes[0]["new_version"] is True
     assert context_message(changes[0], ["2.1.267 (since 09-09)"]).endswith(
         "in every project ccdrift could compare (2 of 2), on a Claude Code version none of the sessions before it "
-        "ran — the likeliest cause.")
+        "ran, the likeliest cause.")
     assert context_message({**changes[0], "new_version": False}, []).endswith(
         "in every project ccdrift could compare (2 of 2), with no new Claude Code version, so look at your global "
         "configuration in ~/.claude.")

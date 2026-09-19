@@ -9,7 +9,7 @@ from tests.helpers import nth_day
 
 def counts_of(rows, responses=1000):
     """rows: (failed requests, responses cut short) per day, one day each from Sep 1. A
-    day holds `responses` responses — one number for every day, or one per day — 1000 by
+    day holds `responses` responses (one number for every day, or one per day), 1000 by
     default, enough that a planted 1% is over the floor."""
     sizes = list(responses) if isinstance(responses, (list, tuple)) else [responses] * len(rows)
     return pd.DataFrame([{"day": nth_day(i), "responses": sizes[i], "requests": requests, "truncated": cut,
@@ -39,7 +39,7 @@ def test_planting_a_bad_day_makes_the_day_it_names_fail_or_cut_short():
 def test_a_planted_run_lasts_three_days_and_is_caught_when_any_of_them_alerts():
     # A release that truncates responses keeps doing it until it is fixed, so the cut
     # gate plants a run. Here the run opens on a day too quiet to be judged at all, and
-    # the day after it is the one that alerts — the run is still caught.
+    # the day after it is the one that alerts: the run is still caught.
     counts = counts_of([(0, 0)] * 10, responses=[1000] * 6 + [40, 1000, 1000, 1000])
     assert run_days(counts, nth_day(6)) == [nth_day(6), nth_day(7), nth_day(8)]
     planted = plant_run(counts, nth_day(6), share=0.01)
@@ -88,8 +88,8 @@ def test_a_burst_is_planted_on_the_last_judgeable_days_oldest_first():
 
 def test_the_grid_rows_say_how_often_each_setting_alerts_and_how_many_bursts_it_catches():
     # Both settings are planted on 2026-09-06 and 2026-09-07 in turn. The looser one
-    # already alerts on 2026-09-07 with no plant at all — its 4 failed requests clear a
-    # floor of 3 — so the plant on that day tells it nothing and isn't credited; only its
+    # already alerts on 2026-09-07 with no plant at all, since its 4 failed requests clear a
+    # floor of 3, so the plant on that day tells it nothing and isn't credited; only its
     # plant on 2026-09-06 counts.
     rows = request_rows(counts_of([(0, 0)] * 6 + [(4, 0)]), days=7)
     tight = next(row for row in rows if (row["floor"], row["ratio"]) == (5, 2))

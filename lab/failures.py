@@ -1,7 +1,7 @@
 """Do the failure rules stay quiet on a real history and still catch a burst? (G10, G11, G13)
 
-Failed requests and responses cut short are rare — 13 banners and 2 truncated responses
-in the six weeks this was designed on — so neither rule can lean on a usual rate. Each
+Failed requests and responses cut short are rare (13 banners and 2 truncated responses
+in the six weeks this was designed on), so neither rule can lean on a usual rate. Each
 day is judged against the days before it, and the question is whether the floors are
 high enough to stay quiet and low enough to catch a bad release.
 
@@ -24,8 +24,8 @@ stayed quiet on: an alert the logs were going to raise anyway proves nothing.
   responses stopping at the token limit, counting a run as caught when any day of it
   alerts.
 - G13 (a cut-short run that deepens) passes when a run planted at OPEN_SHARE for
-  PLANT_RUN days and WORSE_SHARE for PLANT_WORSE more is reported twice — once when it
-  starts and once when it deepens — and a flat run of the same length is still reported
+  PLANT_RUN days and WORSE_SHARE for PLANT_WORSE more is reported twice, once when it
+  starts and once when it deepens, and a flat run of the same length is still reported
   once. G11 plants only flat runs, so without this nothing measures the suppression at all.
   G13 plants harder than G11 on purpose: its premise is a run ccdrift already reported,
   deepening, so its opening days have to clear CUT_FLOOR on their own, where G11's smaller
@@ -69,7 +69,7 @@ OPEN_SHARE = 0.05       # of a day's responses over a planted run's opening days
                         # than PLANTED_SHARE on purpose: G11 asks whether a small run is
                         # caught at all, G13 asks what happens to a run already reported,
                         # so its opening days have to clear CUT_FLOOR on the quietest day
-                        # it plants on — a run ccdrift never reported has no second word
+                        # it plants on: a run ccdrift never reported has no second word
                         # to test, and planting one would measure the corpus, not the rule
 WORSE_SHARE = 0.25      # of a day's responses once the planted run deepens: five times
                         # OPEN_SHARE, comfortably past the three a second word needs, so
@@ -110,7 +110,7 @@ def plant(counts: pd.DataFrame, day: str, requests: int = 0, share: float = 0.0)
 
 
 def run_days(counts: pd.DataFrame, day: str, how_many: int = PLANT_RUN) -> list[str]:
-    """`day` and the next `how_many` - 1 days the frame holds — the days a planted run
+    """`day` and the next `how_many` - 1 days the frame holds: the days a planted run
     covers, and the days any of which alerting means the run was caught."""
     days = [str(one) for one in counts["day"].astype(str)]
     if str(day) not in days:
@@ -133,8 +133,8 @@ def plant_run(counts: pd.DataFrame, day: str, share: float, how_many: int = PLAN
 def plant_worse(counts: pd.DataFrame, day: str, share: float = OPEN_SHARE,
                 worse: float = WORSE_SHARE) -> pd.DataFrame:
     """The counts with a run from `day` that gets worse partway: PLANT_RUN days at `share`,
-    then PLANT_WORSE days at `worse`. This is the shape the escalation exists for — a
-    regression ccdrift has already reported, deepening — and no other gate plants it."""
+    then PLANT_WORSE days at `worse`. This is the shape the escalation exists for, a
+    regression ccdrift has already reported, deepening, and no other gate plants it."""
     run = run_days(counts, day, PLANT_RUN + PLANT_WORSE)
     planted = counts
     for one in run[:PLANT_RUN]:
@@ -145,8 +145,8 @@ def plant_worse(counts: pd.DataFrame, day: str, share: float = OPEN_SHARE,
 
 
 def plant_days(counts: pd.DataFrame, how_many: int = PLANT_DAYS, room: int = 0) -> list[str]:
-    """The last `how_many` active days a rule could judge a burst on — at least
-    MIN_BEFORE_DAYS active days within the BEFORE_DAYS before them — oldest first, keeping
+    """The last `how_many` active days a rule could judge a burst on, with at least
+    MIN_BEFORE_DAYS active days within the BEFORE_DAYS before them, oldest first, keeping
     only those with `room` judged days after them. A gate that planted only on the corpus's
     last day answered a question about that day (how busy it was, and how close to a real
     failure day), not about the rule; `room` keeps the same thing from coming back through
@@ -168,8 +168,8 @@ def _rows(counts: pd.DataFrame, days: int, rule, grid, names,
           planted: Callable[[str], tuple[pd.DataFrame, list[str]]], room: int = 0) -> list[dict[str, Any]]:
     """One row per setting in `grid`: the days it would alert on over the real history,
     and how many of the planted bursts it catches. `planted(day)` gives the counts with a
-    burst starting on that day and the days whose alerting means it was caught — the day
-    itself for G10, the whole run for G11 — and each day of plant_days(counts, room=room)
+    burst starting on that day and the days whose alerting means it was caught (the day
+    itself for G10, the whole run for G11), and each day of plant_days(counts, room=room)
     carries one in turn, one replay each. A setting catches a plant only when the planted
     replay alerts on a day of that plant which the unplanted history did not: an alert the
     history was going to raise anyway is no evidence that the setting saw the plant."""
@@ -213,7 +213,7 @@ def worse_rows(counts: pd.DataFrame, days: int) -> list[dict[str, Any]]:
     a plant only when the planted replay alerts both on a day of the run's first half and
     on a day of its worse half that the unplanted history stayed quiet on: the regression
     reported when it starts, and reported again when it deepens. It passes only if the flat
-    run of the same length still alerts exactly once — a rule that spoke every day of a flat
+    run of the same length still alerts exactly once: a rule that spoke every day of a flat
     run would catch every escalation and tell the owner nothing."""
     grid = [(floor, share) for floor in CUT_FLOOR_GRID for share in CUT_SHARE_GRID]
     budget = ALERT_BUDGET * max(1, days / BUDGET_DAYS)

@@ -2,7 +2,7 @@
 a change in context? (G12)
 
 Until 0.8.0 every project's session starts were pooled, so the owner's logs produced one
-alert — "context halved on 2026-09-10" — when all that happened was that work moved to two
+alert, "context halved on 2026-09-10", when all that happened was that work moved to two
 newly created projects. The project that carried on was starting at the same size a week
 later. The rule now measures each session against its own project's recent level.
 
@@ -16,26 +16,26 @@ The gate asks three things of the new rule and reports what the pooled one did b
   turn and credited only when the unplanted history was quiet on that day.
 
 The two plants are the two shapes `found_changes` exists for, and each tests a different
-half of it. A step in every project — every project's sessions from one day on multiplied
-by PLANT_FACTOR — is the shape a Claude Code change takes, and the pooled pass finds it on
+half of it. A step in every project (every project's sessions from one day on multiplied
+by PLANT_FACTOR) is the shape a Claude Code change takes, and the pooled pass finds it on
 its own. A step in one project, the shape its own CLAUDE.md, skills or MCP servers take, is
 diluted by the other projects' sessions and only the per-project pass sees it; planting
-only the first shape would leave that half of the rule — the half both fixed Criticals of
-this build were about — unexercised.
+only the first shape would leave that half of the rule, the half both fixed Criticals of
+this build were about, unexercised.
 
 The one-project plant asks an answerable question only where the project it lands in is a
 minority of the judged sessions: a project holding more than half of them *is* the pooled
 set, so halving it halves the pooled ratios too and no credit rule can say which pass found
-the step. Where that holds, the plant is credited only when the pooled pass —
-`context_changes_in` over every judged session's ratio, the half `found_changes` contrasts
-with — is silent on the day the alert lands. Each plant day is judged on its own, since
+the step. Where that holds, the plant is credited only when the pooled pass
+(`context_changes_in` over every judged session's ratio, the half `found_changes` contrasts
+with) is silent on the day the alert lands. Each plant day is judged on its own, since
 each picks its own project and they need not be the same one: the days landing in a
 minority project are scored, and any others are reported beside them as not measurable.
 Where no plant is measurable, or no project has the sessions to carry one at all, the
 gate prints "not measurable here" with the reason and neither passes nor fails on it: a
 missing number is a question this history couldn't put, never a silent pass, and a
-screened-out plant never helps the gate pass. The owner's logs are such a history — one
-project holds 19 of the 20 judged sessions — so what pins the per-project pass there is
+screened-out plant never helps the gate pass. The owner's logs are such a history, where one
+project holds 19 of the 20 judged sessions, so what pins the per-project pass there is
 `lab/test_context.py`'s balanced two-project history, where halving one project moves no
 pooled median.
 
@@ -84,7 +84,7 @@ def pooled_changes(starts: pd.DataFrame) -> list[str]:
 
 def plant(starts: pd.DataFrame, day: str, factor: float = PLANT_FACTOR) -> pd.DataFrame:
     """The starts with every session from `day` on, in every project, multiplied by
-    `factor` — a step that reaches the whole machine, as a Claude Code change would."""
+    `factor`: a step that reaches the whole machine, as a Claude Code change would."""
     planted = starts.copy()
     from_day = planted["day"].astype(str) >= str(day)
     planted.loc[from_day, "prompt_tokens"] = planted.loc[from_day, "prompt_tokens"].astype(float) * factor
@@ -93,7 +93,7 @@ def plant(starts: pd.DataFrame, day: str, factor: float = PLANT_FACTOR) -> pd.Da
 
 def plant_in(starts: pd.DataFrame, day: str, project: str, factor: float = PLANT_FACTOR) -> pd.DataFrame:
     """The starts with one project's sessions from `day` on multiplied by `factor`, every
-    other project untouched — a step in that project's own files, which the pooled pass
+    other project untouched: a step in that project's own files, which the pooled pass
     dilutes and only the per-project pass can see."""
     planted = starts.copy()
     step = (planted["day"].astype(str) >= str(day)) & (planted["project"].astype(str) == str(project))
@@ -105,7 +105,7 @@ def plantable_project(starts: pd.DataFrame, day: str) -> str | None:
     """The largest project a one-project step can be planted in on `day`: one with
     MIN_PROJECT_SESSIONS sessions to set its level and MIN_BASELINE more before the day to
     be a baseline, and WINDOW sessions from the day on for the step to fill a window with.
-    None when no project of this history has that many — where the question can't be put,
+    None when no project of this history has that many. Where the question can't be put,
     not where the rule fails it."""
     enough = []
     for project, rows in starts.groupby(starts["project"].astype(str), sort=True):
@@ -119,7 +119,7 @@ def plantable_project(starts: pd.DataFrame, day: str) -> str | None:
 def pooled_pass(starts: pd.DataFrame) -> set[str]:
     """The days the pooled half of `found_changes` starts a change on: the detector over
     the ratios of every judged session together. This, not `pooled_changes`, is the half
-    the per-project pass is contrasted with — `pooled_changes` is the pre-0.8.0 rule over
+    the per-project pass is contrasted with; `pooled_changes` is the pre-0.8.0 rule over
     raw token counts, and a day can clear that one merely because the two rules date the
     same step a day apart. Every window counts, not just the first of each step: a step the
     pooled pass finds on any window is one it can see."""
@@ -150,7 +150,7 @@ def plant_days(starts: pd.DataFrame, how_many: int = PLANT_DAYS) -> list[str]:
     MIN_BASELINE judged sessions before them to compare with, and at least WINDOW judged
     sessions from that day on, since a step is only visible once that many sessions have
     run under it. Planting where the logs stop would ask whether the rule can see a step
-    that nothing has followed yet — a question about the corpus's last day, not the rule."""
+    that nothing has followed yet: a question about the corpus's last day, not the rule."""
     judged = ratio_starts(starts)
     if judged.empty:
         return []
@@ -190,7 +190,7 @@ def every_alert_names_a_project(starts: pd.DataFrame) -> tuple[bool, list[str]]:
 def switch_history() -> pd.DataFrame:
     """The shape of the real case this gate stands for: twelve sessions in one project at
     128k, then five in a new, smaller one at 54k, then two more back in the first project
-    a week later, still at 128k — the project that had been running kept running,
+    a week later, still at 128k: the project that had been running kept running,
     unchanged, rather than vanishing once the work moved. Nothing inside either project
     changed."""
     rows = []
@@ -254,9 +254,9 @@ def gate(starts: pd.DataFrame) -> tuple[bool, list[str]]:
                      + ", ".join(f"{project_path(project)} on {day}" for day, project in measurable) + ")"
                      + (f"; {len(screened)} more not measurable: {corpus}" if screened else ""))
     elif screened:
-        notes.append(f"planted one-project steps: not measurable here — {corpus}")
+        notes.append(f"planted one-project steps: not measurable here, {corpus}")
     else:
-        notes.append("planted one-project steps: not measurable here — no project has "
+        notes.append("planted one-project steps: not measurable here, no project has "
                      f"{MIN_PROJECT_SESSIONS + MIN_BASELINE} sessions before a plantable day and {WINDOW} "
                      "from it on")
     passed = (not switch_alerts and sound and bool(plants) and caught == len(plants)

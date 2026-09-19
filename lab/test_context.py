@@ -91,8 +91,8 @@ def test_a_one_project_plant_the_pooled_pass_also_finds_is_not_credited():
 def test_a_plant_in_a_minority_project_is_scored_even_when_another_days_project_is_the_corpus():
     # -a runs out of sessions partway through the plant days, so the first two land in it
     # (16 of 24 judged: unanswerable) and the last three land in -b (8 of 24: answerable).
-    # -b's plants are all missed — its sessions are the only ones left at the end, so the
-    # pooled pass names the same day — and the gate must say 0 of 3 and fail, not throw
+    # -b's plants are all missed: its sessions are the only ones left at the end, so the
+    # pooled pass names the same day, and the gate must say 0 of 3 and fail, not throw
     # the three answerable days away on the strength of the two that aren't.
     starts = starts_of([("-a", 100_000)] * 14 + [("-b", 100_000)] * 8 + [("-a", 100_000)] * 5
                        + [("-b", 100_000)] * 3)
@@ -113,7 +113,7 @@ def test_a_history_where_one_project_is_the_corpus_cannot_answer_the_one_project
     assert separable(starts, "-a") == (17, 18)
     passed, notes = gate(starts)
     assert passed, notes
-    assert notes[-1] == ("planted one-project steps: not measurable here — the project the plant lands in holds "
+    assert notes[-1] == ("planted one-project steps: not measurable here, the project the plant lands in holds "
                          "17 of 18 judged sessions, so halving it also halves the pooled set")
 
 
@@ -136,5 +136,5 @@ def test_a_history_too_thin_for_a_one_project_plant_says_so_rather_than_passing_
     assert [plantable_project(starts, day) for day in plant_days(starts)] == [None] * 5
     passed, notes = gate(starts)
     assert passed, notes
-    assert notes[-1] == ("planted one-project steps: not measurable here — no project has 8 sessions before a "
+    assert notes[-1] == ("planted one-project steps: not measurable here, no project has 8 sessions before a "
                          "plantable day and 3 from it on")

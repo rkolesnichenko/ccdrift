@@ -10,8 +10,8 @@ from datetime import datetime
 from typing import Any, Optional, Sequence
 
 # NUL, line breaks, and the escapes that move a terminal's cursor or retitle its window.
-# It lives here rather than in `logs`, so the two things that must strip it — parsing, and
-# printing a project folder — can both reach it without importing pandas.
+# It lives here rather than in `logs`, so the two things that must strip it, parsing and
+# printing a project folder, can both reach it without importing pandas.
 CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 METRIC_ARGS = {"cache": "cache_ratio", "haiku": "haiku_fraction"}
@@ -108,7 +108,7 @@ BEFORE_DAYS = 14
 def before_text(most: Any) -> str:
     """What a failure alert compared a day with: "against at most 3 a day on the days
     judged in the 14 before", or "against none" when nothing happened on them. The days
-    judged, not the days that passed — only active days are baselines, so "in the 14 days
+    judged, not the days that passed: only active days are baselines, so "in the 14 days
     before" would be false about a history holding quiet days."""
     if not most:
         return f"against none on the days judged in the {BEFORE_DAYS} before"
@@ -126,7 +126,7 @@ def run_text(days: int) -> str:
 
 def worse_text(worse: dict[str, Any]) -> str:
     """What a second alert about the same regression compares with: "against the 0.60%
-    reported on 2026-09-03". Not the baseline before the run — by the time a regression has
+    reported on 2026-09-03". Not the baseline before the run: by the time a regression has
     tripled, the level the owner was actually told is the only number that says whether
     this is news."""
     return f"against the {worse['share']:.2%} reported on {worse['since']}"
@@ -154,7 +154,7 @@ def cut_short_line(episode: dict[str, Any]) -> str:
 def project_path(project: str) -> str:
     """A project folder read back as the path it stands for, for the owner's eyes: Claude
     Code writes "/Users/me/dev/app" as "-Users-me-dev-app". A directory whose own name
-    holds a dash reads back with an extra slash — the folder name is all Claude Code
+    holds a dash reads back with an extra slash, since the folder name is all Claude Code
     keeps, so this is a convenience, not a promise. The nameless project a source with no
     project folders makes (sessions.SOURCE_PROJECT) is the source folder itself.
 
@@ -185,7 +185,7 @@ def projects_text(paths: Sequence[str]) -> str:
 
 def context_change_line(change: dict[str, Any]) -> str:
     """"session start ~130k -> ~64k tokens from 2026-09-09 in /Users/me/a, 1 of 3 projects
-    compared" — the count says what the projects named are a share of, since ccdrift can
+    compared". The count says what the projects named are a share of, since ccdrift can
     only compare a project that has sessions each side of the change."""
     moved = [project_path(p) for p in change.get("projects", [])]
     where, seen = projects_text(moved), change.get("of_projects", 0)

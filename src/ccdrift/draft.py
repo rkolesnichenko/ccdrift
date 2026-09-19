@@ -94,7 +94,7 @@ def _version_span(versions: pd.Series) -> str:
     """The versions the title names: those behind at least TITLE_SHARE of the turns, as a
     range. A session left open on an old version runs a handful of turns weeks later, and
     naming it would widen the range past what the incident was about. The floor is low on
-    purpose — the version an incident starts on may carry only a tenth of its turns, and
+    purpose: the version an incident starts on may carry only a tenth of its turns, and
     dropping it would understate when the regression began."""
     known = versions.dropna().astype(str)
     if known.empty:
