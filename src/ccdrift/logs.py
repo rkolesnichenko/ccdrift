@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import re
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -13,6 +12,11 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 import pandas as pd
+
+# NUL, line breaks, and the escapes that move a terminal's cursor or retitle its window.
+# Defined in `texts`, which imports nothing heavy, and re-exported here: `schedule` and the
+# parser have always read it from this module.
+from ccdrift.texts import CONTROL_CHARS
 
 
 # ---------------------------------------------------------------------------
@@ -219,10 +223,6 @@ def default_source(environ: Mapping[str, str] = os.environ) -> Path:
 def no_transcripts_message(source: Path) -> str:
     return (f"No Claude Code transcripts found in {source}. Pass --source DIR, or set "
             "CLAUDE_CONFIG_DIR if Claude Code keeps its files somewhere else.")
-
-
-# NUL, line breaks, and the escapes that move a terminal's cursor or retitle its window.
-CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 def _text(value: Any) -> Optional[str]:

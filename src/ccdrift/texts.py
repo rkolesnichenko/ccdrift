@@ -9,6 +9,11 @@ import re
 from datetime import datetime
 from typing import Any, Optional, Sequence
 
+# NUL, line breaks, and the escapes that move a terminal's cursor or retitle its window.
+# It lives here rather than in `logs`, so the two things that must strip it — parsing, and
+# printing a project folder — can both reach it without importing pandas.
+CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
 METRIC_ARGS = {"cache": "cache_ratio", "haiku": "haiku_fraction"}
 
 INCIDENT_METRICS = {"cache_ratio": "Cache read ratio on new prompts",
@@ -151,10 +156,15 @@ def project_path(project: str) -> str:
     Code writes "/Users/me/dev/app" as "-Users-me-dev-app". A directory whose own name
     holds a dash reads back with an extra slash — the folder name is all Claude Code
     keeps, so this is a convenience, not a promise. The nameless project a source with no
-    project folders makes (sessions.SOURCE_PROJECT) is the source folder itself."""
+    project folders makes (sessions.SOURCE_PROJECT) is the source folder itself.
+
+    A folder name is the one piece of text ccdrift shows that never passed through
+    `logs._text`: it comes from the transcript's own path, not from a field inside it. A
+    directory name may hold control characters, and this path is printed to a terminal, so
+    they are dropped here as they are everywhere else."""
     if not project:
         return "the source folder"
-    return "/" + project.lstrip("-").replace("-", "/")
+    return "/" + CONTROL_CHARS.sub("", project).lstrip("-").replace("-", "/")
 
 
 PROJECTS_SHOWN = 3

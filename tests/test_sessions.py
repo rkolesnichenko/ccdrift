@@ -358,6 +358,15 @@ def test_a_source_holding_only_transcripts_is_one_project(tmp_path):
     assert [c["since"] for c in context_alerts(starts, new_state(), date(2026, 9, 12))] == ["2026-09-09"]
 
 
+def test_a_project_folder_cant_carry_a_terminal_escape_into_the_report():
+    """A folder name is the one text ccdrift prints that never passed through the parser's
+    own cleaning: it comes from the transcript's path, not from a field inside it. The
+    report and the status line print it to a terminal, so the escapes that move a cursor or
+    retitle a window are dropped from it too."""
+    # Only the control characters go; what is left is inert, printable text.
+    assert project_path("-Users-me-\x1b[31mred\x07-app") == "/Users/me/[31mred/app"
+
+
 def test_the_report_names_each_projects_typical_session_start(tmp_path):
     sessions(tmp_path, "-small", [54_000] * 2)
     sessions(tmp_path, "-big", [128_000] * 3, first_day=2)

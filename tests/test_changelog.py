@@ -20,6 +20,14 @@ Some prose that isn't a bullet
 """
 
 
+def test_a_release_note_cant_carry_a_terminal_escape_into_the_log(tmp_path):
+    """Claude Code writes this file, not ccdrift, and its lines are quoted into the check's
+    log and printed by `ccdrift schedule status`, so they are cleaned like every other text
+    ccdrift reads."""
+    (tmp_path / "changelog.md").write_text("## 2.1.267\n\n- \x1b[5;31mFixed a cache miss\x1b[0m\n")
+    assert load_changelog(tmp_path / "changelog.md") == {"2.1.267": ["[5;31mFixed a cache miss[0m"]}
+
+
 def test_the_changelog_is_read_per_version_bullets_only(tmp_path):
     (tmp_path / "changelog.md").write_text(CHANGELOG)
     assert load_changelog(tmp_path / "changelog.md") == {

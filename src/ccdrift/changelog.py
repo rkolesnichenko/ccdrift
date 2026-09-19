@@ -12,7 +12,7 @@ from typing import Sequence, Union
 import pandas as pd
 
 from ccdrift.logs import first_days_by_version
-from ccdrift.texts import version_key
+from ccdrift.texts import CONTROL_CHARS, version_key
 
 # Words per topic and their weight. A line is quoted once its words weigh QUOTE_WEIGHT,
 # heaviest first. Checked against Claude Code's own changelog: "model", "tool", "agent"
@@ -49,7 +49,10 @@ def changelog_path(source: Path) -> Path:
 
 def load_changelog(path: Path) -> dict[str, list[str]]:
     """Bullet lines per version from a changelog with `## <version>` headers; empty
-    when the file is missing or unreadable."""
+    when the file is missing or unreadable. A quoted line is printed to a terminal and
+    appended to the check's log, and this file is written by Claude Code rather than by
+    ccdrift, so control characters are dropped from it as they are from every other text
+    ccdrift reads."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -62,7 +65,7 @@ def load_changelog(path: Path) -> dict[str, list[str]]:
             current = header.group(1)
             notes.setdefault(current, [])
         elif current is not None and line.startswith("- "):
-            notes[current].append(line[2:].strip())
+            notes[current].append(CONTROL_CHARS.sub("", line[2:]).strip())
     return notes
 
 
