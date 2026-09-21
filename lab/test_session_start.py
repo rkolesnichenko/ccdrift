@@ -2,9 +2,11 @@
 
 import pandas as pd
 
-from ccdrift.sessions import context_changes_in, first_of_each, found_changes, ratio_starts
+from ccdrift.sessions import (MIN_SESSIONS, context_changes_in, first_of_each, found_changes,
+                             ratio_starts)
 from lab.harness import generate_synthetic
-from lab.session_start import gate, main, step_versions, version_table
+from lab.session_start import (MAX_SPREAD, gate, main, project_version_table, step_versions,
+                               version_table)
 from tests.helpers import nth_day
 
 
@@ -76,6 +78,27 @@ def test_a_step_is_reported_with_its_own_projects_versions_only():
     on_the_days = judged[(days >= steps[0].since) & (days <= steps[0].until)]
     assert sorted(set(on_the_days["version"])) == ["2.1.267", "9.9.9"]
     assert step_versions(judged, steps[0]) == ["2.1.267"]
+
+
+def test_one_version_across_several_projects_is_not_read_as_a_spread():
+    # The failure this grouping fixes: a version seen once in each of three projects of
+    # very different sizes. Pooled it reads as a wide spread; per project each row holds
+    # one session, so the gate reads none of them and the projects say nothing about it.
+    starts = projects_of([("-a", 61_000), ("-b", 72_000), ("-c", 140_000)], version="2.1.278")
+    pooled = version_table(starts)
+    assert float(pooled["spread"].iloc[0]) > MAX_SPREAD
+    per_project = project_version_table(starts)
+    assert per_project["sessions"].tolist() == [1, 1, 1]
+    assert (per_project["sessions"] >= MIN_SESSIONS).sum() == 0
+
+
+def test_a_version_steady_in_one_project_passes_beside_a_second_project():
+    # The same version in two projects, steady inside each: the gate reads two groups and
+    # neither is troubled by the other project's size.
+    rows = [("-a", 128_000), ("-b", 54_000)] * 4
+    passed, notes = gate(projects_of(rows))
+    assert passed, notes
+    assert notes[0].startswith("version-and-project groups with 3+ sessions: 2")
 
 
 def test_gate_fails_when_a_version_varies_too_much():
