@@ -7,7 +7,8 @@ from ccdrift.sessions import (MIN_SESSIONS, context_changes_in, first_of_each, f
                              ratio_starts)
 from lab.harness import generate_synthetic
 from lab.session_start import (MAX_SPREAD, SWEEP_SEED, false_alert_rate, gate, main,
-                               project_version_table, steady_history, step_versions, version_table)
+                               project_version_table, residual_table, steady_history, step_versions,
+                               version_table)
 from tests.helpers import nth_day
 
 
@@ -99,7 +100,20 @@ def test_a_version_steady_in_one_project_passes_beside_a_second_project():
     rows = [("-a", 128_000), ("-b", 54_000)] * 4
     passed, notes = gate(projects_of(rows))
     assert passed, notes
-    assert notes[0].startswith("version-and-project groups with 3+ sessions: 2")
+    assert notes[0].startswith("projects with 3+ sessions: 2")
+
+
+def test_a_version_step_is_not_counted_as_noise():
+    # A project whose sessions step with the version: raw spread is the step, and the
+    # residual is what a session varies by once its own version's level is taken out.
+    # Reading the raw figure would call the signal the alert exists to find noise.
+    rows = [("2.1.261", 100_000), ("2.1.261", 101_000), ("2.1.261", 99_000),
+            ("2.1.276", 140_000), ("2.1.276", 141_000), ("2.1.276", 139_000)]
+    table = residual_table(starts_of(rows))
+    assert float(table["raw"].iloc[0]) > MAX_SPREAD
+    assert float(table["residual"].iloc[0]) < MAX_SPREAD
+    passed, notes = gate(starts_of(rows * 2))
+    assert passed, notes
 
 
 def test_gate_fails_when_a_version_varies_too_much():
