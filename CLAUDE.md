@@ -50,7 +50,7 @@ Tag-triggered Trusted Publishing over OIDC, no secrets.
 First check that anything ships: `git diff --stat v<previous>..HEAD -- src tests lab docs/findings.md README.md LICENSE pyproject.toml`, those paths being `only-include` in pyproject.toml, so change one and change the other. An empty result means the distributions would differ from the last by the version string alone, and a PyPI version can never be reused. Work on `.claude/`, `.github/` and this file never reaches the package and is finished once it is on `main`.
 
 1. Bump `__version__` in src/ccdrift/__init__.py to match the intended tag. The workflow installs wheel and sdist in isolation and fails unless each reports `ccdrift <tag>`.
-2. Update docs/findings.md, and refresh docs/what-ccdrift-caught.html (hand-maintained, no generator in the repo).
+2. Update docs/findings.md, and refresh docs/what-ccdrift-caught.html (hand-maintained, no generator in the repo; it fetches nothing over the network, so a font or library goes inline or not at all).
 3. Land the bump through a PR, like every change to `main`, then tag the squashed commit on `main`: `git tag v0.11.0 && git push origin v0.11.0`.
 4. `publish` waits for the maintainer's approval in the `pypi` environment and does not wait for `tests.yml`. Approve only once the tag's tests are green, and only when told to. Never `gh run watch` the release run: `publish` holds at `waiting` until the review, so the watch blocks on a person. Watch the tag's `tests.yml`, and read the release run with `gh run list`.
 5. Write the GitHub Release notes by hand. There is no CHANGELOG file; the Changelog URL points at GitHub Releases.
