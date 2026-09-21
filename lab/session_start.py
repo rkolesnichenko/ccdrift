@@ -9,10 +9,17 @@ over median) of at most 0.10.
 
 It asks that per project because a project is the level ccdrift alerts against: a session
 is judged against its own project's recent median, so two projects of different sizes on
-the same version say nothing about whether the version is steady. Pooled, it said the
-opposite. On 2026-09-21 a version first seen once in each of three projects scored a
-spread of 0.229, all of it the distance between those projects, on a day that had not
-finished.
+the same version say nothing about whether the version is steady. Pooled across projects
+it said the opposite. On 2026-09-21 a version first seen once in each of three projects
+scored a spread of 0.229, all of it the distance between those projects, on a day that had
+not finished.
+
+It measures what is left after the version level is removed, because a project's raw
+spread is mostly the steps the alert exists to find. One project's sessions ran 74.3k to
+140.4k over thirteen versions, climbing almost monotonically, for a raw spread of 0.123
+and a residual of 0.001. Another ran 0.174 raw and 0.035 residual. Feeding the raw figure
+to a false-alert simulation says the alert fires on a fifth of all histories, which is what
+you get for calling the signal noise.
 
 It used to demand that every step come with a version its baseline never ran, and 0.8.0's
 whole thesis contradicts that: a project's own CLAUDE.md, skills or MCP servers step its
@@ -73,10 +80,26 @@ def version_table(starts: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["version", "sessions", "median", "low", "high", "spread"])
 
 
+def residual_table(starts: pd.DataFrame) -> pd.DataFrame:
+    """Per project: sessions, and the spread left once each session is divided by its own
+    version's median in that project. What remains is the session-to-session noise the
+    alert has to see a step through, with the steps themselves taken out. A project needs
+    MIN_SESSIONS before its noise means anything."""
+    rows = []
+    projects = starts["project"].astype(str)
+    for project in dict.fromkeys(projects):
+        own = starts[projects == project]
+        tokens = own["prompt_tokens"].astype(float)
+        level = own["version"].fillna("unknown").astype(str).map(
+            tokens.groupby(own["version"].fillna("unknown").astype(str)).median())
+        rows.append({"project": project, "sessions": len(own), "raw": _spread(tokens.to_numpy()),
+                     "residual": _spread((tokens / level).to_numpy())})
+    return pd.DataFrame(rows, columns=["project", "sessions", "raw", "residual"])
+
+
 def project_version_table(starts: pd.DataFrame) -> pd.DataFrame:
-    """The same, per version within one project, which is the level ccdrift judges a
-    session at. A version seen once in each of three projects contributes three rows of
-    one session, none of which the gate reads."""
+    """Per version within one project, printed for the reader. Its spread mixes the
+    version's own steps into the noise, which is why the gate reads `residual_table`."""
     rows = []
     versions = starts["version"].fillna("unknown").astype(str)
     projects = starts["project"].astype(str)
@@ -134,14 +157,14 @@ def step_versions(judged: pd.DataFrame, change: ContextChange) -> list[str]:
 
 def gate(starts: pd.DataFrame) -> tuple[bool, list[str]]:
     judged = ratio_starts(starts)
-    steady = project_version_table(starts)
+    steady = residual_table(starts)
     steady = steady[steady["sessions"] >= MIN_SESSIONS]
-    spread_ok = bool(len(steady)) and bool((steady["spread"] <= MAX_SPREAD).all())
+    spread_ok = bool(len(steady)) and bool((steady["residual"] <= MAX_SPREAD).all())
     kept = first_of_each(found_changes(judged))
     with_new_version = sum(1 for change in kept if change.new_version)
-    notes = [f"version-and-project groups with {MIN_SESSIONS}+ sessions: {len(steady)}; largest spread "
-             f"{steady['spread'].max():.3f}" if len(steady)
-             else f"no version has {MIN_SESSIONS}+ sessions in one project",
+    notes = [f"projects with {MIN_SESSIONS}+ sessions: {len(steady)}; largest residual spread "
+             f"{steady['residual'].max():.3f} (largest raw {steady['raw'].max():.3f})" if len(steady)
+             else f"no project has {MIN_SESSIONS}+ sessions",
              f"steps found: {len(kept)}; with a version new to their baseline: {with_new_version}"]
     return spread_ok, notes
 
