@@ -4,10 +4,15 @@ name: release
 # `tests.yml` runs on any push, so the tag is tested as well; what this workflow adds is a
 # check that the built distributions really install and report the version the tag claims.
 #
-# No credentials are configured: PyPI is reached through Trusted Publishing (OIDC). It has
-# to be set up once on PyPI, under the ccdrift project's publishing settings:
+# No credentials are configured: PyPI is reached through Trusted Publishing (OIDC), set up
+# once and already in place:
 #   owner rkolesnichenko, repository ccdrift, workflow release.yml, environment pypi.
-# The `pypi` environment must exist in the repository's settings as well.
+# It was registered before ccdrift existed on PyPI, so it went in as a *pending* publisher
+# at pypi.org/manage/account/publishing, the only form that works for a name with no project
+# behind it. The first publish turns it into an ordinary publisher, and from then on it is
+# edited under the project's own publishing settings instead.
+# The `pypi` environment exists in the repository's settings, restricted to `v*` tags, so a
+# push to a branch cannot reach the job that mints the token.
 on:
   push:
     tags:

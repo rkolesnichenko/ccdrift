@@ -20,7 +20,7 @@ git tag --list 'v*' | tail -5
 ```
 
 - Working tree clean, on `main`.
-- A remote must exist. At last check this clone had none configured, so `git push origin` would fail. If `git remote -v` is empty, stop and ask before going further.
+- `origin` must point at `https://github.com/rkolesnichenko/ccdrift.git`. If `git remote -v` is empty or names anything else, stop and ask before going further.
 - The target tag must not already exist.
 
 If no version was given in the argument, ask for it. Do not infer one.
@@ -52,7 +52,16 @@ git push origin main
 git push origin v<version>
 ```
 
-Confirm the tag matches the pattern the workflow watches (`v*`, including rcN, aN, bN forms) and that the GitHub environment named `pypi` exists.
+Confirm the tag matches the pattern the workflow watches (`v*`, including rcN, aN, bN forms).
+
+Both halves of Trusted Publishing are configured and neither needs touching for an ordinary release. Check them only when `publish` fails, since a mismatch there is what a failure looks like:
+
+```
+gh api repos/rkolesnichenko/ccdrift/environments/pypi --jq .name
+gh api repos/rkolesnichenko/ccdrift/environments/pypi/deployment-branch-policies --jq '.branch_policies[].name'
+```
+
+The environment is `pypi`, restricted to `v*` tags. On the PyPI side the publisher claims owner rkolesnichenko, repository ccdrift, workflow release.yml, environment pypi, and every one of those must match or the token is refused. It started as a pending publisher, which is the only form available for a name with no project behind it; after the first publish it lives under the project's own publishing settings at pypi.org/manage/project/ccdrift/settings/publishing, not the account page it was created on.
 
 ## 6. Release notes
 
