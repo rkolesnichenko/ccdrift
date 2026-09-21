@@ -95,6 +95,19 @@ git log --oneline v<previous>..v<version>
 
 Write them in the repo's voice: no em dashes, no filler, one line per user-visible change, measurements named where a threshold moved. Show the draft and let me post it.
 
-## 7. Report
+## 7. Confirm it reached PyPI
 
-Version bumped, suite count, tag pushed, workflow run URL if available, and whether the docs were refreshed.
+`publish` going green means the upload was accepted, not that an install gets the new version. Check that before reporting the release done:
+
+```
+uv cache clean ccdrift
+uv run --isolated --no-project --with ccdrift --refresh -- ccdrift --version
+```
+
+`--refresh` revalidates every cached entry; `--refresh-package ccdrift` revalidates only that one package. Cutting 0.10.3 with `--refresh-package` reported the previous version while the simple index already listed the new wheel, and the same command with `--refresh` reported the new one a minute later. Which of the two explains it was never pinned down, so use `--refresh` and treat a stale answer as unproven rather than as a PyPI delay.
+
+Where to look when it disagrees with itself: `https://pypi.org/simple/ccdrift/` lists the files and updates first, `https://pypi.org/pypi/ccdrift/<version>/json` answers for one version, and `https://pypi.org/pypi/ccdrift/json` names the latest but is cached hard enough to keep naming the previous release for minutes after a publish. Do not report a failed upload on the strength of that last one.
+
+## 8. Report
+
+Version bumped, suite count, tag pushed, workflow run URL if available, whether the docs were refreshed, and the version a fresh install reports.
