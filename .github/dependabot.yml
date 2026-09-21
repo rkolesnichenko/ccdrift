@@ -1,0 +1,25 @@
+version: 2
+
+# release.yml pins every action by commit, so these pins only move when a PR moves them.
+# The cooldown holds back a new version for a week: a compromised release is usually pulled
+# within days. Security updates are not held back.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      python:
+        patterns: ["*"]

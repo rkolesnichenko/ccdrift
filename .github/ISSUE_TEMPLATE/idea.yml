@@ -1,0 +1,15 @@
+name: Idea
+description: Something ccdrift should catch or show.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What should ccdrift catch or show, and what would you do with it?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence it happens
+      description: Aggregates only, for example from `ccdrift report --json`. Every shipped cutoff is measured, so a new check starts from data.

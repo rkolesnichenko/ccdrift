@@ -1,0 +1,35 @@
+name: Claude Code changed its log format
+description: ccdrift can't compute the cache metric, or says Claude Code stopped logging a field.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it,
+        with text, ids and paths shown only as their length, so its output is safe to paste here.
+  - type: input
+    id: version
+    attributes:
+      label: ccdrift version
+      description: The output of `ccdrift --version`.
+    validations:
+      required: true
+  - type: input
+    id: claude-code
+    attributes:
+      label: Claude Code version
+      description: The version the alert names, or the output of `claude --version`.
+    validations:
+      required: true
+  - type: textarea
+    id: alert
+    attributes:
+      label: The alert
+      render: text
+  - type: textarea
+    id: peek
+    attributes:
+      label: What `ccdrift peek` prints
+      render: text
+    validations:
+      required: true
