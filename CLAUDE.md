@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - A constant that came from a measurement carries a comment with that measurement (detector.py:20, logs.py:104, check.py:50). Never add a bare magic number.
 - All user-visible wording and formatting lives in src/ccdrift/texts.py, so the check, report and status line stay consistent and the import stays light.
 - Test names are full English sentences.
-- Two hooks in `.claude/hooks/`, wired by the checked-in `.claude/settings.json`, warn and never block: write-guard.sh on an em dash or a heavy import on the status line path, parser-version-guard.sh on a `logs.py` change with no `PARSER_VERSION` bump. Both need `jq`.
+- Two hooks in `.claude/hooks/`, wired by the checked-in `.claude/settings.json`, warn and never block: write-guard.sh on an em dash, a heavy import on the status line path, or a copy of the sdist's paths that has fallen behind `only-include`, and parser-version-guard.sh on a `logs.py` change with no `PARSER_VERSION` bump. Both need `jq`.
 
 ## Invariants
 
