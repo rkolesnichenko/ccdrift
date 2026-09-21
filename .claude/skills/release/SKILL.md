@@ -72,6 +72,8 @@ Confirm the tag matches the pattern the workflow watches (`v*`, including rcN, a
 gh run list --branch v<version> --json workflowName,status,conclusion,databaseId
 ```
 
+Never `gh run watch` the release run. Its `publish` job sits in `waiting` until the deployment is reviewed, so the watch blocks on a human and burns its whole timeout without reporting anything. `gh run watch` the tag's `tests.yml` instead, which finishes on its own, and read the release run's state with the single query above. After I approve, one more of those says whether `publish` succeeded.
+
 Both halves of Trusted Publishing are configured and neither needs touching for an ordinary release. Check them only when `publish` fails, since a mismatch there is what a failure looks like:
 
 ```
