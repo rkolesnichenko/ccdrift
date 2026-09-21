@@ -12,3 +12,4 @@ dist/
 docs/superpowers/
 CLAUDE.local.md
 .claude/settings.local.json
+.claude/hooks/turn-notify.sh

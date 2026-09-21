@@ -5,6 +5,8 @@
 # Warns, never blocks. The model gets additionalContext, the user gets a systemMessage.
 # The em dash is matched by hex escape so this script does not trip its own check.
 
+# The repo root. Claude Code sets CLAUDE_PROJECT_DIR for hooks; the fallback keeps the
+# script working when it is run by hand, since it lives in <repo>/.claude/hooks.
 repo="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 payload=$(cat)
 file=$(printf '%s' "$payload" | jq -r '.tool_response.filePath // .tool_input.file_path // empty')

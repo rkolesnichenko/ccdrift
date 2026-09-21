@@ -3,6 +3,8 @@
 # PARSER_VERSION in src/ccdrift/history.py is bumped: History.update skips
 # transcripts it thinks are unchanged, so the store keeps its stale rows.
 
+# The repo root. Claude Code sets CLAUDE_PROJECT_DIR for hooks; the fallback keeps the
+# script working when it is run by hand, since it lives in <repo>/.claude/hooks.
 repo="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 cd "$repo" 2>/dev/null || exit 0
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0

@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/write-guard.sh\" || true",
+            "timeout": 10,
+            "statusMessage": "Checking repo conventions"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/parser-version-guard.sh\" || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
