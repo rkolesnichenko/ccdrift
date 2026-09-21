@@ -17,11 +17,13 @@ git status --porcelain
 git rev-parse --abbrev-ref HEAD
 git remote -v
 git tag --list 'v*' | tail -5
+git diff --stat v<previous>..HEAD -- src tests lab docs/findings.md README.md LICENSE pyproject.toml
 ```
 
 - Working tree clean, on `main`.
 - `origin` must point at `https://github.com/rkolesnichenko/ccdrift.git`. If `git remote -v` is empty or names anything else, stop and ask before going further.
 - The target tag must not already exist.
+- Something must actually ship. That last command's paths are a copy of `only-include` in pyproject.toml, which is the whole of the sdist, so they are the only diff a release can carry; change one and change the other. An empty result means the distributions would differ from the last one by the version string alone: stop, say so, and let me decide, since a PyPI version can never be reused. Work on `.claude/`, `.github/` and CLAUDE.md never reaches the package and is finished once it is on `main`.
 
 If no version was given in the argument, ask for it. Do not infer one.
 
