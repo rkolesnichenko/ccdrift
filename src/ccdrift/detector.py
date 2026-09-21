@@ -57,9 +57,11 @@ class DetectorConfig:
     flag_window: int = 4        # ...among this many bins in a row
     min_baseline: int = 5       # need at least this many baseline bins to judge
     # Per-metric overrides of z_threshold. A confirmed caching regression in real
-    # logs (Claude Code 2.1.233-2.1.258, Aug 2026) scored z = -4.9, -6.4, -3.1,
-    # -3.7 on its first days on the cache metric: 3.5 misses it, 3.0 catches it.
-    # 3.0 on every metric raised a false Haiku flag on clean synthetic logs.
+    # logs (Claude Code 2.1.233-2.1.258, Aug 2026) scored z = -3.8, -5.4, -2.8,
+    # -3.2 on the cache metric over its first four days, 2026-08-18 to 08-21.
+    # At 3.0 three of those four are deviant and the metric flags; at 3.5 only
+    # two are, and it does not. 3.0 on every metric raised a false Haiku flag on
+    # clean synthetic logs. docs/findings.md records the same four numbers.
     metric_z_thresholds: dict[str, float] = field(default_factory=lambda: {"cache_ratio": 3.0})
 
 
