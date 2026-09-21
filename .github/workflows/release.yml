@@ -12,7 +12,9 @@ name: release
 # behind it. The first publish turns it into an ordinary publisher, and from then on it is
 # edited under the project's own publishing settings instead.
 # The `pypi` environment exists in the repository's settings, restricted to `v*` tags, so a
-# push to a branch cannot reach the job that mints the token.
+# push to a branch cannot reach the job that mints the token. A ruleset lets only admins
+# create, move or delete a `v*` tag, and the environment waits for the maintainer's approval.
+# That approval is the moment to check `tests.yml` passed on the tag: `publish` doesn't wait.
 on:
   push:
     tags:

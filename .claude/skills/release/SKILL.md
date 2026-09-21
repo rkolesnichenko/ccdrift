@@ -43,16 +43,34 @@ uv build
 
 Run the full suite, not a subset, and paste the count. Do not proceed on a failure.
 
-## 5. Commit, tag, push
+## 5. Commit, land through a PR, tag
+
+`main` takes pull requests. The owner bypass lets a direct push through, so never use it.
 
 ```
+git switch -c release-<version>
 git commit -am "Release <version>"
+git push -u origin release-<version>
+gh pr create --fill
+gh pr checks --watch
+gh pr merge --squash --delete-branch
+git switch main && git pull --ff-only
+```
+
+Squashing makes a new commit, so tag `main` after the pull, never the branch. Check `__version__` there first, then:
+
+```
 git tag v<version>
-git push origin main
 git push origin v<version>
 ```
 
 Confirm the tag matches the pattern the workflow watches (`v*`, including rcN, aN, bN forms).
+
+`publish` then waits for approval in the `pypi` environment, and it does not wait for `tests.yml`. Watch `tests.yml` on the tag, report its result, and leave the approval to me: approve only when I say so, and never while the tag's tests are failing or still running.
+
+```
+gh run list --branch v<version> --json workflowName,status,conclusion,databaseId
+```
 
 Both halves of Trusted Publishing are configured and neither needs touching for an ordinary release. Check them only when `publish` fails, since a mismatch there is what a failure looks like:
 
@@ -61,7 +79,7 @@ gh api repos/rkolesnichenko/ccdrift/environments/pypi --jq .name
 gh api repos/rkolesnichenko/ccdrift/environments/pypi/deployment-branch-policies --jq '.branch_policies[].name'
 ```
 
-The environment is `pypi`, restricted to `v*` tags. On the PyPI side the publisher claims owner rkolesnichenko, repository ccdrift, workflow release.yml, environment pypi, and every one of those must match or the token is refused. It started as a pending publisher, which is the only form available for a name with no project behind it; after the first publish it lives under the project's own publishing settings at pypi.org/manage/project/ccdrift/settings/publishing, not the account page it was created on.
+The environment is `pypi`, restricted to `v*` tags, with me as its required reviewer and no admin bypass. A tag ruleset lets only admins create, move or delete a `v*` tag. On the PyPI side the publisher claims owner rkolesnichenko, repository ccdrift, workflow release.yml, environment pypi, and every one of those must match or the token is refused. It started as a pending publisher, which is the only form available for a name with no project behind it; after the first publish it lives under the project's own publishing settings at pypi.org/manage/project/ccdrift/settings/publishing, not the account page it was created on.
 
 ## 6. Release notes
 

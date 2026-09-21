@@ -41,6 +41,7 @@ Each of these fails silently when ignored.
 - Build log fixtures through `tests.helpers.line()`, which writes JSONL exactly as Claude Code does: one content block per line, usage repeated per line, fields omitted when None to mimic older versions. Both suites import from `tests.helpers`. Do not hand-roll transcript JSON.
 - Tests pin behavior at frozen dates (`helpers.T0`).
 - Scheduler changes are exercised for real in CI on Linux (install, status, remove round trip), so schedule.py can fail CI even when the unit tests pass.
+- CI allows only GitHub-owned actions plus `astral-sh/setup-uv` and `astral-sh/attest-action`, each pinned by full SHA. A new action needs both a SHA pin and an allowlist entry in the repository's Actions settings, or the run fails before its first step. Dependabot moves the pins weekly.
 
 ## Release
 
@@ -48,8 +49,9 @@ Tag-triggered Trusted Publishing over OIDC, no secrets.
 
 1. Bump `__version__` in src/ccdrift/__init__.py to match the intended tag. The workflow installs wheel and sdist in isolation and fails unless each reports `ccdrift <tag>`.
 2. Update docs/findings.md, and refresh docs/what-ccdrift-caught.html (hand-maintained, no generator in the repo).
-3. `git tag v0.11.0 && git push origin v0.11.0`.
-4. Write the GitHub Release notes by hand. There is no CHANGELOG file; the Changelog URL points at GitHub Releases.
+3. Land the bump through a PR, like every change to `main`, then tag the squashed commit on `main`: `git tag v0.11.0 && git push origin v0.11.0`.
+4. `publish` waits for the maintainer's approval in the `pypi` environment and does not wait for `tests.yml`. Approve only once the tag's tests are green, and only when told to.
+5. Write the GitHub Release notes by hand. There is no CHANGELOG file; the Changelog URL points at GitHub Releases.
 
 ## Layout
 
