@@ -1,12 +1,13 @@
 """The G2 spike: session-start size per version and whether its alerts would be sound."""
 
+import numpy as np
 import pandas as pd
 
 from ccdrift.sessions import (MIN_SESSIONS, context_changes_in, first_of_each, found_changes,
                              ratio_starts)
 from lab.harness import generate_synthetic
-from lab.session_start import (MAX_SPREAD, gate, main, project_version_table, step_versions,
-                               version_table)
+from lab.session_start import (MAX_SPREAD, SWEEP_SEED, false_alert_rate, gate, main,
+                               project_version_table, steady_history, step_versions, version_table)
 from tests.helpers import nth_day
 
 
@@ -105,6 +106,21 @@ def test_gate_fails_when_a_version_varies_too_much():
     rows = [("2.1.261", t) for t in (100_000, 130_000, 160_000, 100_000, 130_000, 160_000)]
     passed, _ = gate(starts_of(rows))
     assert not passed
+
+
+def test_the_spread_bar_is_where_the_shipped_rule_stops_raising_false_alerts():
+    # MAX_SPREAD is measured, not chosen: at the bar a steady history raises nothing, and
+    # twice it the shipped rule reports changes that were never planted. Seeded, so this
+    # pins the measurement rather than resampling it.
+    assert false_alert_rate(MAX_SPREAD, 30, 50, SWEEP_SEED) == 0.0
+    assert false_alert_rate(MAX_SPREAD * 2, 30, 50, SWEEP_SEED) > 0.0
+
+
+def test_a_steady_history_holds_no_change_to_find():
+    rng = np.random.default_rng(SWEEP_SEED)
+    starts = steady_history(0.02, 30, rng)
+    assert len(starts) == 30
+    assert first_of_each(context_changes_in(ratio_starts(starts))) == []
 
 
 def test_session_start_spike_runs_on_synthetic_logs(tmp_path, capsys):
