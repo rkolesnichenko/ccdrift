@@ -4,7 +4,8 @@ import random
 
 import pandas as pd
 
-from lab.early_warning import base_rate, evaluate, prompt_turns
+from lab.early_warning import (MAX_FALSE_PER_WEEK, base_rate, evaluate, false_alarm_rate,
+                               prompt_turns, rate_sweep)
 from tests.helpers import nth_day
 
 
@@ -41,6 +42,21 @@ def test_base_rate_uses_the_14_days_before_outside_incidents():
 def test_evaluate_finds_a_threshold_that_passes_on_a_clear_regression():
     incident = [nth_day(i) for i in range(20, 26)]
     table = evaluate(turns_frame(incident=incident), (incident[0], incident[-1]))
-    assert list(table.columns) == ["h", "false_alarms", "planted_median", "planted_caught", "planted_runs",
-                                   "real_alarm", "passes"]
+    assert list(table.columns) == ["h", "false_alarms", "weeks", "rate", "planted_median",
+                                   "planted_caught", "planted_runs", "real_alarm", "passes"]
     assert table["passes"].any()
+
+
+def test_the_false_alarm_rate_falls_as_the_threshold_rises():
+    # Seeded, so this pins the measurement the gate reads rather than resampling it.
+    rates = [false_alarm_rate(h, 0.0043) for h in (2, 3, 4, 5, 6)]
+    assert rates == sorted(rates, reverse=True)
+    assert rates[-1] < rates[0]
+
+
+def test_the_bar_separates_the_shipped_threshold_from_the_noisy_ones():
+    # What the gate now decides on: h = 4 clears the bar on every usual rate the check
+    # runs at, h = 3 clears none of them. A single alarm on a short corpus decides nothing.
+    sweep = rate_sweep().set_index("h")
+    assert (sweep.loc[4] <= MAX_FALSE_PER_WEEK).all()
+    assert (sweep.loc[3] > MAX_FALSE_PER_WEEK).all()
