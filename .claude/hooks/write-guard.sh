@@ -1,7 +1,8 @@
 #!/bin/bash
-# PostToolUse on Write|Edit. Checks two repo conventions at write time.
+# PostToolUse on Write|Edit. Checks three repo conventions at write time.
 #   1. No em dashes anywhere in the repo: prose, comments, docstrings.
 #   2. The status line path imports neither pandas nor numpy at module level.
+#   3. CLAUDE.md and the release skill quote the sdist's paths as pyproject.toml has them.
 # Warns, never blocks. The model gets additionalContext, the user gets a systemMessage.
 # The em dash is matched by hex escape so this script does not trip its own check.
 
@@ -24,6 +25,24 @@ if LC_ALL=C grep -q "$em" "$file"; then
   lines=$(LC_ALL=C grep -n "$em" "$file" | head -3 | cut -d: -f1 | tr '\n' ',' | sed 's/,$//')
   warnings="${warnings}${rel}: ${n} em dash(es) (line ${lines}). This repo has zero by convention; use a hyphen or an en dash. "
 fi
+
+# The release preflight diffs the previous tag over the sdist's paths to decide whether
+# anything ships, so CLAUDE.md and the release skill each write that list out. pyproject.toml
+# is the truth; a copy that falls behind it either blocks a real release or waves an empty
+# one through, and a spent PyPI version cannot be reused.
+case "$rel" in
+  pyproject.toml|CLAUDE.md|.claude/skills/release/SKILL.md)
+    paths=$(sed -n 's/^only-include = \[\(.*\)\]/\1/p' "$repo/pyproject.toml" |
+            sed 's/"//g; s/,/ /g; s/  */ /g; s/^ //; s/ $//')
+    if [ -n "$paths" ]; then
+      for copy in CLAUDE.md .claude/skills/release/SKILL.md; do
+        [ -f "$repo/$copy" ] || continue
+        grep -qF -- "$paths" "$repo/$copy" ||
+          warnings="${warnings}${copy}: does not quote the sdist's paths as pyproject.toml has them (only-include is: ${paths}). The release preflight diffs exactly those, so a stale copy misjudges whether a release ships anything. "
+      done
+    fi
+    ;;
+esac
 
 case "$rel" in
   src/ccdrift/texts.py|src/ccdrift/state.py|src/ccdrift/cli.py|src/ccdrift/status.py)
