@@ -1,5 +1,7 @@
 # ccdrift
 
+[![ccdrift on PyPI](https://img.shields.io/pypi/v/ccdrift)](https://pypi.org/project/ccdrift/)
+
 A check for silent changes in Claude Code, read from your own session logs.
 
 Claude Code keeps a transcript of every session on your machine. ccdrift reads them
