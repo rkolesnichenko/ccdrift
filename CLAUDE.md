@@ -33,7 +33,7 @@ Each of these fails silently when ignored.
 - **`report --html` is self-contained**: no scripts, no network fetches, everything escaped.
 - **Deterministic output**: sort every frame with `kind="stable"` before any positional or first/last logic, and seed lab sweeps explicitly. Breaking this breaks reproducibility of the gates.
 - **Alert-once**: a new alert kind needs its own key in `new_state()` (state.py:44) plus a suppression rule.
-- **Thresholds are measured, not chosen.** Changing a shipped cutoff means re-running the matching sweep in lab/ and recording the new number in docs/findings.md. The gate tests in lab/test_*.py assert that the shipped setting still passes.
+- **Thresholds are measured, not chosen.** Changing a shipped cutoff means re-running the matching sweep in lab/ and recording the new number in docs/findings.md. The gate tests in lab/test_*.py do not check that: they exercise the gate's logic on synthetic and constructed inputs, so `pytest` stays green while a shipped setting stops clearing its bar on the real corpus. Only `uv run --group lab python -m lab.<gate>` answers that, and it has to be run by hand. On 2026-09-21 the whole suite passed while G2 and G3 both failed that way.
 
 ## Testing
 
