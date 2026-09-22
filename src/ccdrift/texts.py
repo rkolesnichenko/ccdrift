@@ -215,6 +215,12 @@ def field_gap_line(gap: dict[str, Any]) -> str:
             f"{gap['share_before']:.0%} before")
 
 
+def new_field_line(record: dict[str, Any]) -> str:
+    paths = record["paths"]
+    return (f"{len(paths)} new field{'' if len(paths) == 1 else 's'} on {record['version']}: "
+            f"{', '.join(paths)}")
+
+
 def loop_warning_line(warning: dict[str, Any]) -> str:
     sessions = f"{warning['sessions']} session{'' if warning['sessions'] == 1 else 's'}"
     return (f"{LOOP_NAMES[warning['stream']]} at {warning['at'][:16].replace('T', ' ')} UTC: {warning['misses']} of "
