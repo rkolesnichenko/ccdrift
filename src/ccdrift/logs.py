@@ -311,6 +311,17 @@ def _status(value: Any) -> Optional[int]:
     return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def _cost(value: Any) -> Optional[float]:
+    """A cost in dollars, kept as the float Claude Code logged with no rounding; None
+    when it is absent, a boolean, not a number, or not finite (NaN or Infinity, which
+    JSON parsing accepts). A later fit compares this to a residual bound, so a non-finite
+    value must become None rather than a literal NaN or Infinity that comparison lets through."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
 def _record(obj: dict, key: str, rel: str) -> dict:
     """The fields a turn duration, hook run or compaction record keeps in common."""
     return {"key": key, "timestamp": parse_ts(field_get(obj, "timestamp")),
@@ -406,12 +417,10 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                         # same record copied into a resumed transcript is one row.
                         key = (f"{session}:{start}:{name}" if session and start is not None
                                else f"{rel}:{line_no}:{name}")
-                        cost = counts.get("costUSD")
                         parsed.model_usage.setdefault(key, {
                             "key": key, "timestamp": when, "model": name,
                             **{column: _num(counts.get(raw)) for column, raw in zip(USAGE_COUNTS, USAGE_KEYS)},
-                            "cost_usd": float(cost) if isinstance(cost, (int, float))
-                            and not isinstance(cost, bool) else None,
+                            "cost_usd": _cost(counts.get("costUSD")),
                             "source_file": rel,
                         })
                 continue

@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from ccdrift.detector import bin_metrics
-from ccdrift.logs import frame, judged_turns, outside_sdk, parse_all, parse_durations, parse_source
+from ccdrift.logs import frame, judged_turns, outside_sdk, parse_all, parse_durations, parse_file, parse_source
 from tests.helpers import (DAY, at, compact_boundary, cost_state, line, prompt, response, stop_hook_summary, text,
                            thinking, tool_result, turn_duration, write)
 
@@ -456,3 +456,19 @@ def test_a_cost_record_without_model_usage_yields_no_rows(tmp_path):
 def test_a_cost_record_takes_its_time_from_the_start_time(tmp_path):
     write(tmp_path / "s1.jsonl", [cost_state(at(0), {"claude-opus-5": {"input": 1, "costUSD": 0.01}})])
     assert str(parse_all(tmp_path).model_usage["day"].iloc[0]) == at(0)[:10]
+
+
+def test_a_cost_that_is_nan_becomes_none_rather_than_a_literal_nan(tmp_path):
+    # pd.isna(nan) is True whether the parser nulled the value or let a raw NaN
+    # through unchanged, so this checks the parsed row itself, not the frame.
+    fp = tmp_path / "s1.jsonl"
+    write(fp, [cost_state(at(0), {"claude-opus-5": {"input": 1, "costUSD": float("nan")}})])
+    row = next(iter(parse_file(fp, "s1.jsonl").model_usage.values()))
+    assert row["cost_usd"] is None
+
+
+def test_a_cost_that_is_infinite_becomes_none_rather_than_a_literal_infinity(tmp_path):
+    fp = tmp_path / "s1.jsonl"
+    write(fp, [cost_state(at(0), {"claude-opus-5": {"input": 1, "costUSD": float("inf")}})])
+    row = next(iter(parse_file(fp, "s1.jsonl").model_usage.values()))
+    assert row["cost_usd"] is None
