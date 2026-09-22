@@ -242,6 +242,12 @@ def test_reasons_are_listed_largest_first():
     assert miss_reason_line({"tools_changed": 2, "system_changed": 9}).startswith("the system prompt changed 9")
 
 
+def test_reasons_tied_in_count_are_ordered_by_name():
+    # "unavailable" is inserted first; "tools_changed" prints first anyway, by name.
+    assert miss_reason_line({"unavailable": 2, "tools_changed": 2}) == \
+        "the tools changed 2, the cache was unavailable 2"
+
+
 def test_the_json_holds_the_reason_counts(tmp_path, capsys):
     main_thread_days(tmp_path / "p", [{}, {}])
     write(tmp_path / "p" / "extra.jsonl", [line("x1", text(40), ts=at(0), version="2.1.226",
@@ -250,6 +256,21 @@ def test_the_json_holds_the_reason_counts(tmp_path, capsys):
     save_state(state, new_state())
     run_report(tmp_path / "p", state, as_json=True, today=date(2026, 9, 5))
     assert json.loads(capsys.readouterr().out)["miss_reasons"] == {"tools_changed": 1}
+
+
+def test_the_json_orders_tied_reasons_by_name(tmp_path, capsys):
+    main_thread_days(tmp_path / "p", [{}, {}])
+    # Written unavailable-then-tools_changed, so an unsorted report--json would show
+    # them in that, hash-dependent, order; this pins the tie-break on that surface.
+    write(tmp_path / "p" / "extra.jsonl", [line("x1", text(40), ts=at(0), version="2.1.226",
+                                                entrypoint="cli", miss_reason="unavailable"),
+                                          line("x2", text(40), ts=at(60), version="2.1.226",
+                                                entrypoint="cli", miss_reason="tools_changed")])
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    run_report(tmp_path / "p", state, as_json=True, today=date(2026, 9, 5))
+    payload = json.loads(capsys.readouterr().out)
+    assert list(payload["miss_reasons"]) == ["tools_changed", "unavailable"]
 
 
 @pytest.mark.parametrize("days", ["0", "-3", "two"])

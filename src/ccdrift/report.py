@@ -71,11 +71,16 @@ def daily_rows(turns: pd.DataFrame, days: int = DEFAULT_DAYS, cfg: Optional[Dete
 
 
 def reason_counts(turns: pd.DataFrame) -> dict[str, int]:
-    """How many of `turns` carry each cache-miss reason Claude Code recorded."""
+    """How many of `turns` carry each cache-miss reason Claude Code recorded, largest
+    first and ties broken by name: `value_counts` on tied counts is hash-ordered, not
+    name-ordered, and every caller of this dict (the version table, the day and version
+    JSON) relies on it already reading the same way on every run rather than re-sorting
+    it itself."""
     if turns.empty or "miss_reason" not in turns:
         return {}
     counts = turns["miss_reason"].dropna().astype(str).value_counts()
-    return {str(reason): int(n) for reason, n in counts.items()}
+    ordered = {str(reason): int(n) for reason, n in counts.items()}
+    return dict(sorted(ordered.items(), key=lambda item: (-item[1], item[0])))
 
 
 def reason_summary(turns: pd.DataFrame, days: Sequence[str]) -> Optional[dict[str, int]]:
