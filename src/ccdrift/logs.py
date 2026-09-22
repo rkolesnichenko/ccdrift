@@ -65,11 +65,17 @@ CANDIDATES: dict[str, list[str]] = {
     "prevented":         ["preventedContinuation"],
     "stop_reason":       ["message.stop_reason"],
     "miss_reason":       ["message.diagnostics.cache_miss_reason.type"],
+    "attribution_skill":  ["attributionSkill"],
+    "attribution_plugin": ["attributionPlugin"],
+    "attribution_mcp":    ["attributionMcpServer"],
+    "git_branch":         ["gitBranch"],
     "is_api_error":      ["isApiErrorMessage"],
     "api_error_status":  ["apiErrorStatus"],
     "retry_attempt":     ["retryAttempt"],
     "compact_trigger":   ["compactMetadata.trigger"],
     "compact_pre_tokens": ["compactMetadata.preTokens"],
+    "cost_usage":        ["modelUsage"],
+    "cost_start":        ["startTime"],
 }
 
 
@@ -212,14 +218,28 @@ def parse_ts(raw: Any) -> Optional[datetime]:
 # Text fields that keep the first value logged across a response's lines, and
 # token counts that keep the largest.
 SETTING_FIELDS = ("version", "entrypoint", "effort", "speed", "service_tier", "agent_type")
+# Where a response's work came from, and the branch it ran on. Kept apart from
+# SETTING_FIELDS, which means a setting Claude Code chose for the request; a branch
+# name is not one, and history.TEXT_COLUMNS is built from both.
+ATTRIBUTION_FIELDS = ("attribution_skill", "attribution_plugin", "attribution_mcp", "git_branch")
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_creation", "cache_read", "cache_1h", "cache_5m")
+
+# What one model's slice of a cost-state record counts. `web_searches` is fitted as its
+# own rate because it is billed per request, not per token: leaving it out makes
+# claude-haiku-4-5 fit at 4.72% instead of 0.00%.
+USAGE_COUNTS = ("input_tokens", "output_tokens", "cache_creation", "cache_read",
+                "thinking_tokens", "web_searches")
+
+# The keys Claude Code writes for each of USAGE_COUNTS inside modelUsage.
+USAGE_KEYS = ("inputTokens", "outputTokens", "cacheCreationInputTokens", "cacheReadInputTokens",
+              "thinkingTokens", "webSearchRequests")
 
 
 @dataclass
 class ParsedFile:
-    """One transcript's responses, turn durations, hook runs and compactions by key,
-    the transcript's first session id, line counts for --verbose, and the key census
-    (field_census, field_days) of its responses."""
+    """One transcript's responses, turn durations, hook runs, compactions and per-model
+    cost records by key, the transcript's first session id, line counts for --verbose,
+    and the key census (field_census, field_days) of its responses."""
     responses: dict[str, dict] = field(default_factory=dict)
     durations: dict[str, dict] = field(default_factory=dict)
     hook_runs: dict[str, dict] = field(default_factory=dict)
@@ -227,6 +247,7 @@ class ParsedFile:
     failures: dict[str, dict] = field(default_factory=dict)
     field_census: dict[tuple[str, str, str], int] = field(default_factory=dict)
     field_days: dict[tuple[str, str], int] = field(default_factory=dict)
+    model_usage: dict[str, dict] = field(default_factory=dict)
     session_id: Optional[str] = None
     lines: int = 0
     bad_json: int = 0
@@ -288,6 +309,17 @@ def banner_kind(content: Any) -> str:
 def _status(value: Any) -> Optional[int]:
     """An HTTP status as an integer; None when Claude Code logged none."""
     return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _cost(value: Any) -> Optional[float]:
+    """A cost in dollars, kept as the float Claude Code logged with no rounding; None
+    when it is absent, a boolean, not a number, or not finite (NaN or Infinity, which
+    JSON parsing accepts). A later fit compares this to a residual bound, so a non-finite
+    value must become None rather than a literal NaN or Infinity that comparison lets through."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def _record(obj: dict, key: str, rel: str) -> dict:
@@ -368,6 +400,30 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                         "prevented": bool(field_get(obj, "prevented", default=False)),
                     })
                 continue
+            if role == "cost-state":
+                # These records carry no timestamp, uuid, version, entrypoint or thread,
+                # only a session id and an epoch-millisecond start, so they cannot use
+                # _record() and must not claim a version they never logged.
+                usage = field_get(obj, "cost_usage")
+                if isinstance(usage, dict):
+                    start = field_get(obj, "cost_start")
+                    when = parse_ts(start)
+                    session = _text(field_get(obj, "session_id"))
+                    for model, counts in usage.items():
+                        if not isinstance(counts, dict):
+                            continue
+                        name = _text(model) or "unknown"
+                        # Session, start and model rather than a line position, so the
+                        # same record copied into a resumed transcript is one row.
+                        key = (f"{session}:{start}:{name}" if session and start is not None
+                               else f"{rel}:{line_no}:{name}")
+                        parsed.model_usage.setdefault(key, {
+                            "key": key, "timestamp": when, "model": name,
+                            **{column: _num(counts.get(raw)) for column, raw in zip(USAGE_COUNTS, USAGE_KEYS)},
+                            "cost_usd": _cost(counts.get("costUSD")),
+                            "source_file": rel,
+                        })
+                continue
             if role != "assistant":
                 continue
             parsed.assistant_lines += 1
@@ -394,6 +450,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                     "model":            model,
                     "stop_reason":      None,
                     "miss_reason":      None,
+                    **{name: None for name in ATTRIBUTION_FIELDS},
                     **{name: None for name in SETTING_FIELDS},
                     **{name: 0.0 for name in TOKEN_FIELDS},
                     "thinking_logged":  None,
@@ -414,7 +471,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                 }
                 main_thread_seen = main_thread_seen or not is_sidechain
             prompt_pending = compact_pending = False
-            for name in ("stop_reason", "miss_reason", *SETTING_FIELDS):
+            for name in ("stop_reason", "miss_reason", *ATTRIBUTION_FIELDS, *SETTING_FIELDS):
                 if row[name] is None:
                     row[name] = _text(field_get(obj, name))
             # output_tokens grows while streaming, so the largest is the
@@ -450,10 +507,11 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
             key = (day, version, clean)
             parsed.field_census[key] = parsed.field_census.get(key, 0) + 1
     # A transcript is one session, even when a resumed session's lines carry
-    # another id.
+    # another id. Every record kind is backfilled, including the cost records, so a table
+    # read straight from the transcripts has the columns the store's own read of it does.
     session = parsed.session_id or fp.stem
-    for row in (*parsed.responses.values(), *parsed.durations.values(),
-                *parsed.hook_runs.values(), *parsed.compactions.values(), *parsed.failures.values()):
+    for row in (*parsed.responses.values(), *parsed.durations.values(), *parsed.hook_runs.values(),
+                *parsed.compactions.values(), *parsed.failures.values(), *parsed.model_usage.values()):
         row["session_id"] = session
     return parsed
 
@@ -569,6 +627,13 @@ def failure_frame(rows) -> pd.DataFrame:
     return _record_frame(rows, ("status",), ("is_sidechain",))
 
 
+def usage_frame(rows) -> pd.DataFrame:
+    """Per-model usage and cost from Claude Code's own cost records, with its UTC day.
+    Unlike every other record table this one carries no version, entrypoint or thread,
+    because the records do not, so it declares no flag columns."""
+    return _record_frame(rows, (*USAGE_COUNTS, "cost_usd"), ())
+
+
 CENSUS_COLUMNS = ("day", "version", "path", "responses", "day_responses")
 
 
@@ -589,19 +654,20 @@ def census_frame(census: Mapping[tuple[str, str, str], int],
 @dataclass
 class Tables:
     """Everything ccdrift reads from transcripts, one table per record kind, plus the
-    key census (field_census)."""
+    key census (field_census) and per-model usage and cost (model_usage)."""
     responses: pd.DataFrame
     durations: pd.DataFrame
     hook_runs: pd.DataFrame
     compactions: pd.DataFrame
     failures: pd.DataFrame
     field_census: pd.DataFrame = field(default_factory=pd.DataFrame)
+    model_usage: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def parse_all(source: Path) -> Tables:
     """Every transcript under `source`, read once. A record copied into a second
     transcript counts from the one whose path sorts first."""
-    kinds = {"responses": {}, "durations": {}, "hook_runs": {}, "compactions": {}, "failures": {}}
+    kinds = {"responses": {}, "durations": {}, "hook_runs": {}, "compactions": {}, "failures": {}, "model_usage": {}}
     census: dict[tuple[str, str, str], int] = {}
     days: dict[tuple[str, str], int] = {}
     for fp, rel in jsonl_files(source):
@@ -623,7 +689,8 @@ def parse_all(source: Path) -> Tables:
                   hook_frame(list(kinds["hook_runs"].values())),
                   compaction_frame(list(kinds["compactions"].values())),
                   failure_frame(list(kinds["failures"].values())),
-                  census_frame(census, days))
+                  census_frame(census, days),
+                  usage_frame(list(kinds["model_usage"].values())))
 
 
 def parse_durations(source: Path) -> pd.DataFrame:

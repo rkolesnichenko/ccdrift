@@ -107,3 +107,9 @@ def test_check_and_schedule_install_take_no_digest():
     from ccdrift.cli import build_parser
     assert build_parser().parse_args(["check", "--no-digest"]).no_digest is True
     assert build_parser().parse_args(["schedule", "install", "--no-digest"]).no_digest is True
+
+
+def test_cost_rejects_a_dimension_it_does_not_know(capsys):
+    with pytest.raises(SystemExit):
+        main(["cost", "--by", "nonsense"])
+    assert "invalid choice" in capsys.readouterr().err

@@ -6,8 +6,8 @@ import pandas as pd
 import pytest
 
 from ccdrift.detector import bin_metrics
-from ccdrift.logs import frame, judged_turns, outside_sdk, parse_all, parse_durations, parse_source
-from tests.helpers import (DAY, at, compact_boundary, line, prompt, response, stop_hook_summary, text,
+from ccdrift.logs import frame, judged_turns, outside_sdk, parse_all, parse_durations, parse_file, parse_source
+from tests.helpers import (DAY, at, compact_boundary, cost_state, line, prompt, response, stop_hook_summary, text,
                            thinking, tool_result, turn_duration, write)
 
 
@@ -217,6 +217,29 @@ def test_the_first_line_of_a_response_that_records_a_reason_wins(tmp_path):
     assert parse_source(tmp_path)["miss_reason"].tolist() == ["system_changed"]
 
 
+def test_a_response_keeps_where_its_work_came_from_and_the_branch_it_ran_on(tmp_path):
+    write(tmp_path / "s1.jsonl", [line("m1", text(40), ts=at(0), skill="superpowers:writing-plans",
+                                       plugin="superpowers", mcp_server="context7", branch="main")])
+    row = parse_source(tmp_path).iloc[0]
+    assert (row["attribution_skill"], row["attribution_plugin"], row["attribution_mcp"],
+            row["git_branch"]) == ("superpowers:writing-plans", "superpowers", "context7", "main")
+
+
+def test_a_response_without_attribution_or_a_branch_has_none(tmp_path):
+    write(tmp_path / "s1.jsonl", [line("m1", text(40), ts=at(0))])
+    row = parse_source(tmp_path).iloc[0]
+    assert all(pd.isna(row[c]) for c in ("attribution_skill", "attribution_plugin",
+                                         "attribution_mcp", "git_branch"))
+
+
+def test_the_first_line_of_a_response_that_names_a_skill_wins(tmp_path):
+    write(tmp_path / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), skill="superpowers:brainstorming"),
+        line("m1", text(40), ts=at(1), skill="superpowers:writing-plans"),
+    ])
+    assert parse_source(tmp_path).loc[0, "attribution_skill"] == "superpowers:brainstorming"
+
+
 def test_cache_writes_are_split_into_the_1_hour_and_5_minute_tiers(tmp_path):
     # Claude Code writes the main thread's cache for an hour and subagents' and
     # Agent SDK sessions' for 5 minutes.
@@ -401,3 +424,51 @@ def test_the_census_rows_come_out_in_the_same_order_every_run(tmp_path):
     write(tmp_path / "s1.jsonl", [line(f"m{k}", text(40), ts=at(k), version="2.1.226") for k in range(5)])
     first = parse_all(tmp_path).field_census
     pd.testing.assert_frame_equal(first, parse_all(tmp_path).field_census)
+
+
+def test_a_cost_record_becomes_one_row_per_model(tmp_path):
+    write(tmp_path / "s1.jsonl", [cost_state(at(0), {
+        "claude-opus-5": {"input": 100, "output": 200, "costUSD": 0.01},
+        "claude-haiku-4-5": {"input": 10, "output": 20, "costUSD": 0.001}})])
+    usage = parse_all(tmp_path).model_usage
+    assert sorted(usage["model"]) == ["claude-haiku-4-5", "claude-opus-5"]
+    assert usage.loc[usage["model"] == "claude-opus-5", "cost_usd"].iloc[0] == 0.01
+
+
+def test_a_cost_record_keeps_its_cost_as_a_fraction_of_a_cent(tmp_path):
+    write(tmp_path / "s1.jsonl", [cost_state(at(0), {"claude-opus-5": {"input": 1, "costUSD": 0.00012345}})])
+    assert parse_all(tmp_path).model_usage["cost_usd"].iloc[0] == 0.00012345
+
+
+def test_a_cost_record_in_two_transcripts_counts_once(tmp_path):
+    rec = cost_state(at(0), {"claude-opus-5": {"input": 100, "costUSD": 0.01}})
+    write(tmp_path / "a.jsonl", [rec])
+    write(tmp_path / "b.jsonl", [rec])
+    assert len(parse_all(tmp_path).model_usage) == 1
+
+
+def test_a_cost_record_without_model_usage_yields_no_rows(tmp_path):
+    rec = cost_state(at(0), {})
+    write(tmp_path / "s1.jsonl", [rec])
+    assert parse_all(tmp_path).model_usage.empty
+
+
+def test_a_cost_record_takes_its_time_from_the_start_time(tmp_path):
+    write(tmp_path / "s1.jsonl", [cost_state(at(0), {"claude-opus-5": {"input": 1, "costUSD": 0.01}})])
+    assert str(parse_all(tmp_path).model_usage["day"].iloc[0]) == at(0)[:10]
+
+
+def test_a_cost_that_is_nan_becomes_none_rather_than_a_literal_nan(tmp_path):
+    # pd.isna(nan) is True whether the parser nulled the value or let a raw NaN
+    # through unchanged, so this checks the parsed row itself, not the frame.
+    fp = tmp_path / "s1.jsonl"
+    write(fp, [cost_state(at(0), {"claude-opus-5": {"input": 1, "costUSD": float("nan")}})])
+    row = next(iter(parse_file(fp, "s1.jsonl").model_usage.values()))
+    assert row["cost_usd"] is None
+
+
+def test_a_cost_that_is_infinite_becomes_none_rather_than_a_literal_infinity(tmp_path):
+    fp = tmp_path / "s1.jsonl"
+    write(fp, [cost_state(at(0), {"claude-opus-5": {"input": 1, "costUSD": float("inf")}})])
+    row = next(iter(parse_file(fp, "s1.jsonl").model_usage.values()))
+    assert row["cost_usd"] is None
