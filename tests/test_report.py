@@ -9,6 +9,8 @@ from ccdrift.cli import main
 from ccdrift.history import load_history
 from ccdrift.logs import judged_turns
 from ccdrift.report import _incident_days, daily_rows, run_report, version_key
+from ccdrift.state import new_state, save_state
+from ccdrift.texts import miss_reason_line
 from tests.helpers import (DAY, HAIKU, QUIET, at, busy_days, compact_boundary, daily_turns,
                            damage_responses_table, line, main_thread_days, prompt, stop_hook_summary, text,
                            tool_result, write)
@@ -205,13 +207,49 @@ def test_report_json_holds_aggregates_without_paths_or_session_ids(tmp_path, cap
     out = capsys.readouterr().out
     payload = json.loads(out)
     assert list(payload) == ["view", "days", "incidents", "reported_before_incidents", "settings", "hooks",
-                             "subagents", "failures", "cutoffs", "flag_rule"]
+                             "subagents", "failures", "miss_reasons", "cutoffs", "flag_rule"]
     assert payload["days"][0] == {"day": "2026-09-01", "responses": 60, "cache_ratio": pytest.approx(0.9),
                                   "cache_z": None, "haiku_share": 0.0, "haiku_z": None, "loop_turns": 0,
                                   "loop_misses": 0, "subagent_loop_turns": 0, "subagent_loop_misses": 0,
                                   "flagged": []}
     assert payload["cutoffs"] == {"cache_ratio": -3.0, "haiku_fraction": 3.5}
     assert str(tmp_path) not in out and ".jsonl" not in out and '"s0"' not in out
+
+
+def test_the_day_view_says_why_the_cache_missed(tmp_path, capsys):
+    main_thread_days(tmp_path / "p", [{}, {}])
+    write(tmp_path / "p" / "extra.jsonl", [line("x1", text(40), ts=at(0), version="2.1.226",
+                                                entrypoint="cli", miss_reason="system_changed")])
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    run_report(tmp_path / "p", state, today=date(2026, 9, 5))
+    assert "the system prompt changed 1" in capsys.readouterr().out
+
+
+def test_the_day_view_says_nothing_when_claude_code_recorded_no_reason(tmp_path, capsys):
+    main_thread_days(tmp_path / "p", [{}, {}])
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    run_report(tmp_path / "p", state, today=date(2026, 9, 5))
+    assert "Why the cache missed" not in capsys.readouterr().out
+
+
+def test_a_reason_ccdrift_hasnt_seen_is_shown_as_itself():
+    assert miss_reason_line({"something_new": 3}) == "something_new 3"
+
+
+def test_reasons_are_listed_largest_first():
+    assert miss_reason_line({"tools_changed": 2, "system_changed": 9}).startswith("the system prompt changed 9")
+
+
+def test_the_json_holds_the_reason_counts(tmp_path, capsys):
+    main_thread_days(tmp_path / "p", [{}, {}])
+    write(tmp_path / "p" / "extra.jsonl", [line("x1", text(40), ts=at(0), version="2.1.226",
+                                                entrypoint="cli", miss_reason="tools_changed")])
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    run_report(tmp_path / "p", state, as_json=True, today=date(2026, 9, 5))
+    assert json.loads(capsys.readouterr().out)["miss_reasons"] == {"tools_changed": 1}
 
 
 @pytest.mark.parametrize("days", ["0", "-3", "two"])

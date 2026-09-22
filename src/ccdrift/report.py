@@ -24,12 +24,13 @@ from ccdrift.loops import COUNT_COLUMNS, loop_counts
 from ccdrift.sessions import MIN_SESSIONS, project_lines, project_summary, session_starts
 from ccdrift.settings import settings_lines, settings_summary, subagent_lines, subagent_summary
 from ccdrift.state import load_state
-from ccdrift.texts import (INCIDENT_METRICS, SHORT_NAMES, approx, incident_line, misses as _misses,
-                           number as _number, version_key)
+from ccdrift.texts import (INCIDENT_METRICS, SHORT_NAMES, approx, incident_line, miss_reason_line,
+                           misses as _misses, number as _number, version_key)
 
 COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", *COUNT_COLUMNS, "flagged"]
 VERSION_COLUMNS = ["version", "first_day", "last_day", "responses", "prompt_turns", "cache_ratio",
-                   "miss_share", *COUNT_COLUMNS, "haiku_share", "session_start", "compacts_at", "release_notes"]
+                   "miss_share", *COUNT_COLUMNS, "haiku_share", "session_start", "compacts_at", "miss_reasons",
+                   "release_notes"]
 REPORT_TOPICS = ("cache", "haiku", "effort", "context", "hooks", "subagents")
 DEFAULT_DAYS = 21
 Entry = tuple[dict, float]  # an incident and its cost
@@ -69,6 +70,29 @@ def daily_rows(turns: pd.DataFrame, days: int = DEFAULT_DAYS, cfg: Optional[Dete
     }, columns=COLUMNS)
 
 
+def reason_counts(turns: pd.DataFrame) -> dict[str, int]:
+    """How many of `turns` carry each cache-miss reason Claude Code recorded."""
+    if turns.empty or "miss_reason" not in turns:
+        return {}
+    counts = turns["miss_reason"].dropna().astype(str).value_counts()
+    return {str(reason): int(n) for reason, n in counts.items()}
+
+
+def reason_summary(turns: pd.DataFrame, days: Sequence[str]) -> Optional[dict[str, int]]:
+    """The cache-miss reasons recorded over `days`; None when Claude Code recorded none."""
+    window = turns[turns["day"].astype(str).isin(list(days))] if not turns.empty else turns
+    counts = reason_counts(window)
+    return counts or None
+
+
+def reason_lines(summary: Optional[dict[str, int]]) -> list[str]:
+    """The report's cache-miss reason line, starting with a blank line; empty when
+    Claude Code recorded none. ccdrift counts these and does not judge them."""
+    if summary is None:
+        return []
+    return ["", "Why the cache missed, as Claude Code recorded it: " + miss_reason_line(summary)]
+
+
 def _median_for(table: Optional[pd.DataFrame], version: str, column: str, least: int = 1) -> float:
     """The median of `column` over the version's rows; NaN with fewer than `least`."""
     if table is None or table.empty:
@@ -87,7 +111,8 @@ def version_rows(turns: pd.DataFrame, changelog: Optional[dict] = None, starts: 
     day, responses, new-prompt turns with their cache ratio and share of misses,
     tool-loop turns and misses from `loops` (loop_counts by version), Haiku share,
     median session-start size (over MIN_SESSIONS or more sessions) and pre-compaction
-    size, and up to 2 release notes on file for that version."""
+    size, the cache-miss reasons recorded, and up to 2 release notes on file for that
+    version."""
     rows = []
     if not turns.empty:
         versions = (turns["version"].fillna("unknown") if "version" in turns
@@ -104,6 +129,7 @@ def version_rows(turns: pd.DataFrame, changelog: Optional[dict] = None, starts: 
                 "haiku_share": float(group["is_haiku"].mean()),
                 "session_start": _median_for(starts, str(version), "prompt_tokens", MIN_SESSIONS),
                 "compacts_at": _median_for(compactions, str(version), "pre_tokens"),
+                "miss_reasons": reason_counts(group),
                 "release_notes": [text for _, text in release_notes(changelog or {}, [str(version)], REPORT_TOPICS)],
             })
     rows.sort(key=lambda row: version_key(row["version"]))
@@ -171,6 +197,8 @@ def format_version_report(rows: pd.DataFrame, entries: Sequence[Entry], reported
             f"{_number(row.haiku_share, '.3f'):>11}"
             f"  {_size(row.session_start):>13}  {_size(row.compacts_at):>11}")
         lines += [f"    release notes: {text}" for text in row.release_notes]
+        if row.miss_reasons:
+            lines.append(f"    why the cache missed: {miss_reason_line(row.miss_reasons)}")
     return "\n".join(lines + _tail(entries, reported, summary)) + "\n"
 
 
@@ -273,10 +301,13 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
         subagents = subagent_summary(judged_subagent_turns(df, today), window)
         fails = failure_summary(failure_counts(judged_failures(tables.failures, today), turns), window)
         projects = project_summary(starts, window)
-        extra_lines = hooks_lines(hooks) + subagent_lines(subagents) + failure_lines(fails) + project_lines(projects)
+        reasons = reason_summary(turns, window)
+        extra_lines = (hooks_lines(hooks) + subagent_lines(subagents) + failure_lines(fails)
+                      + reason_lines(reasons) + project_lines(projects))
         # The day view names the project folders; --json keeps its promise of holding no
-        # paths, so the projects stay out of it.
-        extra_json = {"hooks": hooks, "subagents": subagents, "failures": fails}
+        # paths, so the projects stay out of it. The five reason values name none of
+        # those, so unlike the projects, they stay in.
+        extra_json = {"hooks": hooks, "subagents": subagents, "failures": fails, "miss_reasons": reasons or {}}
     summary = settings_summary(turns, window)
     if html_path is not None:
         from ccdrift import __version__
