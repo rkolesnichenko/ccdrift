@@ -7,7 +7,8 @@ import pytest
 
 from ccdrift.logs import parse_source
 from ccdrift.prices import Price
-from ccdrift.spend import DIMENSIONS, spend_rows, spend_turns, total_tokens
+from ccdrift.spend import DIMENSIONS, run_spend, spend_rows, spend_turns, total_tokens
+from ccdrift.state import new_state, save_state
 from tests.helpers import at, line, text, write
 
 TODAY = date(2026, 9, 10)
@@ -92,3 +93,37 @@ def test_the_day_still_in_progress_is_left_out(tmp_path):
 def test_agent_sdk_sessions_are_left_out(tmp_path):
     write(tmp_path / "p" / "s1.jsonl", [line("m1", text(40), ts=at(0), entrypoint="sdk-py")])
     assert spend_turns(parse_source(tmp_path / "p"), TODAY).empty
+
+
+def test_the_default_view_leads_with_thread_then_agent(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    corpus(tmp_path / "logs")
+    assert run_spend(tmp_path / "logs", state, today=TODAY) == 0
+    out = capsys.readouterr().out
+    assert out.index("By thread") < out.index("By agent")
+
+
+def test_a_named_dimension_shows_only_that_one(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    corpus(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, by="skill", today=TODAY)
+    out = capsys.readouterr().out
+    assert "By skill" in out and "By agent" not in out
+
+
+def test_a_history_with_no_cost_records_reports_tokens_and_no_dollars(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    corpus(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, today=TODAY)
+    out = capsys.readouterr().out
+    assert "tokens" in out and "$" not in out
+
+
+def test_a_source_with_no_transcripts_says_so(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    (tmp_path / "empty").mkdir()
+    assert run_spend(tmp_path / "empty", state, today=TODAY) == 2

@@ -11,7 +11,7 @@ from typing import Optional
 
 from ccdrift import __version__
 from ccdrift.state import ccdrift_home
-from ccdrift.texts import METRIC_ARGS
+from ccdrift.texts import DIMENSION_NAMES, METRIC_ARGS
 
 
 def choose_backend():
@@ -90,6 +90,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_state(report)
     # So a refusal `main` raises prints `usage: ccdrift report …`, as argparse's own do.
     report.set_defaults(_parser=report)
+
+    cost = commands.add_parser("cost", help="where the tokens went, by thread, agent, skill, "
+                               "plugin, MCP server, model, project or branch")
+    cost.add_argument("--days", type=_days, default=None,
+                      help="how many recent days to cover (default: 30)")
+    cost.add_argument("--by", choices=list(DIMENSION_NAMES), default=None,
+                      help="show one dimension instead of the usual set")
+    _add_source(cost)
+    _add_state(cost)
 
     status = commands.add_parser("status", help="how the last check went and what ccdrift is following")
     status.add_argument("--short", action="store_true",
@@ -253,6 +262,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             args._parser.error("--html draws the day view; drop --by version")
         return run_report(_source(args), _state(args), days=args.days, by=args.by, as_json=args.json,
                           html_path=args.html)
+    if args.command == "cost":
+        from ccdrift.spend import run_spend
+        return run_spend(_source(args), _state(args), days=args.days, by=args.by)
     if args.command == "status":
         from ccdrift.status import run_status
         return run_status(_state(args), short=args.short)

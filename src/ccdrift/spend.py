@@ -6,14 +6,18 @@ nothing: no rule, no threshold and no alert turns on any number here."""
 
 from __future__ import annotations
 
-from datetime import date
+import sys
+from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
-from ccdrift.logs import outside_sdk
-from ccdrift.prices import CACHE_READ_RATE, CACHE_WRITE_RATE, Price
+from ccdrift.history import HistoryError, load_history
+from ccdrift.logs import no_transcripts_message, outside_sdk
+from ccdrift.prices import CACHE_READ_RATE, CACHE_WRITE_RATE, Price, fit_prices
 from ccdrift.sessions import project_of
+from ccdrift.texts import DIMENSION_NAMES, approx, spend_line
 
 DIMENSIONS = ("thread", "agent", "skill", "plugin", "mcp", "model", "project", "branch")
 TOKEN_COLUMNS = ("input_tokens", "output_tokens", "cache_creation", "cache_read")
@@ -108,3 +112,47 @@ def priced_total(turns: pd.DataFrame, prices: dict[str, Price]) -> Optional[floa
     if len(unpriced):
         return None
     return float(by_model["dollars"].fillna(0).sum())
+
+
+DEFAULT_DAYS = 30
+DEFAULT_ORDER = ("thread", "agent", "skill", "plugin", "mcp", "model")
+
+
+def spend_lines(turns: pd.DataFrame, dimension: str, prices: dict[str, Price]) -> list[str]:
+    """One dimension's section, starting with a blank line."""
+    rows = spend_rows(turns, dimension, prices)
+    if rows.empty:
+        return []
+    lines = ["", f"By {DIMENSION_NAMES[dimension]}"]
+    for row in rows.itertuples(index=False):
+        dollars = None if pd.isna(row.dollars) else float(row.dollars)
+        lines.append(spend_line(row.bucket, int(row.responses), float(row.tokens), float(row.share), dollars))
+    return lines
+
+
+def run_spend(source: Path, state_path: Path, days: Optional[int] = None, by: Optional[str] = None,
+             today: Optional[date] = None) -> int:
+    """Print where the window's tokens went. Reads the history like `report`, saves no
+    state, and judges nothing."""
+    try:
+        tables = load_history(source, state_path, claim=False)
+    except HistoryError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if tables.responses.empty:
+        print(no_transcripts_message(source), file=sys.stderr)
+        return 2
+    today = today or datetime.now(timezone.utc).date()
+    turns = spend_turns(tables.responses, today)
+    window = sorted(turns["day"].astype(str).unique())[-(days or DEFAULT_DAYS):]
+    turns = turns[turns["day"].astype(str).isin(window)]
+    prices = fit_prices(tables.model_usage)
+    dimensions = [by] if by else list(DEFAULT_ORDER)
+    total = priced_total(turns, prices)
+    money = "" if total is None else f", {'$' + format(total, ',.2f')}"
+    lines = [f"{len(window)} complete UTC days, {approx(total_tokens(turns))} tokens{money}.",
+             "Every section below accounts for all of them; a response can appear in more than one section."]
+    for dimension in dimensions:
+        lines += spend_lines(turns, dimension, prices)
+    print("\n".join(lines) + "\n", end="")
+    return 0

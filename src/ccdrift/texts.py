@@ -38,6 +38,10 @@ REASON_NAMES = {"messages_changed": "the messages changed",
                 "tools_changed": "the tools changed",
                 "unavailable": "the cache was unavailable"}
 
+# What each dimension of `ccdrift cost` is called in its heading.
+DIMENSION_NAMES = {"thread": "thread", "agent": "agent", "skill": "skill", "plugin": "plugin",
+                   "mcp": "MCP server", "model": "model", "project": "project", "branch": "branch"}
+
 
 def number(value: Any, spec: str) -> str:
     """A number as the report prints it, or "-" when there is none."""
@@ -60,6 +64,13 @@ def approx(value: float) -> str:
         if rounded >= size:
             return f"{rounded / size:g}{suffix}"
     return f"{rounded:g}"
+
+
+def spend_line(bucket: str, responses: int, tokens: float, share: float, dollars: Optional[float]) -> str:
+    """"  general-purpose            52,078   19.6B   53.1%   $412.18", with the money left
+    off when the bucket holds a model ccdrift could not price."""
+    money = "" if dollars is None else f"  {'$' + format(dollars, ',.2f'):>12}"
+    return f"  {bucket:<34}  {responses:>8,}  {approx(tokens):>7}  {share:>6.1%}{money}"
 
 
 def cost_text(metric: str, cost: float) -> str:
