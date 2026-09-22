@@ -8,7 +8,7 @@ import pytest
 
 from ccdrift.logs import parse_source
 from ccdrift.prices import Price
-from ccdrift.spend import DIMENSIONS, run_spend, spend_rows, spend_turns, total_tokens
+from ccdrift.spend import DIMENSIONS, run_spend, spend_json, spend_rows, spend_turns, total_tokens
 from ccdrift.state import new_state, save_state
 from tests.helpers import at, line, text, write
 
@@ -136,14 +136,16 @@ def test_a_source_with_no_transcripts_says_so(tmp_path, capsys):
     assert run_spend(tmp_path / "empty", state, today=TODAY) == 2
 
 
-def test_the_json_holds_every_dimension_but_the_ones_that_name_your_folders(tmp_path, capsys):
-    state = tmp_path / "state.json"
-    save_state(state, new_state())
-    corpus(tmp_path / "logs")
-    run_spend(tmp_path / "logs", state, as_json=True, today=TODAY)
-    payload = json.loads(capsys.readouterr().out)
+def test_the_json_holds_every_dimension_but_the_ones_that_name_your_folders(tmp_path):
+    # Asked for all eight dimensions, including the two private ones, so the absence
+    # of "project" and "branch" below is a claim the filter has to earn rather than a
+    # fact about DEFAULT_ORDER, which never carries either one regardless of filtering.
+    turns = corpus(tmp_path)
+    window = sorted(turns["day"].astype(str).unique())
+    payload = json.loads(spend_json(turns, list(DIMENSIONS), {}, window))
     assert "thread" in payload["dimensions"] and "skill" in payload["dimensions"]
     assert "project" not in payload["dimensions"] and "branch" not in payload["dimensions"]
+    assert set(payload["withheld"]) == {"project", "branch"}
 
 
 def test_the_json_names_no_project_and_no_branch_even_when_asked_for_one(tmp_path, capsys):
@@ -154,6 +156,19 @@ def test_the_json_names_no_project_and_no_branch_even_when_asked_for_one(tmp_pat
     out = capsys.readouterr().out
     assert "topic" not in out and "proj-a" not in out
     assert json.loads(out)["withheld"] == ["branch"]
+
+
+def test_the_json_names_no_project_even_when_asked_for_one(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    corpus(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, by="project", as_json=True, today=TODAY)
+    out = capsys.readouterr().out
+    # The project bucket renders as a real filesystem path (see
+    # test_the_project_dimension_reads_back_as_a_path_not_its_raw_encoding), so the
+    # withheld check must be against that rendered form, not the raw folder name.
+    assert "/proj/a" not in out and "/proj/b" not in out
+    assert json.loads(out)["withheld"] == ["project"]
 
 
 def test_the_json_says_what_it_could_not_price(tmp_path, capsys):
