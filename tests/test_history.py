@@ -117,6 +117,17 @@ def test_a_transcript_that_grows_replaces_its_own_cost_records(tmp_path):
     assert len(load_history(source, state, claim=True).model_usage) == 2
 
 
+def test_a_transcript_that_shrinks_drops_its_own_cost_records(tmp_path):
+    source, state = tmp_path / "p", tmp_path / "state.json"
+    save_state(state, new_state())
+    first = cost_state(at(0), {"claude-opus-5": {"input": 100, "costUSD": 0.25}}, start=1)
+    second = cost_state(at(60), {"claude-opus-5": {"input": 9, "costUSD": 0.5}}, start=2)
+    write(source / "s1.jsonl", [first, second])
+    load_history(source, state, claim=True)
+    write(source / "s1.jsonl", [first])
+    assert len(load_history(source, state, claim=True).model_usage) == 1
+
+
 def test_counts_and_times_out_of_range_dont_fail_the_history(tmp_path):
     # SQLite can't store integers of 2**63 or more, and pandas can't hold times after
     # 2262; either failed every check while such a transcript was on disk.
