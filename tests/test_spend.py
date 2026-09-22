@@ -15,7 +15,9 @@ TODAY = date(2026, 9, 10)
 
 def corpus(tmp_path):
     """Four responses: two main thread, two in subagents, with attribution that overlaps
-    across dimensions the way Claude Code's does."""
+    across dimensions the way Claude Code's does. a2 carries a different model from the
+    other three, so the model dimension genuinely splits and the subagent thread bucket
+    holds two models, one priced and one not."""
     write(tmp_path / "proj-a" / "s1.jsonl", [
         line("m1", text(40), ts=at(0), entrypoint="cli", branch="main"),
         line("m2", text(40), ts=at(60), entrypoint="cli", branch="main",
@@ -25,7 +27,7 @@ def corpus(tmp_path):
         line("a1", text(40), ts=at(120), entrypoint="cli", sidechain=True, agent_type="general-purpose",
              branch="topic"),
         line("a2", text(40), ts=at(180), entrypoint="cli", sidechain=True, agent_type="Explore",
-             branch="topic", mcp_server="context7"),
+             branch="topic", mcp_server="context7", model="claude-haiku-4-5"),
     ])
     return spend_turns(parse_source(tmp_path), TODAY)
 
@@ -63,11 +65,22 @@ def test_buckets_come_out_largest_first_with_ties_broken_by_name(tmp_path):
     pd.testing.assert_frame_equal(rows, spend_rows(corpus(tmp_path), "branch", {}))
 
 
+def test_the_model_dimension_splits_two_models_into_two_buckets(tmp_path):
+    rows = spend_rows(corpus(tmp_path), "model", {})
+    assert dict(zip(rows["bucket"], rows["responses"])) == {"claude-opus-5": 3, "claude-haiku-4-5": 1}
+
+
 def test_a_bucket_is_priced_only_when_every_model_in_it_is(tmp_path):
     turns = corpus(tmp_path)
-    priced = {"claude-opus-5": Price(5e-6, 25e-6, 0.0, 0.0, 9)}
-    rows = spend_rows(turns, "thread", priced)
-    assert rows["dollars"].notna().all()
+    # The subagent bucket holds both claude-opus-5 (a1) and claude-haiku-4-5 (a2); pricing
+    # only the former must leave the whole bucket unpriced, not just a1's own dollars.
+    opus_only = {"claude-opus-5": Price(5e-6, 25e-6, 0.0, 0.0, 9)}
+    rows = spend_rows(turns, "thread", opus_only)
+    assert pd.notna(rows.loc[rows["bucket"] == "main thread", "dollars"].iloc[0])
+    assert pd.isna(rows.loc[rows["bucket"] == "subagent", "dollars"].iloc[0])
+
+    both_priced = {**opus_only, "claude-haiku-4-5": Price(1e-6, 5e-6, 0.0, 0.0, 9)}
+    assert spend_rows(turns, "thread", both_priced)["dollars"].notna().all()
     assert spend_rows(turns, "thread", {})["dollars"].isna().all()
 
 
