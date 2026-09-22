@@ -108,8 +108,8 @@ def test_a_version_with_too_few_responses_is_not_judged():
 
 
 def test_a_version_with_too_few_responses_before_it_is_not_judged():
-    # 14 days of 14 responses is 196, one short of MIN_BEFORE.
-    census, turns = a_census(old_per_day=(MIN_BEFORE - 4) // 14)
+    # 14 days of 14 responses is 196, four short of MIN_BEFORE.
+    census, turns = a_census(old_per_day=(MIN_BEFORE - 1) // 14)
     assert new_fields(census, turns, new_state(), date(2026, 9, 17)) == []
 
 
@@ -131,6 +131,17 @@ def test_a_field_just_under_that_share_is_not_reported():
 def test_a_field_the_days_before_already_carried_is_not_new():
     census, turns = a_census(old_paths=("version", "message.model", "advisorModel"))
     assert new_fields(census, turns, new_state(), date(2026, 9, 17)) == []
+
+
+def test_a_path_ccdrift_reads_through_a_deeper_leaf_is_not_reported_as_new():
+    # ccdrift reads message.usage.output_tokens_details.thinking_tokens; the census
+    # records only message.usage.output_tokens_details, cut to the depth it walks.
+    # advisorModel is a genuinely unread path arriving on the same version, and must
+    # still be reported.
+    census, turns = a_census(new_paths=("version", "message.model", "message.usage.output_tokens_details",
+                                        "advisorModel"))
+    records = new_fields(census, turns, new_state(), date(2026, 9, 17))
+    assert records[0]["paths"] == ["advisorModel"]
 
 
 def test_a_day_the_check_hasnt_judged_yet_is_left_out():

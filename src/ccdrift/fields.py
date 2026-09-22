@@ -11,7 +11,7 @@ from typing import Any
 
 import pandas as pd
 
-from ccdrift.logs import first_days_by_version
+from ccdrift.logs import READ_PATHS, first_days_by_version
 
 FIELDS = ("version", "entrypoint", "effort", "speed", "service_tier", "thinking_logged", "cache_split")
 FIELD_NAMES = {"version": "its version", "entrypoint": "the entrypoint", "effort": "effort",
@@ -118,7 +118,10 @@ def new_fields(census: pd.DataFrame, turns: pd.DataFrame, state: dict[str, Any],
     before it: fields Claude Code has started logging that ccdrift doesn't read. Every
     path arriving on one version is one record in state["new_fields"], and a path already
     named in one is never reported again, whatever version it turns up on later, since a
-    field can arrive, leave and arrive again."""
+    field can arrive, leave and arrive again. A path ccdrift already reads (READ_PATHS)
+    is skipped even when it arrives through a deeper leaf than the census walks: ccdrift
+    reads message.usage.output_tokens_details.thinking_tokens, which the census records
+    as message.usage.output_tokens_details."""
     if census.empty or turns.empty:
         return []
     # Only the days the check judges, which drops the day still in progress: the census
@@ -142,7 +145,8 @@ def new_fields(census: pd.DataFrame, turns: pd.DataFrame, state: dict[str, Any],
         if responses < MIN_RESPONSES or responses_before < MIN_BEFORE:
             continue
         found = sorted(path for path, share in on_version.items()
-                       if share >= ARRIVED and earlier.get(path, 0.0) < GONE and path not in known)
+                       if share >= ARRIVED and earlier.get(path, 0.0) < GONE and path not in known
+                       and path not in READ_PATHS)
         if not found:
             continue
         record = {"paths": found, "version": version,

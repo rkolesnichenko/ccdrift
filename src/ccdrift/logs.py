@@ -97,6 +97,20 @@ def field_get(obj: dict, logical: str, default: Any = None) -> Any:
 CENSUS_NESTED = ("message", "message.usage")
 
 
+# A CANDIDATES path cut to the depth the census walks, so the arrival rule doesn't
+# report a path ccdrift reads through a deeper leaf: it reads
+# message.usage.output_tokens_details.thinking_tokens, which the census records as
+# message.usage.output_tokens_details.
+def census_form(path: str) -> str:
+    parts = path.split(".")
+    if parts[0] != "message":
+        return parts[0]
+    return ".".join(parts[:3] if parts[1:2] == ["usage"] else parts[:2])
+
+
+READ_PATHS = frozenset(census_form(p) for paths in CANDIDATES.values() for p in paths)
+
+
 def record_paths(obj: dict) -> set[str]:
     """The dotted key paths one assistant record carries: its own keys, `message.*` and
     `message.usage.*`. Fifty of them in one person's logs over 25 Claude Code versions."""
@@ -426,7 +440,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
             continue
         if str(row["entrypoint"] or "").startswith(SDK_ENTRYPOINT_PREFIX):
             continue
-        day = row["timestamp"].date().isoformat()
+        day = row["timestamp"].astimezone(timezone.utc).date().isoformat()
         version = row["version"] or "unknown"
         parsed.field_days[(day, version)] = parsed.field_days.get((day, version), 0) + 1
         for path in paths:
@@ -738,7 +752,7 @@ def _num(v: Any) -> float:
 # Values peek shows as logged: how Claude Code logs, not what was said, where or in
 # which session. Any other text shows as its length, so the output can go into an issue.
 PEEK_SHOWN = frozenset({"type", "role", "model", "version", "entrypoint", "effort", "speed", "service_tier",
-                        "subtype", "stop_reason", "timestamp"})
+                        "subtype", "stop_reason", "miss_reason", "timestamp"})
 
 
 def _peek_value(value: Any, key: Optional[str] = None) -> Any:

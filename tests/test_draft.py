@@ -231,6 +231,17 @@ def test_a_cache_draft_leaves_the_reason_section_out_when_none_was_recorded(tmp_
     assert "Why the cache missed" not in drafted
 
 
+def test_a_cache_draft_leaves_the_reason_section_out_when_only_before_or_after_carries_one(tmp_path):
+    # The incident's during window (the middle 3 days) carries no reason; only the
+    # days after it do. The section is about the during window, not any window.
+    days = [{}] * 20 + [{}] * 3 + [{"reason": "unavailable", "reasons": 2}] * 5
+    main_thread_days(tmp_path / "logs", days)
+    responses = parse_source(tmp_path / "logs")
+    inc = incident("cache_ratio", nth_day(20), nth_day(22))
+    drafted = draft_markdown(responses, inc, [inc], {}, date(2026, 10, 20), DetectorConfig(), "macOS 26.5.2")
+    assert "Why the cache missed" not in drafted
+
+
 def test_a_haiku_incident_draft_compares_haiku_share_and_the_models_during(tmp_path):
     main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12, "version": "2.1.233"}] * 3
                      + [{"version": "2.1.259"}] * 5)
