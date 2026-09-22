@@ -66,11 +66,42 @@ def approx(value: float) -> str:
     return f"{rounded:g}"
 
 
-def spend_line(bucket: str, responses: int, tokens: float, share: float, dollars: Optional[float]) -> str:
-    """"  general-purpose            52,078   19.6B   53.1%   $412.18", with the money left
-    off when the bucket holds a model ccdrift could not price."""
-    money = "" if dollars is None else f"  {'$' + format(dollars, ',.2f'):>12}"
+def spend_line(bucket: str, responses: int, tokens: float, share: float, dollars: Optional[float],
+               unpriced: Sequence[str] = ()) -> str:
+    """"  general-purpose            52,078   19.6B   53.1%   $412.18". A bucket holding a
+    model ccdrift could not price shows "no price: claude-fable-5-1" where the money would
+    be, since a column that simply goes blank reads as broken arithmetic. A bucket that is
+    itself the model says "no price" alone: repeating its own name explains nothing."""
+    if dollars is not None:
+        money = f"  {'$' + format(dollars, ',.2f'):>12}"
+    elif unpriced:
+        named = [model for model in unpriced if model != bucket]
+        money = "  no price" + (": " + ", ".join(named) if named else "")
+    else:
+        money = ""
     return f"  {bucket:<34}  {responses:>8,}  {approx(tokens):>7}  {share:>6.1%}{money}"
+
+
+# Models named in the "no price" line before it gives up and counts the rest.
+UNPRICED_SHOWN = 3
+
+
+def unpriced_line(unpriced: Sequence[tuple[str, float]], total_withheld: bool) -> str:
+    """Why `ccdrift cost` shows no dollars somewhere: the models the price fit refused,
+    the share of the window's tokens each carries, and whether that was enough to withhold
+    the window's total. A missing dollar figure is only honest if its reason is printed."""
+    together = sum(share for _, share in unpriced)
+    if len(unpriced) == 1:
+        # One model's own share is the summed share, so it is said once, not twice.
+        names, share = unpriced[0][0], f"{together:.1%} of the window's tokens"
+    else:
+        shown = ", ".join(f"{model} ({each:.1%})" for model, each in unpriced[:UNPRICED_SHOWN])
+        rest = len(unpriced) - UNPRICED_SHOWN
+        names = shown + (f" and {rest} more" if rest > 0 else "")
+        share = f"{together:.1%} of the window's tokens between them"
+    if total_withheld:
+        return f"No total: no price for {names}, {share}. A bucket holding one shows no dollars either."
+    return f"No price for {names}, {share}: the total leaves that spend out, and a bucket holding one shows none."
 
 
 def cost_text(metric: str, cost: float) -> str:

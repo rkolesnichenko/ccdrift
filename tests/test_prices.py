@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from ccdrift.prices import MAX_RESIDUAL, Price, fit_prices
+from ccdrift.prices import MAX_RESIDUAL, billed_tokens, fit_prices
 
 
 def usage(rows, model="claude-opus-5"):
@@ -56,6 +56,17 @@ def test_a_model_with_too_few_records_is_not_priced():
     assert fit_prices(usage(priced([{"input_tokens": 1000, "output_tokens": 50}]))) == {}
 
 
+def test_a_model_is_priced_one_record_past_its_free_parameters_and_not_at_them():
+    # Two records against the two columns of a model that never searched are exactly
+    # determined: the fit is perfect by construction, so its 0.00% residual is evidence of
+    # nothing. MIN_EXTRA_ROWS is the whole of what refuses it, and the third record is
+    # what makes the residual an observation rather than an identity.
+    rows = priced([{"input_tokens": 1000, "output_tokens": 50}, {"input_tokens": 3000, "output_tokens": 700},
+                   {"input_tokens": 50, "output_tokens": 5000}])
+    assert fit_prices(usage(rows[:2])) == {}
+    assert round(fit_prices(usage(rows))["claude-opus-5"].input_rate * 1e6, 3) == 5.0
+
+
 def test_a_model_whose_costs_do_not_add_up_is_not_priced():
     rows = priced([{"input_tokens": 1000, "output_tokens": 50}, {"input_tokens": 3000, "output_tokens": 700},
                    {"input_tokens": 50, "output_tokens": 5000}, {"input_tokens": 7000, "output_tokens": 20}])
@@ -90,10 +101,11 @@ def test_a_fit_reports_how_far_off_it_was():
     assert fit_prices(usage(rows))["claude-opus-5"].residual <= MAX_RESIDUAL
 
 
-def test_a_price_turns_a_responses_tokens_into_dollars():
-    price = Price(input_rate=5e-6, output_rate=25e-6, web_search_rate=0.0, residual=0.0, rows=9)
-    # 1000 input + 1.25 * 400 write + 0.1 * 10000 read = 2500 billed at $5/Mtok, plus 100 output at $25.
-    assert round(price.dollars(1000, 100, 400, 10000), 8) == round(2500 * 5e-6 + 100 * 25e-6, 8)
+def test_a_cache_write_is_billed_more_than_an_input_token_and_a_cache_read_less():
+    # The formula the fit solves for and the breakdown charges a response with, in the one
+    # place it lives: 1000 input + 1.25 * 400 written + 0.1 * 10000 read = 2500 billed.
+    billed = billed_tokens(pd.Series([1000.0]), pd.Series([400.0]), pd.Series([10000.0]))
+    assert billed.tolist() == [2500.0]
 
 
 def test_an_empty_history_prices_nothing():

@@ -507,10 +507,11 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
             key = (day, version, clean)
             parsed.field_census[key] = parsed.field_census.get(key, 0) + 1
     # A transcript is one session, even when a resumed session's lines carry
-    # another id.
+    # another id. Every record kind is backfilled, including the cost records, so a table
+    # read straight from the transcripts has the columns the store's own read of it does.
     session = parsed.session_id or fp.stem
-    for row in (*parsed.responses.values(), *parsed.durations.values(),
-                *parsed.hook_runs.values(), *parsed.compactions.values(), *parsed.failures.values()):
+    for row in (*parsed.responses.values(), *parsed.durations.values(), *parsed.hook_runs.values(),
+                *parsed.compactions.values(), *parsed.failures.values(), *parsed.model_usage.values()):
         row["session_id"] = session
     return parsed
 
@@ -629,14 +630,8 @@ def failure_frame(rows) -> pd.DataFrame:
 def usage_frame(rows) -> pd.DataFrame:
     """Per-model usage and cost from Claude Code's own cost records, with its UTC day.
     Unlike every other record table this one carries no version, entrypoint or thread,
-    because the records do not."""
-    df = _rows_with_parsed_timestamp(rows)
-    if df.empty:
-        return df
-    for col in (*USAGE_COUNTS, "cost_usd"):
-        df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
-    df = df.sort_values(["source_file", "timestamp"], kind="stable").reset_index(drop=True)
-    return _with_day(df)
+    because the records do not, so it declares no flag columns."""
+    return _record_frame(rows, (*USAGE_COUNTS, "cost_usd"), ())
 
 
 CENSUS_COLUMNS = ("day", "version", "path", "responses", "day_responses")

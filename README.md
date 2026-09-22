@@ -231,14 +231,19 @@ appear in more than one section: one that carries both a skill and a plugin coun
 once in each. It reports and never alerts: no rule, no threshold, no cutoff turns on
 any number here.
 
-Dollars appear per model only where ccdrift could fit a price for it from Claude
-Code's own cost records, and the window's total is shown only once every model
-carrying material spend is priced; a partial total would be quietly wrong, so it's
-left out instead, and the by-model section shows which model has no dollar figure.
+Dollars appear only where ccdrift could fit a price for the model from Claude Code's
+own cost records. A bucket holding a model it could not price shows no dollars at all
+rather than a figure quietly missing one, and names the model that left it without
+any, in every section and not only the by-model one. The window's total is shown only
+once the models with no price are under 1% of its tokens between them; a partial total
+would be quietly wrong, so it's left out instead, and a line under the header names
+the models that withheld it.
 
 `ccdrift cost --json` withholds project and branch, exactly as `report --json`
 already withholds project folders, and lists them under a `withheld` key rather than
-dropping them without saying so.
+dropping them without saying so. It carries the evidence behind the money as well: the
+residual and record count of each fitted price under `priced_models`, and what it
+could not price, with that model's share of the window, under `unpriced_models`.
 
 Transcripts are read from `$CLAUDE_CONFIG_DIR/projects` when that variable is set,
 otherwise from `~/.claude/projects`. The state file, history and log live in

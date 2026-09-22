@@ -22,16 +22,26 @@ import pandas as pd
 CACHE_WRITE_RATE = 1.25
 CACHE_READ_RATE = 0.1
 
-# A fit must reproduce the costs it was fitted to this closely to be trusted. This is not
-# a detection cutoff and needs no corpus to measure: Claude Code already recorded the
-# answer, so the bound asks whether every cost component has been modelled. The worked
-# example is claude-haiku-4-5, which fits at 4.72% with web search left out of the
-# expression and at 0.00% with it in. On the owner's corpus the five models measured sit
-# between 0.00% and 0.47%.
+# A fit must reproduce the costs it was fitted to this closely to be trusted. This is not a
+# detection cutoff, and it is not fitted to a corpus's noise: Claude Code recorded the answer,
+# so the bound asks whether every cost component has been modelled rather than whether a
+# signal beat noise. The value sits between two measurements. It admits the worst real fit on
+# the owner's corpus with room, claude-opus-5[1m] at 0.47%, the five models measured spanning
+# 0.00% to 0.47%. It rejects the known-broken ablation, claude-haiku-4-5 at 4.72% with web
+# search left out of the expression against 0.00% with it in.
 MAX_RESIDUAL = 0.01
 
-# Records a model needs beyond its free parameters before its fit means anything.
+# Records a model needs beyond its free parameters before its fit means anything. At none of
+# them, two records against two columns are exactly determined: the fit is perfect by
+# construction, its residual measures nothing, and the model would be priced on no evidence.
 MIN_EXTRA_ROWS = 1
+
+
+def billed_tokens(input_tokens: pd.Series, cache_creation: pd.Series, cache_read: pd.Series) -> pd.Series:
+    """The input-priced tokens of a response or a cost record, cache writes and reads
+    charged at the ratios above. The one place that formula lives, so what the fit solves
+    for and what the breakdown charges a response can never drift apart."""
+    return input_tokens + CACHE_WRITE_RATE * cache_creation + CACHE_READ_RATE * cache_read
 
 
 @dataclass(frozen=True)
@@ -39,17 +49,13 @@ class Price:
     """What one model costs, fitted from Claude Code's own records, with the evidence."""
     input_rate: float        # per token, also charged on cache writes and reads at the ratios above
     output_rate: float       # per token
-    web_search_rate: float   # per request, 0.0 when the model never searched
+    # Per request, 0.0 when the model never searched. Nothing charges a response with it:
+    # web searches are billed per request and ccdrift keeps no per-response count of them.
+    # It is fitted, and kept, because leaving the term out of the expression is what makes
+    # claude-haiku-4-5 fit at 4.72% instead of 0.00% and lose its token rates with it.
+    web_search_rate: float
     residual: float          # relative, against the costs this was fitted to
     rows: int
-
-    def dollars(self, input_tokens: float, output_tokens: float,
-                cache_creation: float, cache_read: float) -> float:
-        """What a response's tokens cost. Web searches are not counted: they are billed
-        per request and ccdrift does not keep a per-response count of them. They are
-        fitted only so the token rates come out right."""
-        billed = input_tokens + CACHE_WRITE_RATE * cache_creation + CACHE_READ_RATE * cache_read
-        return billed * self.input_rate + output_tokens * self.output_rate
 
 
 def fit_prices(usage: pd.DataFrame) -> dict[str, Price]:
@@ -62,10 +68,9 @@ def fit_prices(usage: pd.DataFrame) -> dict[str, Price]:
     prices: dict[str, Price] = {}
     for model, group in usage.groupby(usage["model"].astype(str), sort=True):
         rows = group.dropna(subset=["cost_usd"])
-        billed = (rows["input_tokens"] + CACHE_WRITE_RATE * rows["cache_creation"]
-                  + CACHE_READ_RATE * rows["cache_read"]).to_numpy(dtype=float)
+        billed = billed_tokens(rows["input_tokens"], rows["cache_creation"], rows["cache_read"])
         searches = rows["web_searches"].to_numpy(dtype=float)
-        columns = [billed, rows["output_tokens"].to_numpy(dtype=float)]
+        columns = [billed.to_numpy(dtype=float), rows["output_tokens"].to_numpy(dtype=float)]
         # An all-zero column is rank-deficient, and most models never search.
         if searches.any():
             columns.append(searches)

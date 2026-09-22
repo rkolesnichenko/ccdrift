@@ -99,6 +99,19 @@ def test_the_store_keeps_the_per_model_cost_records(tmp_path):
     assert usage["model"].tolist() == ["claude-opus-5"] and usage["cost_usd"].iloc[0] == 0.25
 
 
+def test_the_store_and_a_fresh_parse_return_the_same_cost_record_table(tmp_path):
+    write(tmp_path / "p" / "s1.jsonl", [cost_state(at(0), {"claude-opus-5": {"input": 100, "costUSD": 0.25}})])
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    stored = load_history(tmp_path / "p", state, claim=True).model_usage
+    parsed = parse_all(tmp_path / "p").model_usage
+    # The store reads a session id back beside every record kind, so parse_file has to
+    # backfill it onto the cost records too. Without it the same history hands a caller
+    # different columns depending on whether a store happened to exist yet.
+    assert set(stored.columns) == set(parsed.columns)
+    assert parsed["session_id"].tolist() == stored["session_id"].tolist() == ["s1"]
+
+
 def test_a_stored_cost_keeps_its_fractional_cents(tmp_path):
     write(tmp_path / "p" / "s1.jsonl", [cost_state(at(0), {"claude-opus-5": {"input": 1, "costUSD": 0.00012345}})])
     state = tmp_path / "state.json"
