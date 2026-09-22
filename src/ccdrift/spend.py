@@ -53,7 +53,8 @@ DETACHED = "detached HEAD"
 # only whether one figure prints. A rounding-error model should not silence a total and a
 # real one should, so the test is against the unpriced models' summed share: five models
 # at 0.9% each are 4.5% of the window counted as zero dollars, which is the partial total
-# the rule exists to refuse.
+# the rule exists to refuse. The same cutoff also decides each bucket's own figure, against
+# that bucket's own tokens rather than the window's; see spend_rows for the measurement.
 MATERIAL_SHARE = 0.01
 
 

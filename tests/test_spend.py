@@ -9,8 +9,9 @@ import pytest
 from ccdrift.history import load_history
 from ccdrift.logs import parse_source
 from ccdrift.prices import Price
-from ccdrift.spend import (DIMENSIONS, MATERIAL_SHARE, branch_projects, priced_total, run_spend, spend_json,
-                           spend_rows, spend_turns, total_tokens)
+from ccdrift.spend import (DEFAULT_ORDER, DIMENSIONS, MATERIAL_SHARE, PRIVATE_DIMENSIONS, TOKEN_COLUMNS,
+                           branch_projects, priced_total, run_spend, spend_json, spend_rows, spend_turns,
+                           total_tokens)
 from ccdrift.state import new_state, save_state
 from ccdrift.texts import DIMENSION_NAMES
 from tests.helpers import at, cost_state, line, text, write
@@ -136,6 +137,12 @@ def test_every_dimension_has_a_heading_and_every_heading_a_dimension():
     assert set(DIMENSIONS) == set(DIMENSION_NAMES)
 
 
+def test_the_terminals_default_dimensions_are_the_same_ones_the_json_defaults_to():
+    # run_spend passes DEFAULT_ORDER to the terminal path and list(DIMENSIONS) to the JSON
+    # one; they agree today only by coincidence of content and order, unpinned here.
+    assert tuple(d for d in DIMENSIONS if d not in PRIVATE_DIMENSIONS) == DEFAULT_ORDER
+
+
 @pytest.mark.parametrize("dimension", DIMENSIONS)
 def test_every_dimension_accounts_for_all_the_tokens(tmp_path, dimension):
     turns = corpus(tmp_path)
@@ -182,17 +189,30 @@ def test_a_source_holding_no_project_folder_is_one_project_and_not_one_per_sessi
     assert "0199c3d0" not in "".join(rows["bucket"])
 
 
-def test_a_repository_with_no_branch_checked_out_is_kept_out_of_the_branch_names(tmp_path):
+def test_a_repository_with_no_branch_checked_out_is_kept_out_of_the_branch_names(tmp_path, capsys):
     # "HEAD" is what git answers with nothing checked out, so it is not a branch name and
     # must not sort among them. It stays apart from "no branch", which means the field is
     # absent: a Claude Code version fact rather than a git one, and not the same thing.
-    write(tmp_path / "p" / "s1.jsonl", [
+    write(tmp_path / "logs" / "p" / "s1.jsonl", [
         line("m1", text(40), ts=at(0), entrypoint="cli", branch="HEAD"),
         line("m2", text(40), ts=at(60), entrypoint="cli", branch="main"),
         line("m3", text(40), ts=at(120), entrypoint="cli"),
     ])
-    rows = spend_rows(spend_turns(parse_source(tmp_path / "p"), TODAY), "branch", {})
+    # A second project folder detached at the same time as the first, so the detached
+    # bucket is the one place this suite ties the rename to branch_projects' own lookup
+    # and to the count the printed row carries, rather than to the raw "HEAD" value.
+    write(tmp_path / "logs" / "q" / "s2.jsonl", [
+        line("m4", text(40), ts=at(180), entrypoint="cli", branch="HEAD"),
+    ])
+    turns = spend_turns(parse_source(tmp_path / "logs"), TODAY)
+    rows = spend_rows(turns, "branch", {})
     assert set(rows["bucket"]) == {"detached HEAD", "main", "no branch"}
+    assert branch_projects(turns)["detached HEAD"] == 2
+
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    run_spend(tmp_path / "logs", state, by="branch", today=TODAY)
+    assert bucket_line(capsys.readouterr().out, "detached HEAD").endswith("2 projects")
 
 
 def test_the_partition_still_holds_with_a_detached_bucket_in_it(tmp_path):
@@ -280,6 +300,15 @@ def test_the_cutoff_is_measured_against_the_bucket_and_not_against_the_window(tm
     rows = spend_rows(turns, "thread", OPUS).set_index("bucket")
     assert rows.loc["subagent", "share"] < MATERIAL_SHARE     # 0.02% of the window
     assert pd.isna(rows.loc["subagent", "dollars"])           # and 100% of itself
+
+
+def test_a_bucket_with_no_tokens_at_all_blanks_rather_than_dividing_by_them(tmp_path):
+    # A response whose message carries no usage parses to zero tokens, so a bucket can
+    # sum to zero and the share it would be tested on does not exist.
+    turns = corpus(tmp_path).assign(**{column: 0 for column in TOKEN_COLUMNS})
+    rows = spend_rows(turns, "thread", OPUS).set_index("bucket")
+    assert pd.isna(rows.loc["subagent", "dollars"])          # holds an unpriced model
+    assert rows.loc["main thread", "dollars"] == 0.0         # priced, and worth nothing
 
 
 def test_the_model_dimension_is_all_or_nothing_whatever_the_cutoff_is(tmp_path):
@@ -415,6 +444,7 @@ def test_a_withheld_total_says_which_model_withheld_it(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "$" not in out.splitlines()[0]
     assert out.splitlines()[2].startswith("No total: no price for claude-fable-5-1, 20.8% of the window's tokens.")
+    assert out.splitlines()[2].endswith("A bucket where it reaches 1% shows no dollars either.")
 
 
 def test_a_history_with_no_cost_records_reports_tokens_and_no_dollars(tmp_path, capsys):
@@ -536,7 +566,7 @@ def test_a_branch_reached_from_more_than_one_project_says_how_many(tmp_path, cap
 
 
 def test_the_project_count_belongs_to_the_branch_dimension_even_when_another_buckets_name_matches_it(tmp_path,
-                                                                                                       capsys):
+                                                                                                     capsys):
     # `pooled` is keyed by branch name alone, so a lookup that forgot to restrict itself to
     # the branch dimension would hit any other dimension's bucket sharing that name, not by
     # rule but by luck of the fixture not colliding. This fixture makes them collide on
