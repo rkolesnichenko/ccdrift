@@ -109,8 +109,10 @@ def response_dollars(turns: pd.DataFrame, prices: dict[str, Price]) -> pd.Series
 
 def spend_rows(turns: pd.DataFrame, dimension: str, prices: dict[str, Price]) -> pd.DataFrame:
     """One row per bucket of `dimension`: responses, tokens, share of the window's tokens,
-    dollars when every response in the bucket has a priced model, and, when they do not,
-    the models that have no price, named so a blank money column can say why it is blank.
+    dollars from the models it could price while the ones it could not stay under
+    MATERIAL_SHARE of the bucket's own tokens, and the models with no price, named so a
+    blank money column can say why it is blank. A bucket keeps naming them once priced,
+    since the JSON carries both and a reader is owed the reason the figure is a floor.
     Largest first, ties by name, so two runs over one history read the same."""
     columns = ["bucket", "responses", "tokens", "share", "dollars", "unpriced"]
     if turns.empty:
@@ -125,9 +127,18 @@ def spend_rows(turns: pd.DataFrame, dimension: str, prices: dict[str, Price]) ->
     rows = []
     for bucket, group in frame.groupby("bucket", sort=True):
         tokens, priced = float(group["tokens"].sum()), group["dollars"].notna()
+        missing = float(group.loc[~priced, "tokens"].sum())
+        # The window's own materiality rule, applied at the level it was always about. On
+        # the owner's corpus on 2026-09-22, all-or-nothing meant 11 responses of a model
+        # with no price, 0.009% of the window's tokens, blanked the top row of five of the
+        # six public dimensions, 60.5% to 95.5% of the window each, while the total one
+        # line above printed because that same 0.009% cleared this same cutoff. The
+        # denominator is the bucket and not the window: measured against the window, a
+        # small bucket that is entirely unpriced would pass, which is the one case to catch.
+        material = (missing / tokens >= MATERIAL_SHARE) if tokens else bool((~priced).any())
         rows.append({"bucket": str(bucket), "responses": len(group), "tokens": tokens,
                      "share": tokens / total if total else 0.0,
-                     "dollars": float(group["dollars"].sum()) if priced.all() else float("nan"),
+                     "dollars": float("nan") if material else float(group.loc[priced, "dollars"].sum()),
                      "unpriced": tuple(sorted(set(group.loc[~priced, "model"])))})
     out = pd.DataFrame(rows, columns=columns)
     return out.sort_values(["tokens", "bucket"], ascending=[False, True],
@@ -244,7 +255,7 @@ def run_spend(source: Path, state_path: Path, days: Optional[int] = None, by: Op
     # Said once, at the top: which models have no price, and whether that was enough to
     # withhold the total. Missing money that says nothing reads as broken arithmetic.
     if unpriced and priced_in_window(turns, prices):
-        lines.append(unpriced_line(unpriced, total is None))
+        lines.append(unpriced_line(unpriced, total is None, MATERIAL_SHARE))
     for dimension in dimensions:
         lines += spend_lines(turns, dimension, prices)
     print("\n".join(lines) + "\n", end="")

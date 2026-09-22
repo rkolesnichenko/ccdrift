@@ -86,10 +86,12 @@ def spend_line(bucket: str, responses: int, tokens: float, share: float, dollars
 UNPRICED_SHOWN = 3
 
 
-def unpriced_line(unpriced: Sequence[tuple[str, float]], total_withheld: bool) -> str:
+def unpriced_line(unpriced: Sequence[tuple[str, float]], total_withheld: bool, cutoff: float) -> str:
     """Why `ccdrift cost` shows no dollars somewhere: the models the price fit refused,
-    the share of the window's tokens each carries, and whether that was enough to withhold
-    the window's total. A missing dollar figure is only honest if its reason is printed."""
+    the share of the window's tokens each carries, and where that was enough to withhold a
+    figure. One cutoff decides the window's total and every bucket's, so it is stated once
+    here with its number rather than repeated on each row it lets through. A missing
+    dollar figure is only honest if its reason is printed."""
     together = sum(share for _, share in unpriced)
     if len(unpriced) == 1:
         # One model's own share is the summed share, so it is said once, not twice.
@@ -100,8 +102,10 @@ def unpriced_line(unpriced: Sequence[tuple[str, float]], total_withheld: bool) -
         names = shown + (f" and {rest} more" if rest > 0 else "")
         share = f"{together:.1%} of the window's tokens between them"
     if total_withheld:
-        return f"No total: no price for {names}, {share}. A bucket holding one shows no dollars either."
-    return f"No price for {names}, {share}: the total leaves that spend out, and a bucket holding one shows none."
+        return (f"No total: no price for {names}, {share}. A bucket where it reaches "
+                f"{cutoff:.0%} shows no dollars either.")
+    return (f"No price for {names}, {share}: that spend is left out of the total, and out of any bucket "
+            f"where it stays under {cutoff:.0%}. A bucket where it reaches {cutoff:.0%} shows no dollars at all.")
 
 
 def cost_text(metric: str, cost: float) -> str:

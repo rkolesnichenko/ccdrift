@@ -91,6 +91,9 @@ def five_small_models(tmp_path):
 
 
 OPUS = {"claude-opus-5": Price(5e-6, 25e-6, 0.0, 0.0, 9)}
+# Both the models money_corpus records costs for, at the rates RATES states, so a bucket
+# holding a1 alongside an unpriced response has a dollar figure to be priced from.
+OPUS_AND_HAIKU = {**OPUS, "claude-haiku-4-5": Price(1e-6, 5e-6, 0.0, 0.0, 9)}
 
 
 def test_every_dimension_has_a_heading_and_every_heading_a_dimension():
@@ -171,10 +174,11 @@ def test_a_price_joins_its_model_by_the_whole_name_and_never_by_a_prefix_of_it(t
     assert dict(zip(rows["bucket"], rows["dollars"].notna())) == {"claude-opus-5": True, "claude-opus-5[1m]": False}
 
 
-def test_a_bucket_is_priced_only_when_every_model_in_it_is(tmp_path):
+def test_a_bucket_blanks_when_its_unpriced_models_are_material_to_that_bucket(tmp_path):
     turns = corpus(tmp_path)
-    # The subagent bucket holds both claude-opus-5 (a1) and claude-haiku-4-5 (a2); pricing
-    # only the former must leave the whole bucket unpriced, not just a1's own dollars.
+    # The subagent bucket holds both claude-opus-5 (a1) and claude-haiku-4-5 (a2), half
+    # its tokens each, so pricing only the former must leave the whole bucket unpriced.
+    # Half is not a rounding error; the bucket below, where the unpriced share is, is.
     opus_only = {"claude-opus-5": Price(5e-6, 25e-6, 0.0, 0.0, 9)}
     rows = spend_rows(turns, "thread", opus_only)
     assert pd.notna(rows.loc[rows["bucket"] == "main thread", "dollars"].iloc[0])
@@ -183,6 +187,52 @@ def test_a_bucket_is_priced_only_when_every_model_in_it_is(tmp_path):
     both_priced = {**opus_only, "claude-haiku-4-5": Price(1e-6, 5e-6, 0.0, 0.0, 9)}
     assert spend_rows(turns, "thread", both_priced)["dollars"].notna().all()
     assert spend_rows(turns, "thread", {})["dollars"].isna().all()
+
+
+def test_a_bucket_is_priced_from_the_rest_when_its_unpriced_share_is_a_rounding_error(tmp_path):
+    # The failure this rule exists for, from the owner's corpus on 2026-09-22: 11
+    # responses of a model with no price, 0.009% of the window's tokens, blanked the
+    # dollars on 60.5% of it, while the total one line above printed because the same
+    # 0.009% cleared the same cutoff.
+    money_corpus(tmp_path / "logs", unpriced_out=100)
+    turns = spend_turns(parse_source(tmp_path / "logs"), TODAY)
+    row = spend_rows(turns, "thread", OPUS_AND_HAIKU).set_index("bucket").loc["subagent"]
+    assert row["unpriced"] == ("claude-fable-5-1",)          # still named, and still in the JSON
+    assert row["dollars"] == pytest.approx(11.00001)         # a1's own dollars, a2's left out
+
+
+def test_a_bucket_blanks_once_its_unpriced_share_reaches_the_cutoff(tmp_path):
+    money_corpus(tmp_path / "logs", unpriced_out=35_000)
+    turns = spend_turns(parse_source(tmp_path / "logs"), TODAY)
+    rows = spend_rows(turns, "thread", OPUS_AND_HAIKU).set_index("bucket")
+    assert pd.isna(rows.loc["subagent", "dollars"])
+    assert pd.notna(rows.loc["main thread", "dollars"])
+    # 1.2% of the bucket and 0.9% of the window: the one case that tells the two rules
+    # apart, so the bucket goes blank while the window's own total still prints.
+    assert priced_total(turns, OPUS_AND_HAIKU) is not None
+
+
+def test_the_cutoff_is_measured_against_the_bucket_and_not_against_the_window(tmp_path):
+    # A bucket that is entirely unpriced must blank however small it is. Measured against
+    # the window instead, every small bucket would pass, including this one.
+    write(tmp_path / "p" / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), entrypoint="cli", out=100_000),
+        line("a1", text(40), ts=at(60), entrypoint="cli", sidechain=True, out=10, model="claude-fable-5-1"),
+    ])
+    turns = spend_turns(parse_source(tmp_path / "p"), TODAY)
+    rows = spend_rows(turns, "thread", OPUS).set_index("bucket")
+    assert rows.loc["subagent", "share"] < MATERIAL_SHARE     # 0.02% of the window
+    assert pd.isna(rows.loc["subagent", "dollars"])           # and 100% of itself
+
+
+def test_the_model_dimension_is_all_or_nothing_whatever_the_cutoff_is(tmp_path):
+    # A model bucket's key is the model, so it is 0% or 100% unpriced and never in
+    # between. priced_total reads that dimension, so the new rule must not reach it.
+    money_corpus(tmp_path / "logs", unpriced_out=100)
+    turns = spend_turns(parse_source(tmp_path / "logs"), TODAY)
+    rows = spend_rows(turns, "model", OPUS_AND_HAIKU).set_index("bucket")
+    assert pd.isna(rows.loc["claude-fable-5-1", "dollars"])
+    assert pd.notna(rows.loc["claude-opus-5", "dollars"])
 
 
 def test_the_total_is_withheld_when_a_material_model_is_unpriced_and_present_when_all_are(tmp_path):
@@ -261,10 +311,10 @@ def test_the_dollars_printed_are_the_ones_claude_codes_own_cost_records_imply(tm
     assert dollars == {"claude-opus-5": pytest.approx(25.00005), "claude-haiku-4-5": pytest.approx(11.00001)}
 
 
-def test_a_bucket_with_no_dollars_names_the_model_that_left_it_without_any(tmp_path, capsys):
-    # The failure this exists for, from the owner's corpus: one model of 0.0% of the
-    # window is refused by the fit, the total still prints, and the whole subagent bucket
-    # goes blank beside it. Unexplained, that reads as broken arithmetic.
+def test_a_rounding_error_model_no_longer_blanks_the_bucket_it_landed_in(tmp_path, capsys):
+    # The failure this rule exists for, end to end: one model of 0.0% of the window is
+    # refused by the fit, and the bucket it landed in keeps its dollars rather than going
+    # blank beside a total that counted the same spend as immaterial.
     state = tmp_path / "state.json"
     save_state(state, new_state())
     money_corpus(tmp_path / "logs", unpriced_out=100)
@@ -272,10 +322,32 @@ def test_a_bucket_with_no_dollars_names_the_model_that_left_it_without_any(tmp_p
     out = capsys.readouterr().out
     assert "$36.00" in out.splitlines()[0]
     assert out.splitlines()[2].startswith("No price for claude-fable-5-1, 0.0% of the window's tokens:")
-    assert "no price: claude-fable-5-1" in bucket_line(out, "subagent")
+    assert "$11.00" in bucket_line(out, "subagent")
     assert "$25.00" in bucket_line(out, "main thread")
     # The bucket that is the model says it once: repeating its own name explains nothing.
     assert bucket_line(out, "claude-fable-5-1").endswith("no price")
+
+
+def test_a_bucket_a_model_with_no_price_weighs_on_still_names_it(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    money_corpus(tmp_path / "logs", unpriced_out=35_000)
+    run_spend(tmp_path / "logs", state, today=TODAY)
+    out = capsys.readouterr().out
+    assert "$" in out.splitlines()[0]                          # the window's total still prints
+    assert "no price: claude-fable-5-1" in bucket_line(out, "subagent")
+    assert "$25.00" in bucket_line(out, "main thread")
+
+
+def test_the_header_states_the_cutoff_that_decides_each_bucket_too(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    money_corpus(tmp_path / "logs", unpriced_out=100)
+    run_spend(tmp_path / "logs", state, today=TODAY)
+    said = capsys.readouterr().out.splitlines()[2]
+    # One rule decides the total and every bucket, so it is stated once, with its number.
+    assert said.endswith("out of any bucket where it stays under 1%. A bucket where it reaches 1% "
+                         "shows no dollars at all.")
 
 
 def test_a_withheld_total_says_which_model_withheld_it(tmp_path, capsys):
