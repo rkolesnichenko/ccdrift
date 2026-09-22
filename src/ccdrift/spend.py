@@ -17,7 +17,7 @@ from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import no_transcripts_message, outside_sdk
 from ccdrift.prices import CACHE_READ_RATE, CACHE_WRITE_RATE, Price, fit_prices
 from ccdrift.sessions import project_of
-from ccdrift.texts import DIMENSION_NAMES, approx, spend_line
+from ccdrift.texts import DIMENSION_NAMES, approx, project_path, spend_line
 
 DIMENSIONS = ("thread", "agent", "skill", "plugin", "mcp", "model", "project", "branch")
 TOKEN_COLUMNS = ("input_tokens", "output_tokens", "cache_creation", "cache_read")
@@ -54,7 +54,9 @@ def buckets(turns: pd.DataFrame, dimension: str) -> pd.Series:
     if dimension == "thread":
         return turns["is_sidechain"].astype(bool).map({True: "subagent", False: "main thread"})
     if dimension == "project":
-        return turns["source_file"].astype(str).map(project_of)
+        # Read back the way report.py's project_lines does, so the same folder reads
+        # the same in both commands rather than as its raw, dash-encoded form here.
+        return turns["source_file"].astype(str).map(project_of).map(project_path)
     column, absent = DIMENSION_COLUMNS[dimension]
     values = turns[column] if column in turns else pd.Series(None, index=turns.index, dtype="object")
     return values.where(values.notna() & (values.astype(str) != ""), absent).astype(str)

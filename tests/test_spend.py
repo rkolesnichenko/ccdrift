@@ -59,6 +59,12 @@ def test_the_thread_dimension_splits_main_from_subagents(tmp_path):
     assert dict(zip(rows["bucket"], rows["responses"])) == {"main thread": 2, "subagent": 2}
 
 
+def test_the_project_dimension_reads_back_as_a_path_not_its_raw_encoding(tmp_path):
+    rows = spend_rows(corpus(tmp_path), "project", {})
+    assert set(rows["bucket"]) == {"/proj/a", "/proj/b"}
+    assert "proj-a" not in rows["bucket"].tolist() and "proj-b" not in rows["bucket"].tolist()
+
+
 def test_buckets_come_out_largest_first_with_ties_broken_by_name(tmp_path):
     rows = spend_rows(corpus(tmp_path), "branch", {})
     tokens = rows["tokens"].tolist()
