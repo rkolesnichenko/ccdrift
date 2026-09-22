@@ -35,6 +35,19 @@ DIMENSION_COLUMNS = {"agent": ("agent_type", "no agent"), "skill": ("attribution
                      "plugin": ("attribution_plugin", "no plugin"), "mcp": ("attribution_mcp", "no MCP server"),
                      "model": ("model", "unknown model"), "branch": ("git_branch", "no branch")}
 
+# What Claude Code writes to gitBranch when no branch is checked out, and what ccdrift
+# calls it. `git rev-parse --abbrev-ref HEAD` answers "HEAD" in that state. Confirmed on
+# 2026-09-22 over the owner's own corpus rather than synthetically: gitBranch is live
+# per-line state and not a session constant, changing within one transcript and back
+# (tool-loop-cache -> HEAD -> tool-loop-cache), and the one session that detached its own
+# checkout records gitBranch "HEAD" on the next line carrying one. It is kept apart from
+# the "no branch" bucket, which means the field was absent altogether: a Claude Code
+# version fact rather than a git one. On the same corpus this was 860 responses over four
+# project folders, 1.5% of the window, while "no branch" was empty, since gitBranch is on
+# every response.
+DETACHED_VALUE = "HEAD"
+DETACHED = "detached HEAD"
+
 # The share of the window's tokens that, left unpriced, withholds the dollar total. This
 # is a display rule and not a detection cutoff: nothing judges or alerts on it, it decides
 # only whether one figure prints. A rounding-error model should not silence a total and a
@@ -78,7 +91,8 @@ def buckets(turns: pd.DataFrame, dimension: str) -> pd.Series:
         return files.map(project_of).map(project_path)
     column, absent = DIMENSION_COLUMNS[dimension]
     values = turns[column] if column in turns else pd.Series(None, index=turns.index, dtype="object")
-    return values.where(values.notna() & (values.astype(str) != ""), absent).astype(str)
+    named = values.where(values.notna() & (values.astype(str) != ""), absent).astype(str)
+    return named.replace(DETACHED_VALUE, DETACHED) if dimension == "branch" else named
 
 
 def branch_projects(turns: pd.DataFrame) -> dict[str, int]:

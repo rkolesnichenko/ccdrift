@@ -182,6 +182,30 @@ def test_a_source_holding_no_project_folder_is_one_project_and_not_one_per_sessi
     assert "0199c3d0" not in "".join(rows["bucket"])
 
 
+def test_a_repository_with_no_branch_checked_out_is_kept_out_of_the_branch_names(tmp_path):
+    # "HEAD" is what git answers with nothing checked out, so it is not a branch name and
+    # must not sort among them. It stays apart from "no branch", which means the field is
+    # absent: a Claude Code version fact rather than a git one, and not the same thing.
+    write(tmp_path / "p" / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), entrypoint="cli", branch="HEAD"),
+        line("m2", text(40), ts=at(60), entrypoint="cli", branch="main"),
+        line("m3", text(40), ts=at(120), entrypoint="cli"),
+    ])
+    rows = spend_rows(spend_turns(parse_source(tmp_path / "p"), TODAY), "branch", {})
+    assert set(rows["bucket"]) == {"detached HEAD", "main", "no branch"}
+
+
+def test_the_partition_still_holds_with_a_detached_bucket_in_it(tmp_path):
+    write(tmp_path / "p" / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), entrypoint="cli", branch="HEAD"),
+        line("m2", text(40), ts=at(60), entrypoint="cli", branch="main"),
+    ])
+    turns = spend_turns(parse_source(tmp_path / "p"), TODAY)
+    rows = spend_rows(turns, "branch", {})
+    assert rows["tokens"].sum() == pytest.approx(total_tokens(turns))
+    assert rows["share"].sum() == pytest.approx(1.0)
+
+
 def test_buckets_come_out_largest_first_with_ties_broken_by_name(tmp_path):
     rows = spend_rows(corpus(tmp_path), "branch", {})
     tokens = rows["tokens"].tolist()
