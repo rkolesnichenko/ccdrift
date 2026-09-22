@@ -222,8 +222,10 @@ def main_thread_days(path, days, per_day=60, first_day=0):
     1-hour cache. Each entry of `days` can set that day's `version` (default
     "2.1.226"), `haiku` (how many responses come from Haiku, default 0), `misses` (how
     many of the day's last responses miss the cache, writing 1000 tokens, default 0),
-    `tier` ("1h" or "5m" cache writes, default "1h"), `effort` (default "xhigh") and
-    `entrypoint` (default "cli")."""
+    `tier` ("1h" or "5m" cache writes, default "1h"), `effort` (default "xhigh"),
+    `entrypoint` (default "cli"), `reason` (the cache-miss reason Claude Code recorded
+    that day, default None) and `reasons` (how many of the day's responses carry it,
+    default 0)."""
     for d, spec in enumerate(days, start=first_day):
         tier = spec.get("tier", "1h")
         records = []
@@ -231,12 +233,13 @@ def main_thread_days(path, days, per_day=60, first_day=0):
             ts = at(d * DAY + 60 * k)
             model = "claude-haiku-4-5" if k < spec.get("haiku", 0) else "claude-opus-5"
             read, written = (0, 1000) if k >= per_day - spec.get("misses", 0) else (900, 100)
+            reason = spec.get("reason") if k < spec.get("reasons", 0) else None
             records += [prompt(ts, sid=f"s{d}"),
                         line(f"m{d}-{k}", text(40), ts=ts, sid=f"s{d}", model=model,
                              cache_read=read, cache_creation=written,
                              cache_1h=written if tier == "1h" else 0, cache_5m=written if tier == "5m" else 0,
                              version=spec.get("version", "2.1.226"), entrypoint=spec.get("entrypoint", "cli"),
-                             effort=spec.get("effort", "xhigh"))]
+                             effort=spec.get("effort", "xhigh"), miss_reason=reason)]
         write(path / f"s{d}.jsonl", records)
 
 
