@@ -217,6 +217,29 @@ def test_the_first_line_of_a_response_that_records_a_reason_wins(tmp_path):
     assert parse_source(tmp_path)["miss_reason"].tolist() == ["system_changed"]
 
 
+def test_a_response_keeps_where_its_work_came_from_and_the_branch_it_ran_on(tmp_path):
+    write(tmp_path / "s1.jsonl", [line("m1", text(40), ts=at(0), skill="superpowers:writing-plans",
+                                       plugin="superpowers", mcp_server="context7", branch="main")])
+    row = parse_source(tmp_path).iloc[0]
+    assert (row["attribution_skill"], row["attribution_plugin"], row["attribution_mcp"],
+            row["git_branch"]) == ("superpowers:writing-plans", "superpowers", "context7", "main")
+
+
+def test_a_response_without_attribution_or_a_branch_has_none(tmp_path):
+    write(tmp_path / "s1.jsonl", [line("m1", text(40), ts=at(0))])
+    row = parse_source(tmp_path).iloc[0]
+    assert all(pd.isna(row[c]) for c in ("attribution_skill", "attribution_plugin",
+                                         "attribution_mcp", "git_branch"))
+
+
+def test_the_first_line_of_a_response_that_names_a_skill_wins(tmp_path):
+    write(tmp_path / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), skill="superpowers:brainstorming"),
+        line("m1", text(40), ts=at(1), skill="superpowers:writing-plans"),
+    ])
+    assert parse_source(tmp_path).loc[0, "attribution_skill"] == "superpowers:brainstorming"
+
+
 def test_cache_writes_are_split_into_the_1_hour_and_5_minute_tiers(tmp_path):
     # Claude Code writes the main thread's cache for an hour and subagents' and
     # Agent SDK sessions' for 5 minutes.

@@ -17,13 +17,13 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from ccdrift.logs import (MAX_TIME, MIN_TIME, SDK_ENTRYPOINT_PREFIX, SETTING_FIELDS, TOKEN_FIELDS, ParsedFile, Tables,
-                          census_frame, compaction_frame, duration_frame, failure_frame, frame, hook_frame,
-                          jsonl_files, parse_all, parse_file)
+from ccdrift.logs import (ATTRIBUTION_FIELDS, MAX_TIME, MIN_TIME, SDK_ENTRYPOINT_PREFIX, SETTING_FIELDS, TOKEN_FIELDS,
+                          ParsedFile, Tables, census_frame, compaction_frame, duration_frame, failure_frame, frame,
+                          hook_frame, jsonl_files, parse_all, parse_file)
 from ccdrift.state import make_private
 
 HISTORY_FILE = "history.sqlite"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 # Bump whenever parse_file's output changes, so every transcript still on disk is
 # read again. Rows of transcripts Claude Code already deleted keep their values.
 # 3: counts, times and ids out of range or of the wrong type read as missing.
@@ -32,9 +32,11 @@ SCHEMA_VERSION = 5
 # 5: control characters are dropped from text.
 # 6: failed requests are kept, and each response's stop reason.
 # 7: each response's cache-miss reason, and the census of the keys its record carries.
-PARSER_VERSION = 7
+# 8: where each response's work came from, the branch it ran on, and the per-model
+#    usage and cost of each cost-state record.
+PARSER_VERSION = 8
 
-TEXT_COLUMNS = ("model", "stop_reason", "miss_reason") + SETTING_FIELDS
+TEXT_COLUMNS = ("model", "stop_reason", "miss_reason") + ATTRIBUTION_FIELDS + SETTING_FIELDS
 FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction", "opens_transcript")
 COUNT_COLUMNS = TOKEN_FIELDS + ("thinking_logged", "signature_chars", "visible_chars", "n_mcp_calls")
 RESPONSE_COLUMNS = TEXT_COLUMNS + FLAG_COLUMNS + COUNT_COLUMNS
@@ -55,7 +57,9 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE TABLE IF NOT EXISTS responses (
     key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
     model TEXT, version TEXT, entrypoint TEXT, effort TEXT, speed TEXT, service_tier TEXT, agent_type TEXT,
-    stop_reason TEXT, miss_reason TEXT, is_sidechain INTEGER, new_prompt INTEGER, after_compaction INTEGER,
+    stop_reason TEXT, miss_reason TEXT,
+    attribution_skill TEXT, attribution_plugin TEXT, attribution_mcp TEXT, git_branch TEXT,
+    is_sidechain INTEGER, new_prompt INTEGER, after_compaction INTEGER,
     input_tokens INTEGER, output_tokens INTEGER, cache_creation INTEGER, cache_read INTEGER,
     cache_1h INTEGER, cache_5m INTEGER, thinking_logged INTEGER,
     signature_chars INTEGER, visible_chars INTEGER, n_mcp_calls INTEGER,
@@ -229,6 +233,10 @@ class History:
         if from_version < 5 and columns and "miss_reason" not in columns:
             with self.db:
                 self.db.execute("ALTER TABLE responses ADD COLUMN miss_reason TEXT")
+        for column in ("attribution_skill", "attribution_plugin", "attribution_mcp", "git_branch"):
+            if from_version < 6 and columns and column not in columns:
+                with self.db:
+                    self.db.execute(f"ALTER TABLE responses ADD COLUMN {column} TEXT")
         file_columns = {row[1] for row in self.db.execute("PRAGMA table_info(files)")}
         if from_version < 3 and file_columns and "last_ts" not in file_columns:
             with self.db:

@@ -48,6 +48,16 @@ def test_the_store_keeps_the_cache_miss_reason(tmp_path):
     assert stored["miss_reason"].tolist() == ["tools_changed"]
 
 
+def test_the_store_keeps_attribution_and_the_branch(tmp_path):
+    write(tmp_path / "p" / "s1.jsonl", [line("m1", text(40), ts=at(0), skill="deep-research",
+                                             plugin="superpowers", mcp_server="context7", branch="topic")])
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    row = load_history(tmp_path / "p", state, claim=True).responses.iloc[0]
+    assert (row["attribution_skill"], row["attribution_plugin"], row["attribution_mcp"],
+            row["git_branch"]) == ("deep-research", "superpowers", "context7", "topic")
+
+
 def test_the_store_keeps_the_key_census(tmp_path):
     write(tmp_path / "p" / "s1.jsonl", [line("m1", text(40), ts=at(0), version="2.1.226",
                                              extra={"advisorModel": "claude-opus-5"})])
@@ -365,7 +375,7 @@ def test_a_store_from_ccdrift_0_2_is_upgraded_in_place_and_keeps_its_rows(tmp_pa
     db.executescript(V1_SCHEMA)
     db.close()
     with History(tmp_path / "history.sqlite") as history:
-        assert history.meta["schema_version"] == "5"
+        assert history.meta["schema_version"] == "6"
         columns = {row[1] for row in history.db.execute("PRAGMA table_info(responses)")}
         tables = {row[0] for row in history.db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert "agent_type" in columns

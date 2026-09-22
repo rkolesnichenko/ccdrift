@@ -65,6 +65,10 @@ CANDIDATES: dict[str, list[str]] = {
     "prevented":         ["preventedContinuation"],
     "stop_reason":       ["message.stop_reason"],
     "miss_reason":       ["message.diagnostics.cache_miss_reason.type"],
+    "attribution_skill":  ["attributionSkill"],
+    "attribution_plugin": ["attributionPlugin"],
+    "attribution_mcp":    ["attributionMcpServer"],
+    "git_branch":         ["gitBranch"],
     "is_api_error":      ["isApiErrorMessage"],
     "api_error_status":  ["apiErrorStatus"],
     "retry_attempt":     ["retryAttempt"],
@@ -212,6 +216,10 @@ def parse_ts(raw: Any) -> Optional[datetime]:
 # Text fields that keep the first value logged across a response's lines, and
 # token counts that keep the largest.
 SETTING_FIELDS = ("version", "entrypoint", "effort", "speed", "service_tier", "agent_type")
+# Where a response's work came from, and the branch it ran on. Kept apart from
+# SETTING_FIELDS, which means a setting Claude Code chose for the request; a branch
+# name is not one, and history.TEXT_COLUMNS is built from both.
+ATTRIBUTION_FIELDS = ("attribution_skill", "attribution_plugin", "attribution_mcp", "git_branch")
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_creation", "cache_read", "cache_1h", "cache_5m")
 
 
@@ -394,6 +402,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                     "model":            model,
                     "stop_reason":      None,
                     "miss_reason":      None,
+                    **{name: None for name in ATTRIBUTION_FIELDS},
                     **{name: None for name in SETTING_FIELDS},
                     **{name: 0.0 for name in TOKEN_FIELDS},
                     "thinking_logged":  None,
@@ -414,7 +423,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                 }
                 main_thread_seen = main_thread_seen or not is_sidechain
             prompt_pending = compact_pending = False
-            for name in ("stop_reason", "miss_reason", *SETTING_FIELDS):
+            for name in ("stop_reason", "miss_reason", *ATTRIBUTION_FIELDS, *SETTING_FIELDS):
                 if row[name] is None:
                     row[name] = _text(field_get(obj, name))
             # output_tokens grows while streaming, so the largest is the
