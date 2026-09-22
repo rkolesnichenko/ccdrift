@@ -40,6 +40,14 @@ def test_history_holds_the_same_responses_as_the_transcripts(tmp_path):
     pd.testing.assert_frame_equal(stored, parse_source(tmp_path / "logs"), check_like=True)
 
 
+def test_the_store_keeps_the_cache_miss_reason(tmp_path):
+    write(tmp_path / "p" / "s1.jsonl", [line("m1", text(40), ts=at(0), miss_reason="tools_changed")])
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    stored = load_history(tmp_path / "p", state, claim=True).responses
+    assert stored["miss_reason"].tolist() == ["tools_changed"]
+
+
 def test_counts_and_times_out_of_range_dont_fail_the_history(tmp_path):
     # SQLite can't store integers of 2**63 or more, and pandas can't hold times after
     # 2262; either failed every check while such a transcript was on disk.
@@ -324,7 +332,7 @@ def test_a_store_from_ccdrift_0_2_is_upgraded_in_place_and_keeps_its_rows(tmp_pa
     db.executescript(V1_SCHEMA)
     db.close()
     with History(tmp_path / "history.sqlite") as history:
-        assert history.meta["schema_version"] == "4"
+        assert history.meta["schema_version"] == "5"
         columns = {row[1] for row in history.db.execute("PRAGMA table_info(responses)")}
         tables = {row[0] for row in history.db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert "agent_type" in columns

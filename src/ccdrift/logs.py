@@ -64,6 +64,7 @@ CANDIDATES: dict[str, list[str]] = {
     "hook_infos":        ["hookInfos"],
     "prevented":         ["preventedContinuation"],
     "stop_reason":       ["message.stop_reason"],
+    "miss_reason":       ["message.diagnostics.cache_miss_reason.type"],
     "is_api_error":      ["isApiErrorMessage"],
     "api_error_status":  ["apiErrorStatus"],
     "retry_attempt":     ["retryAttempt"],
@@ -358,6 +359,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                     "timestamp":        parse_ts(field_get(obj, "timestamp")),
                     "model":            model,
                     "stop_reason":      None,
+                    "miss_reason":      None,
                     **{name: None for name in SETTING_FIELDS},
                     **{name: 0.0 for name in TOKEN_FIELDS},
                     "thinking_logged":  None,
@@ -375,7 +377,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                 }
                 main_thread_seen = main_thread_seen or not is_sidechain
             prompt_pending = compact_pending = False
-            for name in ("stop_reason", *SETTING_FIELDS):
+            for name in ("stop_reason", "miss_reason", *SETTING_FIELDS):
                 if row[name] is None:
                     row[name] = _text(field_get(obj, name))
             # output_tokens grows while streaming, so the largest is the

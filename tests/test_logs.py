@@ -198,6 +198,25 @@ def test_settings_missing_from_older_versions_are_left_empty(tmp_path):
     assert row["version"] is None and row["effort"] is None
 
 
+def test_a_response_keeps_the_reason_claude_code_recorded_for_a_cache_miss(tmp_path):
+    write(tmp_path / "s1.jsonl", response("m1", thinking(400), text(40), ts=at(0),
+                                          miss_reason="system_changed"))
+    assert parse_source(tmp_path)["miss_reason"].tolist() == ["system_changed"]
+
+
+def test_a_response_without_a_recorded_reason_has_none(tmp_path):
+    write(tmp_path / "s1.jsonl", [line("m1", text(40), ts=at(0))])
+    assert parse_source(tmp_path)["miss_reason"].isna().all()
+
+
+def test_the_first_line_of_a_response_that_records_a_reason_wins(tmp_path):
+    write(tmp_path / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), miss_reason="system_changed"),
+        line("m1", text(40), ts=at(1), miss_reason="tools_changed"),
+    ])
+    assert parse_source(tmp_path)["miss_reason"].tolist() == ["system_changed"]
+
+
 def test_cache_writes_are_split_into_the_1_hour_and_5_minute_tiers(tmp_path):
     # Claude Code writes the main thread's cache for an hour and subagents' and
     # Agent SDK sessions' for 5 minutes.

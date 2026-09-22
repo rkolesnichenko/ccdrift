@@ -71,7 +71,7 @@ def test_the_store_keeps_failures_and_an_older_store_is_upgraded(tmp_path):
     pd.testing.assert_frame_equal(tables.failures[columns].sort_values(columns).reset_index(drop=True),
                                   parsed.failures[columns].sort_values(columns).reset_index(drop=True))
     with History(tmp_path / "history.sqlite") as history:
-        assert history.meta["schema_version"] == "4"
+        assert history.meta["schema_version"] == "5"
         assert {row[1] for row in history.db.execute("PRAGMA table_info(responses)")} >= {"stop_reason"}
 
 
