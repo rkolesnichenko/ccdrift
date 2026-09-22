@@ -74,6 +74,8 @@ CANDIDATES: dict[str, list[str]] = {
     "retry_attempt":     ["retryAttempt"],
     "compact_trigger":   ["compactMetadata.trigger"],
     "compact_pre_tokens": ["compactMetadata.preTokens"],
+    "cost_usage":        ["modelUsage"],
+    "cost_start":        ["startTime"],
 }
 
 
@@ -222,12 +224,22 @@ SETTING_FIELDS = ("version", "entrypoint", "effort", "speed", "service_tier", "a
 ATTRIBUTION_FIELDS = ("attribution_skill", "attribution_plugin", "attribution_mcp", "git_branch")
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_creation", "cache_read", "cache_1h", "cache_5m")
 
+# What one model's slice of a cost-state record counts. `web_searches` is fitted as its
+# own rate because it is billed per request, not per token: leaving it out makes
+# claude-haiku-4-5 fit at 4.72% instead of 0.00%.
+USAGE_COUNTS = ("input_tokens", "output_tokens", "cache_creation", "cache_read",
+                "thinking_tokens", "web_searches")
+
+# The keys Claude Code writes for each of USAGE_COUNTS inside modelUsage.
+USAGE_KEYS = ("inputTokens", "outputTokens", "cacheCreationInputTokens", "cacheReadInputTokens",
+              "thinkingTokens", "webSearchRequests")
+
 
 @dataclass
 class ParsedFile:
-    """One transcript's responses, turn durations, hook runs and compactions by key,
-    the transcript's first session id, line counts for --verbose, and the key census
-    (field_census, field_days) of its responses."""
+    """One transcript's responses, turn durations, hook runs, compactions and per-model
+    cost records by key, the transcript's first session id, line counts for --verbose,
+    and the key census (field_census, field_days) of its responses."""
     responses: dict[str, dict] = field(default_factory=dict)
     durations: dict[str, dict] = field(default_factory=dict)
     hook_runs: dict[str, dict] = field(default_factory=dict)
@@ -235,6 +247,7 @@ class ParsedFile:
     failures: dict[str, dict] = field(default_factory=dict)
     field_census: dict[tuple[str, str, str], int] = field(default_factory=dict)
     field_days: dict[tuple[str, str], int] = field(default_factory=dict)
+    model_usage: dict[str, dict] = field(default_factory=dict)
     session_id: Optional[str] = None
     lines: int = 0
     bad_json: int = 0
@@ -375,6 +388,32 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                         "duration_ms": sum(durations) if durations else None,
                         "prevented": bool(field_get(obj, "prevented", default=False)),
                     })
+                continue
+            if role == "cost-state":
+                # These records carry no timestamp, uuid, version, entrypoint or thread,
+                # only a session id and an epoch-millisecond start, so they cannot use
+                # _record() and must not claim a version they never logged.
+                usage = field_get(obj, "cost_usage")
+                if isinstance(usage, dict):
+                    start = field_get(obj, "cost_start")
+                    when = parse_ts(start)
+                    session = _text(field_get(obj, "session_id"))
+                    for model, counts in usage.items():
+                        if not isinstance(counts, dict):
+                            continue
+                        name = _text(model) or "unknown"
+                        # Session, start and model rather than a line position, so the
+                        # same record copied into a resumed transcript is one row.
+                        key = (f"{session}:{start}:{name}" if session and start is not None
+                               else f"{rel}:{line_no}:{name}")
+                        cost = counts.get("costUSD")
+                        parsed.model_usage.setdefault(key, {
+                            "key": key, "timestamp": when, "model": name,
+                            **{column: _num(counts.get(raw)) for column, raw in zip(USAGE_COUNTS, USAGE_KEYS)},
+                            "cost_usd": float(cost) if isinstance(cost, (int, float))
+                            and not isinstance(cost, bool) else None,
+                            "source_file": rel,
+                        })
                 continue
             if role != "assistant":
                 continue
@@ -578,6 +617,19 @@ def failure_frame(rows) -> pd.DataFrame:
     return _record_frame(rows, ("status",), ("is_sidechain",))
 
 
+def usage_frame(rows) -> pd.DataFrame:
+    """Per-model usage and cost from Claude Code's own cost records, with its UTC day.
+    Unlike every other record table this one carries no version, entrypoint or thread,
+    because the records do not."""
+    df = _rows_with_parsed_timestamp(rows)
+    if df.empty:
+        return df
+    for col in (*USAGE_COUNTS, "cost_usd"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
+    df = df.sort_values(["source_file", "timestamp"], kind="stable").reset_index(drop=True)
+    return _with_day(df)
+
+
 CENSUS_COLUMNS = ("day", "version", "path", "responses", "day_responses")
 
 
@@ -598,19 +650,20 @@ def census_frame(census: Mapping[tuple[str, str, str], int],
 @dataclass
 class Tables:
     """Everything ccdrift reads from transcripts, one table per record kind, plus the
-    key census (field_census)."""
+    key census (field_census) and per-model usage and cost (model_usage)."""
     responses: pd.DataFrame
     durations: pd.DataFrame
     hook_runs: pd.DataFrame
     compactions: pd.DataFrame
     failures: pd.DataFrame
     field_census: pd.DataFrame = field(default_factory=pd.DataFrame)
+    model_usage: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def parse_all(source: Path) -> Tables:
     """Every transcript under `source`, read once. A record copied into a second
     transcript counts from the one whose path sorts first."""
-    kinds = {"responses": {}, "durations": {}, "hook_runs": {}, "compactions": {}, "failures": {}}
+    kinds = {"responses": {}, "durations": {}, "hook_runs": {}, "compactions": {}, "failures": {}, "model_usage": {}}
     census: dict[tuple[str, str, str], int] = {}
     days: dict[tuple[str, str], int] = {}
     for fp, rel in jsonl_files(source):
@@ -632,7 +685,8 @@ def parse_all(source: Path) -> Tables:
                   hook_frame(list(kinds["hook_runs"].values())),
                   compaction_frame(list(kinds["compactions"].values())),
                   failure_frame(list(kinds["failures"].values())),
-                  census_frame(census, days))
+                  census_frame(census, days),
+                  usage_frame(list(kinds["model_usage"].values())))
 
 
 def parse_durations(source: Path) -> pd.DataFrame:

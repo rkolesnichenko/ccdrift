@@ -162,6 +162,24 @@ def stop_hook_summary(ts, hook_count, errors=(), durations=(), sid="s1", uuid=No
     return rec
 
 
+def cost_state(ts, usage, sid="s1", start=None):
+    """The record Claude Code writes with what a session cost. It carries no timestamp,
+    uuid, version, entrypoint or isSidechain: only a session id and an epoch-millisecond
+    start time. `usage` maps a model to its counts and cost."""
+    return {"type": "cost-state", "sessionId": sid,
+            "startTime": start if start is not None else int(datetime.fromisoformat(
+                ts.replace("Z", "+00:00")).timestamp() * 1000),
+            "totalCostUSD": round(sum(u.get("costUSD", 0.0) for u in usage.values()), 8),
+            "hasUnknownModelCost": False,
+            "modelUsage": {model: {"inputTokens": u.get("input", 0), "outputTokens": u.get("output", 0),
+                                   "cacheCreationInputTokens": u.get("cache_creation", 0),
+                                   "cacheReadInputTokens": u.get("cache_read", 0),
+                                   "thinkingTokens": u.get("thinking", 0),
+                                   "webSearchRequests": u.get("web", 0),
+                                   "costUSD": u.get("costUSD", 0.0)}
+                           for model, u in usage.items()}}
+
+
 def write(path, records):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(r) + "\n" for r in records))

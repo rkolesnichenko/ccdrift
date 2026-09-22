@@ -7,7 +7,7 @@ import pytest
 
 from ccdrift.detector import bin_metrics
 from ccdrift.logs import frame, judged_turns, outside_sdk, parse_all, parse_durations, parse_source
-from tests.helpers import (DAY, at, compact_boundary, line, prompt, response, stop_hook_summary, text,
+from tests.helpers import (DAY, at, compact_boundary, cost_state, line, prompt, response, stop_hook_summary, text,
                            thinking, tool_result, turn_duration, write)
 
 
@@ -424,3 +424,35 @@ def test_the_census_rows_come_out_in_the_same_order_every_run(tmp_path):
     write(tmp_path / "s1.jsonl", [line(f"m{k}", text(40), ts=at(k), version="2.1.226") for k in range(5)])
     first = parse_all(tmp_path).field_census
     pd.testing.assert_frame_equal(first, parse_all(tmp_path).field_census)
+
+
+def test_a_cost_record_becomes_one_row_per_model(tmp_path):
+    write(tmp_path / "s1.jsonl", [cost_state(at(0), {
+        "claude-opus-5": {"input": 100, "output": 200, "costUSD": 0.01},
+        "claude-haiku-4-5": {"input": 10, "output": 20, "costUSD": 0.001}})])
+    usage = parse_all(tmp_path).model_usage
+    assert sorted(usage["model"]) == ["claude-haiku-4-5", "claude-opus-5"]
+    assert usage.loc[usage["model"] == "claude-opus-5", "cost_usd"].iloc[0] == 0.01
+
+
+def test_a_cost_record_keeps_its_cost_as_a_fraction_of_a_cent(tmp_path):
+    write(tmp_path / "s1.jsonl", [cost_state(at(0), {"claude-opus-5": {"input": 1, "costUSD": 0.00012345}})])
+    assert parse_all(tmp_path).model_usage["cost_usd"].iloc[0] == 0.00012345
+
+
+def test_a_cost_record_in_two_transcripts_counts_once(tmp_path):
+    rec = cost_state(at(0), {"claude-opus-5": {"input": 100, "costUSD": 0.01}})
+    write(tmp_path / "a.jsonl", [rec])
+    write(tmp_path / "b.jsonl", [rec])
+    assert len(parse_all(tmp_path).model_usage) == 1
+
+
+def test_a_cost_record_without_model_usage_yields_no_rows(tmp_path):
+    rec = cost_state(at(0), {})
+    write(tmp_path / "s1.jsonl", [rec])
+    assert parse_all(tmp_path).model_usage.empty
+
+
+def test_a_cost_record_takes_its_time_from_the_start_time(tmp_path):
+    write(tmp_path / "s1.jsonl", [cost_state(at(0), {"claude-opus-5": {"input": 1, "costUSD": 0.01}})])
+    assert str(parse_all(tmp_path).model_usage["day"].iloc[0]) == at(0)[:10]
