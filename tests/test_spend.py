@@ -1,5 +1,6 @@
 """Partitioning the history by where its tokens went."""
 
+import json
 from datetime import date
 
 import pandas as pd
@@ -133,3 +134,32 @@ def test_a_source_with_no_transcripts_says_so(tmp_path, capsys):
     save_state(state, new_state())
     (tmp_path / "empty").mkdir()
     assert run_spend(tmp_path / "empty", state, today=TODAY) == 2
+
+
+def test_the_json_holds_every_dimension_but_the_ones_that_name_your_folders(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    corpus(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, as_json=True, today=TODAY)
+    payload = json.loads(capsys.readouterr().out)
+    assert "thread" in payload["dimensions"] and "skill" in payload["dimensions"]
+    assert "project" not in payload["dimensions"] and "branch" not in payload["dimensions"]
+
+
+def test_the_json_names_no_project_and_no_branch_even_when_asked_for_one(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    corpus(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, by="branch", as_json=True, today=TODAY)
+    out = capsys.readouterr().out
+    assert "topic" not in out and "proj-a" not in out
+    assert json.loads(out)["withheld"] == ["branch"]
+
+
+def test_the_json_says_what_it_could_not_price(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    corpus(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, as_json=True, today=TODAY)
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["dollars"] is None and payload["priced_models"] == []

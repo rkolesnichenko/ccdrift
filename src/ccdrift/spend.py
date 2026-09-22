@@ -6,10 +6,11 @@ nothing: no rule, no threshold and no alert turns on any number here."""
 
 from __future__ import annotations
 
+import json
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import pandas as pd
 
@@ -21,6 +22,12 @@ from ccdrift.texts import DIMENSION_NAMES, approx, project_path, spend_line
 
 DIMENSIONS = ("thread", "agent", "skill", "plugin", "mcp", "model", "project", "branch")
 TOKEN_COLUMNS = ("input_tokens", "output_tokens", "cache_creation", "cache_read")
+
+# Dimensions whose buckets are your folders and your branch names. `ccdrift cost` prints
+# them; the JSON withholds them, as report --json already withholds the projects, because
+# a branch like "worktree-better-auth-sso" names a plan as surely as a folder names a
+# client.
+PRIVATE_DIMENSIONS = ("project", "branch")
 
 # The column each dimension groups by, and what a response the dimension does not name
 # is called. Every response falls in exactly one bucket, so a dimension's shares sum to 1.
@@ -116,6 +123,28 @@ def priced_total(turns: pd.DataFrame, prices: dict[str, Price]) -> Optional[floa
     return float(by_model["dollars"].fillna(0).sum())
 
 
+def spend_json(turns: pd.DataFrame, dimensions: Sequence[str], prices: dict[str, Price],
+               window: Sequence[str]) -> str:
+    """The breakdown as JSON: aggregates only, and no bucket that names a folder or a
+    branch. The withheld dimensions are listed rather than silently dropped."""
+    shown = [d for d in dimensions if d not in PRIVATE_DIMENSIONS]
+    withheld = [d for d in dimensions if d in PRIVATE_DIMENSIONS]
+    total = priced_total(turns, prices)
+    payload = {
+        "days": len(window),
+        "tokens": total_tokens(turns),
+        "dollars": total,
+        "priced_models": sorted(prices),
+        "dimensions": {d: [{"bucket": row.bucket, "responses": int(row.responses),
+                            "tokens": float(row.tokens), "share": float(row.share),
+                            "dollars": None if pd.isna(row.dollars) else float(row.dollars)}
+                           for row in spend_rows(turns, d, prices).itertuples(index=False)]
+                       for d in shown},
+        "withheld": withheld,
+    }
+    return json.dumps(payload, indent=1) + "\n"
+
+
 DEFAULT_DAYS = 30
 DEFAULT_ORDER = ("thread", "agent", "skill", "plugin", "mcp", "model")
 
@@ -133,7 +162,7 @@ def spend_lines(turns: pd.DataFrame, dimension: str, prices: dict[str, Price]) -
 
 
 def run_spend(source: Path, state_path: Path, days: Optional[int] = None, by: Optional[str] = None,
-             today: Optional[date] = None) -> int:
+             as_json: bool = False, today: Optional[date] = None) -> int:
     """Print where the window's tokens went. Reads the history like `report`, saves no
     state, and judges nothing."""
     try:
@@ -150,6 +179,9 @@ def run_spend(source: Path, state_path: Path, days: Optional[int] = None, by: Op
     turns = turns[turns["day"].astype(str).isin(window)]
     prices = fit_prices(tables.model_usage)
     dimensions = [by] if by else list(DEFAULT_ORDER)
+    if as_json:
+        print(spend_json(turns, dimensions, prices, window), end="")
+        return 0
     total = priced_total(turns, prices)
     money = "" if total is None else f", {'$' + format(total, ',.2f')}"
     lines = [f"{len(window)} complete UTC days, {approx(total_tokens(turns))} tokens{money}.",

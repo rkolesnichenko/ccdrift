@@ -97,6 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
                       help="how many recent days to cover (default: 30)")
     cost.add_argument("--by", choices=list(DIMENSION_NAMES), default=None,
                       help="show one dimension instead of the usual set")
+    cost.add_argument("--json", action="store_true", help="print the breakdown as JSON")
     _add_source(cost)
     _add_state(cost)
 
@@ -264,7 +265,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                           html_path=args.html)
     if args.command == "cost":
         from ccdrift.spend import run_spend
-        return run_spend(_source(args), _state(args), days=args.days, by=args.by)
+        return run_spend(_source(args), _state(args), days=args.days, by=args.by, as_json=args.json)
     if args.command == "status":
         from ccdrift.status import run_status
         return run_status(_state(args), short=args.short)
