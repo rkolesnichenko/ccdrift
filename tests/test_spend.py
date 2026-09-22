@@ -9,8 +9,9 @@ import pytest
 from ccdrift.history import load_history
 from ccdrift.logs import parse_source
 from ccdrift.prices import Price
-from ccdrift.spend import (DIMENSIONS, MATERIAL_SHARE, priced_total, run_spend, spend_json, spend_rows,
-                           spend_turns, total_tokens)
+from ccdrift.spend import (DEFAULT_ORDER, DIMENSIONS, MATERIAL_SHARE, PRIVATE_DIMENSIONS, TOKEN_COLUMNS,
+                           branch_projects, priced_total, run_spend, spend_json, spend_rows, spend_turns,
+                           total_tokens)
 from ccdrift.state import new_state, save_state
 from ccdrift.texts import DIMENSION_NAMES
 from tests.helpers import at, cost_state, line, text, write
@@ -33,6 +34,39 @@ def corpus(tmp_path):
              branch="topic"),
         line("a2", text(40), ts=at(180), entrypoint="cli", sidechain=True, agent_type="Explore",
              branch="topic", mcp_server="context7", model="claude-haiku-4-5"),
+    ])
+    return spend_turns(parse_source(tmp_path), TODAY)
+
+
+def branches_across_projects(tmp_path):
+    """`main` reached from two project folders and `topic` from one: the shape that makes
+    a branch row name more than one place at once. On the owner's corpus on 2026-09-22,
+    3 branch names of 191 did this and carried 18.0% of the window between them."""
+    write(tmp_path / "proj-a" / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), entrypoint="cli", branch="main"),
+        line("m2", text(40), ts=at(60), entrypoint="cli", branch="topic"),
+    ])
+    write(tmp_path / "proj-b" / "s2.jsonl", [
+        line("m3", text(40), ts=at(120), entrypoint="cli", branch="main"),
+    ])
+    return spend_turns(parse_source(tmp_path), TODAY)
+
+
+def branch_and_agent_share_a_name(tmp_path):
+    """A branch called `general-purpose`, reached from two project folders, and an agent
+    of that same name in a third response on one of them. Nothing stops a branch being
+    named after an agent, so the collision is a fair case and not a contrived one: it is
+    the only fixture shape that can tell "the project count is looked up for the branch
+    dimension" apart from "the project count is looked up by bucket name and happens not
+    to collide", since `branch_projects`' keys are branch names and a lookup that ignores
+    the dimension guard would hit any other dimension's bucket of the identical name."""
+    write(tmp_path / "proj-a" / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), entrypoint="cli", branch="general-purpose"),
+    ])
+    write(tmp_path / "proj-b" / "s2.jsonl", [
+        line("m2", text(40), ts=at(60), entrypoint="cli", branch="general-purpose"),
+        line("a1", text(40), ts=at(120), entrypoint="cli", sidechain=True, agent_type="general-purpose",
+             branch="topic"),
     ])
     return spend_turns(parse_source(tmp_path), TODAY)
 
@@ -91,6 +125,9 @@ def five_small_models(tmp_path):
 
 
 OPUS = {"claude-opus-5": Price(5e-6, 25e-6, 0.0, 0.0, 9)}
+# Both the models money_corpus records costs for, at the rates RATES states, so a bucket
+# holding a1 alongside an unpriced response has a dollar figure to be priced from.
+OPUS_AND_HAIKU = {**OPUS, "claude-haiku-4-5": Price(1e-6, 5e-6, 0.0, 0.0, 9)}
 
 
 def test_every_dimension_has_a_heading_and_every_heading_a_dimension():
@@ -98,6 +135,12 @@ def test_every_dimension_has_a_heading_and_every_heading_a_dimension():
     # reads a heading out of it per DIMENSIONS, so a name missing from either is a
     # KeyError or a dimension no one can ask for.
     assert set(DIMENSIONS) == set(DIMENSION_NAMES)
+
+
+def test_the_terminals_default_dimensions_are_the_same_ones_the_json_defaults_to():
+    # run_spend passes DEFAULT_ORDER to the terminal path and list(DIMENSIONS) to the JSON
+    # one; they agree today only by coincidence of content and order, unpinned here.
+    assert tuple(d for d in DIMENSIONS if d not in PRIVATE_DIMENSIONS) == DEFAULT_ORDER
 
 
 @pytest.mark.parametrize("dimension", DIMENSIONS)
@@ -146,6 +189,43 @@ def test_a_source_holding_no_project_folder_is_one_project_and_not_one_per_sessi
     assert "0199c3d0" not in "".join(rows["bucket"])
 
 
+def test_a_repository_with_no_branch_checked_out_is_kept_out_of_the_branch_names(tmp_path, capsys):
+    # "HEAD" is what git answers with nothing checked out, so it is not a branch name and
+    # must not sort among them. It stays apart from "no branch", which means the field is
+    # absent: a Claude Code version fact rather than a git one, and not the same thing.
+    write(tmp_path / "logs" / "p" / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), entrypoint="cli", branch="HEAD"),
+        line("m2", text(40), ts=at(60), entrypoint="cli", branch="main"),
+        line("m3", text(40), ts=at(120), entrypoint="cli"),
+    ])
+    # A second project folder detached at the same time as the first, so the detached
+    # bucket is the one place this suite ties the rename to branch_projects' own lookup
+    # and to the count the printed row carries, rather than to the raw "HEAD" value.
+    write(tmp_path / "logs" / "q" / "s2.jsonl", [
+        line("m4", text(40), ts=at(180), entrypoint="cli", branch="HEAD"),
+    ])
+    turns = spend_turns(parse_source(tmp_path / "logs"), TODAY)
+    rows = spend_rows(turns, "branch", {})
+    assert set(rows["bucket"]) == {"detached HEAD", "main", "no branch"}
+    assert branch_projects(turns)["detached HEAD"] == 2
+
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    run_spend(tmp_path / "logs", state, by="branch", today=TODAY)
+    assert bucket_line(capsys.readouterr().out, "detached HEAD").endswith("2 projects")
+
+
+def test_the_partition_still_holds_with_a_detached_bucket_in_it(tmp_path):
+    write(tmp_path / "p" / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), entrypoint="cli", branch="HEAD"),
+        line("m2", text(40), ts=at(60), entrypoint="cli", branch="main"),
+    ])
+    turns = spend_turns(parse_source(tmp_path / "p"), TODAY)
+    rows = spend_rows(turns, "branch", {})
+    assert rows["tokens"].sum() == pytest.approx(total_tokens(turns))
+    assert rows["share"].sum() == pytest.approx(1.0)
+
+
 def test_buckets_come_out_largest_first_with_ties_broken_by_name(tmp_path):
     rows = spend_rows(corpus(tmp_path), "branch", {})
     tokens = rows["tokens"].tolist()
@@ -171,10 +251,11 @@ def test_a_price_joins_its_model_by_the_whole_name_and_never_by_a_prefix_of_it(t
     assert dict(zip(rows["bucket"], rows["dollars"].notna())) == {"claude-opus-5": True, "claude-opus-5[1m]": False}
 
 
-def test_a_bucket_is_priced_only_when_every_model_in_it_is(tmp_path):
+def test_a_bucket_blanks_when_its_unpriced_models_are_material_to_that_bucket(tmp_path):
     turns = corpus(tmp_path)
-    # The subagent bucket holds both claude-opus-5 (a1) and claude-haiku-4-5 (a2); pricing
-    # only the former must leave the whole bucket unpriced, not just a1's own dollars.
+    # The subagent bucket holds both claude-opus-5 (a1) and claude-haiku-4-5 (a2), half
+    # its tokens each, so pricing only the former must leave the whole bucket unpriced.
+    # Half is not a rounding error; the bucket below, where the unpriced share is, is.
     opus_only = {"claude-opus-5": Price(5e-6, 25e-6, 0.0, 0.0, 9)}
     rows = spend_rows(turns, "thread", opus_only)
     assert pd.notna(rows.loc[rows["bucket"] == "main thread", "dollars"].iloc[0])
@@ -183,6 +264,61 @@ def test_a_bucket_is_priced_only_when_every_model_in_it_is(tmp_path):
     both_priced = {**opus_only, "claude-haiku-4-5": Price(1e-6, 5e-6, 0.0, 0.0, 9)}
     assert spend_rows(turns, "thread", both_priced)["dollars"].notna().all()
     assert spend_rows(turns, "thread", {})["dollars"].isna().all()
+
+
+def test_a_bucket_is_priced_from_the_rest_when_its_unpriced_share_is_a_rounding_error(tmp_path):
+    # The failure this rule exists for, from the owner's corpus on 2026-09-22: 11
+    # responses of a model with no price, 0.009% of the window's tokens, blanked the
+    # dollars on 60.5% of it, while the total one line above printed because the same
+    # 0.009% cleared the same cutoff.
+    money_corpus(tmp_path / "logs", unpriced_out=100)
+    turns = spend_turns(parse_source(tmp_path / "logs"), TODAY)
+    row = spend_rows(turns, "thread", OPUS_AND_HAIKU).set_index("bucket").loc["subagent"]
+    assert row["unpriced"] == ("claude-fable-5-1",)          # still named, and still in the JSON
+    assert row["dollars"] == pytest.approx(11.00001)         # a1's own dollars, a2's left out
+
+
+def test_a_bucket_blanks_once_its_unpriced_share_reaches_the_cutoff(tmp_path):
+    money_corpus(tmp_path / "logs", unpriced_out=35_000)
+    turns = spend_turns(parse_source(tmp_path / "logs"), TODAY)
+    rows = spend_rows(turns, "thread", OPUS_AND_HAIKU).set_index("bucket")
+    assert pd.isna(rows.loc["subagent", "dollars"])
+    assert pd.notna(rows.loc["main thread", "dollars"])
+    # 1.2% of the bucket and 0.9% of the window: the one case that tells the two rules
+    # apart, so the bucket goes blank while the window's own total still prints.
+    assert priced_total(turns, OPUS_AND_HAIKU) is not None
+
+
+def test_the_cutoff_is_measured_against_the_bucket_and_not_against_the_window(tmp_path):
+    # A bucket that is entirely unpriced must blank however small it is. Measured against
+    # the window instead, every small bucket would pass, including this one.
+    write(tmp_path / "p" / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), entrypoint="cli", out=100_000),
+        line("a1", text(40), ts=at(60), entrypoint="cli", sidechain=True, out=10, model="claude-fable-5-1"),
+    ])
+    turns = spend_turns(parse_source(tmp_path / "p"), TODAY)
+    rows = spend_rows(turns, "thread", OPUS).set_index("bucket")
+    assert rows.loc["subagent", "share"] < MATERIAL_SHARE     # 0.02% of the window
+    assert pd.isna(rows.loc["subagent", "dollars"])           # and 100% of itself
+
+
+def test_a_bucket_with_no_tokens_at_all_blanks_rather_than_dividing_by_them(tmp_path):
+    # A response whose message carries no usage parses to zero tokens, so a bucket can
+    # sum to zero and the share it would be tested on does not exist.
+    turns = corpus(tmp_path).assign(**{column: 0 for column in TOKEN_COLUMNS})
+    rows = spend_rows(turns, "thread", OPUS).set_index("bucket")
+    assert pd.isna(rows.loc["subagent", "dollars"])          # holds an unpriced model
+    assert rows.loc["main thread", "dollars"] == 0.0         # priced, and worth nothing
+
+
+def test_the_model_dimension_is_all_or_nothing_whatever_the_cutoff_is(tmp_path):
+    # A model bucket's key is the model, so it is 0% or 100% unpriced and never in
+    # between. priced_total reads that dimension, so the new rule must not reach it.
+    money_corpus(tmp_path / "logs", unpriced_out=100)
+    turns = spend_turns(parse_source(tmp_path / "logs"), TODAY)
+    rows = spend_rows(turns, "model", OPUS_AND_HAIKU).set_index("bucket")
+    assert pd.isna(rows.loc["claude-fable-5-1", "dollars"])
+    assert pd.notna(rows.loc["claude-opus-5", "dollars"])
 
 
 def test_the_total_is_withheld_when_a_material_model_is_unpriced_and_present_when_all_are(tmp_path):
@@ -261,10 +397,10 @@ def test_the_dollars_printed_are_the_ones_claude_codes_own_cost_records_imply(tm
     assert dollars == {"claude-opus-5": pytest.approx(25.00005), "claude-haiku-4-5": pytest.approx(11.00001)}
 
 
-def test_a_bucket_with_no_dollars_names_the_model_that_left_it_without_any(tmp_path, capsys):
-    # The failure this exists for, from the owner's corpus: one model of 0.0% of the
-    # window is refused by the fit, the total still prints, and the whole subagent bucket
-    # goes blank beside it. Unexplained, that reads as broken arithmetic.
+def test_a_rounding_error_model_no_longer_blanks_the_bucket_it_landed_in(tmp_path, capsys):
+    # The failure this rule exists for, end to end: one model of 0.0% of the window is
+    # refused by the fit, and the bucket it landed in keeps its dollars rather than going
+    # blank beside a total that counted the same spend as immaterial.
     state = tmp_path / "state.json"
     save_state(state, new_state())
     money_corpus(tmp_path / "logs", unpriced_out=100)
@@ -272,10 +408,32 @@ def test_a_bucket_with_no_dollars_names_the_model_that_left_it_without_any(tmp_p
     out = capsys.readouterr().out
     assert "$36.00" in out.splitlines()[0]
     assert out.splitlines()[2].startswith("No price for claude-fable-5-1, 0.0% of the window's tokens:")
-    assert "no price: claude-fable-5-1" in bucket_line(out, "subagent")
+    assert "$11.00" in bucket_line(out, "subagent")
     assert "$25.00" in bucket_line(out, "main thread")
     # The bucket that is the model says it once: repeating its own name explains nothing.
     assert bucket_line(out, "claude-fable-5-1").endswith("no price")
+
+
+def test_a_bucket_a_model_with_no_price_weighs_on_still_names_it(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    money_corpus(tmp_path / "logs", unpriced_out=35_000)
+    run_spend(tmp_path / "logs", state, today=TODAY)
+    out = capsys.readouterr().out
+    assert "$" in out.splitlines()[0]                          # the window's total still prints
+    assert "no price: claude-fable-5-1" in bucket_line(out, "subagent")
+    assert "$25.00" in bucket_line(out, "main thread")
+
+
+def test_the_header_states_the_cutoff_that_decides_each_bucket_too(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    money_corpus(tmp_path / "logs", unpriced_out=100)
+    run_spend(tmp_path / "logs", state, today=TODAY)
+    said = capsys.readouterr().out.splitlines()[2]
+    # One rule decides the total and every bucket, so it is stated once, with its number.
+    assert said.endswith("out of any bucket where it stays under 1%. A bucket where it reaches 1% "
+                         "shows no dollars at all.")
 
 
 def test_a_withheld_total_says_which_model_withheld_it(tmp_path, capsys):
@@ -286,6 +444,7 @@ def test_a_withheld_total_says_which_model_withheld_it(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "$" not in out.splitlines()[0]
     assert out.splitlines()[2].startswith("No total: no price for claude-fable-5-1, 20.8% of the window's tokens.")
+    assert out.splitlines()[2].endswith("A bucket where it reaches 1% shows no dollars either.")
 
 
 def test_a_history_with_no_cost_records_reports_tokens_and_no_dollars(tmp_path, capsys):
@@ -342,6 +501,19 @@ def test_the_json_names_no_project_even_when_asked_for_one(tmp_path, capsys):
     assert json.loads(out)["withheld"] == ["project"]
 
 
+def test_the_default_json_names_both_private_dimensions_withheld_instead_of_dropping_them(tmp_path, capsys):
+    # run_spend's own default dimension list (DEFAULT_ORDER) never asks for project or
+    # branch, so with no --by at all the withheld check above never even ran: shipped
+    # 0.12.0 returned "withheld": [] here, silently dropping both instead of naming them.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    corpus(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, as_json=True, today=TODAY)
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload["withheld"]) == {"project", "branch"}
+    assert "project" not in payload["dimensions"] and "branch" not in payload["dimensions"]
+
+
 def test_the_json_says_what_it_could_not_price(tmp_path, capsys):
     state = tmp_path / "state.json"
     save_state(state, new_state())
@@ -377,3 +549,46 @@ def test_the_json_prices_only_the_models_the_window_actually_ran(tmp_path):
     prices = {**OPUS, "claude-sonnet-5": Price(2e-6, 10e-6, 0.0, 0.0, 12)}
     payload = json.loads(spend_json(turns, ["model"], prices, ["2026-09-01"]))
     assert [row["model"] for row in payload["priced_models"]] == ["claude-opus-5"]
+
+
+def test_a_branch_bucket_counts_the_project_folders_it_drew_on(tmp_path):
+    assert branch_projects(branches_across_projects(tmp_path)) == {"main": 2, "topic": 1}
+
+
+def test_a_branch_reached_from_more_than_one_project_says_how_many(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    branches_across_projects(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, by="branch", today=TODAY)
+    out = capsys.readouterr().out
+    assert bucket_line(out, "main").endswith("2 projects")
+    assert not bucket_line(out, "topic").rstrip().endswith("projects")
+
+
+def test_the_project_count_belongs_to_the_branch_dimension_even_when_another_buckets_name_matches_it(tmp_path,
+                                                                                                     capsys):
+    # `pooled` is keyed by branch name alone, so a lookup that forgot to restrict itself to
+    # the branch dimension would hit any other dimension's bucket sharing that name, not by
+    # rule but by luck of the fixture not colliding. This fixture makes them collide on
+    # purpose: do not "simplify" it back to non-overlapping names, or the guard it pins
+    # stops being pinned by anything.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    branch_and_agent_share_a_name(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, by="branch", today=TODAY)
+    assert bucket_line(capsys.readouterr().out, "general-purpose").endswith("2 projects")
+
+    run_spend(tmp_path / "logs", state, by="agent", today=TODAY)
+    assert not bucket_line(capsys.readouterr().out, "general-purpose").rstrip().endswith("projects")
+
+
+def test_the_project_count_stays_out_of_the_json(tmp_path, capsys):
+    # The branch dimension is withheld from --json entirely, so a count there would
+    # describe folders the JSON exists not to name.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    branches_across_projects(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, as_json=True, today=TODAY)
+    payload = json.loads(capsys.readouterr().out)
+    assert "branch" in payload["withheld"]
+    assert all("projects" not in row for rows in payload["dimensions"].values() for row in rows)

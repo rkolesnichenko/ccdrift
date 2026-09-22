@@ -35,12 +35,26 @@ DIMENSION_COLUMNS = {"agent": ("agent_type", "no agent"), "skill": ("attribution
                      "plugin": ("attribution_plugin", "no plugin"), "mcp": ("attribution_mcp", "no MCP server"),
                      "model": ("model", "unknown model"), "branch": ("git_branch", "no branch")}
 
+# What Claude Code writes to gitBranch when no branch is checked out, and what ccdrift
+# calls it. `git rev-parse --abbrev-ref HEAD` answers "HEAD" in that state. Confirmed on
+# 2026-09-22 over the owner's own corpus rather than synthetically: gitBranch is live
+# per-line state and not a session constant, changing within one transcript and back
+# (tool-loop-cache -> HEAD -> tool-loop-cache), and the one session that detached its own
+# checkout records gitBranch "HEAD" on the next line carrying one. It is kept apart from
+# the "no branch" bucket, which means the field was absent altogether: a Claude Code
+# version fact rather than a git one. On the same corpus this was 860 responses over four
+# project folders, 1.5% of the window, while "no branch" was empty, since gitBranch is on
+# every response.
+DETACHED_VALUE = "HEAD"
+DETACHED = "detached HEAD"
+
 # The share of the window's tokens that, left unpriced, withholds the dollar total. This
 # is a display rule and not a detection cutoff: nothing judges or alerts on it, it decides
 # only whether one figure prints. A rounding-error model should not silence a total and a
 # real one should, so the test is against the unpriced models' summed share: five models
 # at 0.9% each are 4.5% of the window counted as zero dollars, which is the partial total
-# the rule exists to refuse.
+# the rule exists to refuse. The same cutoff also decides each bucket's own figure, against
+# that bucket's own tokens rather than the window's; see spend_rows for the measurement.
 MATERIAL_SHARE = 0.01
 
 
@@ -78,7 +92,24 @@ def buckets(turns: pd.DataFrame, dimension: str) -> pd.Series:
         return files.map(project_of).map(project_path)
     column, absent = DIMENSION_COLUMNS[dimension]
     values = turns[column] if column in turns else pd.Series(None, index=turns.index, dtype="object")
-    return values.where(values.notna() & (values.astype(str) != ""), absent).astype(str)
+    named = values.where(values.notna() & (values.astype(str) != ""), absent).astype(str)
+    return named.replace(DETACHED_VALUE, DETACHED) if dimension == "branch" else named
+
+
+def branch_projects(turns: pd.DataFrame) -> dict[str, int]:
+    """How many project folders each branch bucket drew on. A branch name is the only
+    bucket key whose meaning is scoped to a project: two repositories both have a `main`,
+    and one row holding both names two places at once. Measured over the owner's corpus on
+    2026-09-22: 3 of 191 branch names spanned more than one repository and carried 18.0%
+    of the window between them, `main` alone 16.6% over five repositories whose largest
+    share was 11.7%. Counting is all ccdrift can honestly do here. It reads a project
+    folder, which is a cwd, not a git repository root, so naming the split would take a
+    repository identity it does not have."""
+    if turns.empty:
+        return {}
+    frame = pd.DataFrame({"branch": buckets(turns, "branch").to_numpy(),
+                          "project": buckets(turns, "project").to_numpy()})
+    return {str(name): int(count) for name, count in frame.groupby("branch")["project"].nunique().items()}
 
 
 def response_dollars(turns: pd.DataFrame, prices: dict[str, Price]) -> pd.Series:
@@ -109,8 +140,10 @@ def response_dollars(turns: pd.DataFrame, prices: dict[str, Price]) -> pd.Series
 
 def spend_rows(turns: pd.DataFrame, dimension: str, prices: dict[str, Price]) -> pd.DataFrame:
     """One row per bucket of `dimension`: responses, tokens, share of the window's tokens,
-    dollars when every response in the bucket has a priced model, and, when they do not,
-    the models that have no price, named so a blank money column can say why it is blank.
+    dollars from the models it could price while the ones it could not stay under
+    MATERIAL_SHARE of the bucket's own tokens, and the models with no price, named so a
+    blank money column can say why it is blank. A bucket keeps naming them once priced,
+    since the JSON carries both and a reader is owed the reason the figure is a floor.
     Largest first, ties by name, so two runs over one history read the same."""
     columns = ["bucket", "responses", "tokens", "share", "dollars", "unpriced"]
     if turns.empty:
@@ -125,9 +158,18 @@ def spend_rows(turns: pd.DataFrame, dimension: str, prices: dict[str, Price]) ->
     rows = []
     for bucket, group in frame.groupby("bucket", sort=True):
         tokens, priced = float(group["tokens"].sum()), group["dollars"].notna()
+        missing = float(group.loc[~priced, "tokens"].sum())
+        # The window's own materiality rule, applied at the level it was always about. On
+        # the owner's corpus on 2026-09-22, all-or-nothing meant 11 responses of a model
+        # with no price, 0.009% of the window's tokens, blanked the top row of five of the
+        # six public dimensions, 60.5% to 95.5% of the window each, while the total one
+        # line above printed because that same 0.009% cleared this same cutoff. The
+        # denominator is the bucket and not the window: measured against the window, a
+        # small bucket that is entirely unpriced would pass, which is the one case to catch.
+        material = (missing / tokens >= MATERIAL_SHARE) if tokens else bool((~priced).any())
         rows.append({"bucket": str(bucket), "responses": len(group), "tokens": tokens,
                      "share": tokens / total if total else 0.0,
-                     "dollars": float(group["dollars"].sum()) if priced.all() else float("nan"),
+                     "dollars": float("nan") if material else float(group.loc[priced, "dollars"].sum()),
                      "unpriced": tuple(sorted(set(group.loc[~priced, "model"])))})
     out = pd.DataFrame(rows, columns=columns)
     return out.sort_values(["tokens", "bucket"], ascending=[False, True],
@@ -202,16 +244,23 @@ def spend_lines(turns: pd.DataFrame, dimension: str, prices: dict[str, Price]) -
     """One dimension's section, starting with a blank line. A bucket with no dollars names
     the models that have none, unless nothing in the window is priced at all: a history
     with no cost record prices nothing, which is the common case and reads as normal, so
-    "no price" on every line there would be noise rather than an explanation."""
+    "no price" on every line there would be noise rather than an explanation.
+
+    A branch row also says how many project folders it drew on, when that is more than
+    one. No other dimension does: see branch_projects for why the count means something
+    there and nothing anywhere else."""
     rows = spend_rows(turns, dimension, prices)
     if rows.empty:
         return []
     explain = bool(priced_in_window(turns, prices))
+    # Only the branch dimension: a project count beside `general-purpose` would say that
+    # the reader works in more than one place, which is not what its row is about.
+    pooled = branch_projects(turns) if dimension == "branch" else {}
     lines = ["", f"By {DIMENSION_NAMES[dimension]}"]
     for row in rows.itertuples(index=False):
         dollars = None if pd.isna(row.dollars) else float(row.dollars)
         lines.append(spend_line(row.bucket, int(row.responses), float(row.tokens), float(row.share), dollars,
-                                row.unpriced if explain else ()))
+                                row.unpriced if explain else (), pooled.get(row.bucket, 1)))
     return lines
 
 
@@ -234,7 +283,10 @@ def run_spend(source: Path, state_path: Path, days: Optional[int] = None, by: Op
     prices = fit_prices(tables.model_usage)
     dimensions = [by] if by else list(DEFAULT_ORDER)
     if as_json:
-        print(spend_json(turns, dimensions, prices, window), end="")
+        # The default view's DEFAULT_ORDER never asks for project or branch, but the JSON
+        # contract promises to name every dimension it withholds rather than saying nothing
+        # about one nobody asked for: with no --by, the private dimensions still go in.
+        print(spend_json(turns, dimensions if by else list(DIMENSIONS), prices, window), end="")
         return 0
     total = priced_total(turns, prices)
     money = "" if total is None else f", {'$' + format(total, ',.2f')}"
@@ -244,7 +296,7 @@ def run_spend(source: Path, state_path: Path, days: Optional[int] = None, by: Op
     # Said once, at the top: which models have no price, and whether that was enough to
     # withhold the total. Missing money that says nothing reads as broken arithmetic.
     if unpriced and priced_in_window(turns, prices):
-        lines.append(unpriced_line(unpriced, total is None))
+        lines.append(unpriced_line(unpriced, total is None, MATERIAL_SHARE))
     for dimension in dimensions:
         lines += spend_lines(turns, dimension, prices)
     print("\n".join(lines) + "\n", end="")
