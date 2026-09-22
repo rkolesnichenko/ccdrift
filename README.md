@@ -189,6 +189,7 @@ stop the check.
 ```text
 ccdrift check [--notify] [--exec CMD] [--no-digest] [--source DIR] [--state FILE]   what the schedule runs
 ccdrift report [--days N] [--by day|version] [--json | --html FILE] [--source DIR] [--state FILE]
+ccdrift cost [--days N] [--by thread|agent|skill|plugin|mcp|model|project|branch] [--json] [--source DIR] [--state FILE]
 ccdrift status [--short] [--state FILE]
 ccdrift incident list [--source DIR] [--state FILE]
 ccdrift incident add {cache|haiku} START..END [--state FILE]
@@ -221,6 +222,23 @@ it, a line saying what those marks mean, then the table and the sections the ter
 prints. It has no scripts and fetches nothing when opened, so it works offline, and it
 names your project folders as the terminal report does. Its last line says so, since a
 page is easier to send on than a terminal.
+
+`ccdrift cost` says where the tokens went: by default it partitions the window by
+thread, agent type, skill, plugin, MCP server and model; `--by project` or `--by
+branch` reach the two dimensions the default view leaves out. Every section accounts
+for all of the window's tokens, not only the attributable slice, so a response can
+appear in more than one section: one that carries both a skill and a plugin counts
+once in each. It reports and never alerts: no rule, no threshold, no cutoff turns on
+any number here.
+
+Dollars appear per model only where ccdrift could fit a price for it from Claude
+Code's own cost records, and the window's total is shown only once every model
+carrying material spend is priced; a partial total would be quietly wrong, so it's
+left out instead, and the by-model section shows which model has no dollar figure.
+
+`ccdrift cost --json` withholds project and branch, exactly as `report --json`
+already withholds project folders, and lists them under a `withheld` key rather than
+dropping them without saying so.
 
 Transcripts are read from `$CLAUDE_CONFIG_DIR/projects` when that variable is set,
 otherwise from `~/.claude/projects`. The state file, history and log live in
