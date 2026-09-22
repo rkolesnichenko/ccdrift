@@ -18,8 +18,8 @@ from typing import Any, Optional
 import pandas as pd
 
 from ccdrift.logs import (ATTRIBUTION_FIELDS, MAX_TIME, MIN_TIME, SDK_ENTRYPOINT_PREFIX, SETTING_FIELDS, TOKEN_FIELDS,
-                          ParsedFile, Tables, census_frame, compaction_frame, duration_frame, failure_frame, frame,
-                          hook_frame, jsonl_files, parse_all, parse_file)
+                          USAGE_COUNTS, ParsedFile, Tables, census_frame, compaction_frame, duration_frame,
+                          failure_frame, frame, hook_frame, jsonl_files, parse_all, parse_file, usage_frame)
 from ccdrift.state import make_private
 
 HISTORY_FILE = "history.sqlite"
@@ -44,6 +44,7 @@ DURATION_COLUMNS = ("version", "entrypoint", "is_sidechain", "duration_ms", "mes
 HOOK_COLUMNS = ("version", "entrypoint", "is_sidechain", "hook_count", "error_count", "duration_ms", "prevented")
 COMPACTION_COLUMNS = ("version", "entrypoint", "is_sidechain", "trigger", "pre_tokens")
 FAILURE_COLUMNS = ("version", "entrypoint", "is_sidechain", "kind", "status")
+USAGE_COLUMNS = ("model",) + USAGE_COUNTS + ("cost_usd",)
 
 # Integer keys, microsecond timestamps and file ids keep a year of responses near
 # 65 MB; text keys, text timestamps and a path per row made it four times larger.
@@ -82,6 +83,11 @@ CREATE TABLE IF NOT EXISTS failures (
     key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
     version TEXT, entrypoint TEXT, is_sidechain INTEGER, kind TEXT, status INTEGER);
 CREATE INDEX IF NOT EXISTS failures_file ON failures (file_id);
+CREATE TABLE IF NOT EXISTS model_usage (
+    key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER, model TEXT,
+    input_tokens INTEGER, output_tokens INTEGER, cache_creation INTEGER, cache_read INTEGER,
+    thinking_tokens INTEGER, web_searches INTEGER, cost_usd REAL);
+CREATE INDEX IF NOT EXISTS model_usage_file ON model_usage (file_id);
 CREATE TABLE IF NOT EXISTS field_census (
     file_id INTEGER NOT NULL, day TEXT NOT NULL, version TEXT NOT NULL, path TEXT NOT NULL,
     responses INTEGER NOT NULL, PRIMARY KEY (file_id, day, version, path));
@@ -307,6 +313,7 @@ class History:
             self.db.execute("DELETE FROM hook_runs WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM compactions WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM failures WHERE file_id = ?", (file_id,))
+            self.db.execute("DELETE FROM model_usage WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM field_census WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM field_days WHERE file_id = ?", (file_id,))
             self.db.executemany(_upsert("responses", RESPONSE_COLUMNS), [
@@ -338,6 +345,10 @@ class History:
             self.db.executemany(
                 "INSERT INTO field_days (file_id, day, version, responses) VALUES (?, ?, ?, ?)",
                 [(file_id, day, version, count) for (day, version), count in parsed.field_days.items()])
+            self.db.executemany(_upsert("model_usage", USAGE_COLUMNS), [
+                (row_key(row["key"]), file_id, _micros(row["timestamp"]), row["model"],
+                 *(_count(row[c]) for c in USAGE_COUNTS), row["cost_usd"])
+                for row in parsed.model_usage.values()])
             self.db.execute("UPDATE files SET last_ts = (SELECT MAX(ts) FROM responses WHERE file_id = ?) WHERE id = ?",
                             (file_id, file_id))
 
@@ -413,6 +424,11 @@ class History:
         """Every stored failed request, or those from `since`, as parse_all's `failures` table."""
         return failure_frame(_decode(self._records("failures", FAILURE_COLUMNS, since), ("is_sidechain",)))
 
+    def model_usage(self, since: Optional[str] = None) -> pd.DataFrame:
+        """Every stored per-model cost record, or those from `since`, as parse_all's
+        `model_usage` table."""
+        return usage_frame(_decode(self._records("model_usage", USAGE_COLUMNS, since), ()))
+
     def field_census(self, since: Optional[str] = None) -> pd.DataFrame:
         """The census of the keys response records carry, summed over transcripts, or
         that of days from `since`, as parse_all's `field_census` table."""
@@ -450,7 +466,8 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
                 active_start = history.active_day_start(active_days, active_responses)
                 since = None if active_start is None else min(since, active_start)
             return Tables(history.responses(since), history.durations(since), history.hook_runs(since),
-                          history.compactions(since), history.failures(since), history.field_census(since))
+                          history.compactions(since), history.failures(since), history.field_census(since),
+                          history.model_usage(since))
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc
     except pd.errors.DatabaseError as exc:

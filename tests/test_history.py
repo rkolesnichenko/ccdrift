@@ -15,8 +15,8 @@ from ccdrift.logs import parse_all, parse_durations, parse_source
 from ccdrift.report import run_report
 from ccdrift.sessions import session_starts
 from ccdrift.state import new_state, save_state
-from tests.helpers import (DAY, at, compact_boundary, damage_responses_table, line, nth_day, prompt, response,
-                           stop_hook_summary, text, thinking, tool_result, turn_duration, write)
+from tests.helpers import (DAY, at, compact_boundary, cost_state, damage_responses_table, line, nth_day, prompt,
+                           response, stop_hook_summary, text, thinking, tool_result, turn_duration, write)
 
 
 def transcripts(folder):
@@ -89,6 +89,32 @@ def test_a_response_in_two_transcripts_counts_in_both_halves_of_the_census(tmp_p
     row = census[census["path"] == "version"]
     # The share the rule works out is exact whether or not a session was resumed.
     assert row["responses"].tolist() == [2] and row["day_responses"].tolist() == [2]
+
+
+def test_the_store_keeps_the_per_model_cost_records(tmp_path):
+    write(tmp_path / "p" / "s1.jsonl", [cost_state(at(0), {"claude-opus-5": {"input": 100, "costUSD": 0.25}})])
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    usage = load_history(tmp_path / "p", state, claim=True).model_usage
+    assert usage["model"].tolist() == ["claude-opus-5"] and usage["cost_usd"].iloc[0] == 0.25
+
+
+def test_a_stored_cost_keeps_its_fractional_cents(tmp_path):
+    write(tmp_path / "p" / "s1.jsonl", [cost_state(at(0), {"claude-opus-5": {"input": 1, "costUSD": 0.00012345}})])
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    # Rounded to an integer this reads as 0 and every price fitted from it is wrong.
+    assert load_history(tmp_path / "p", state, claim=True).model_usage["cost_usd"].iloc[0] == 0.00012345
+
+
+def test_a_transcript_that_grows_replaces_its_own_cost_records(tmp_path):
+    source, state = tmp_path / "p", tmp_path / "state.json"
+    save_state(state, new_state())
+    first = cost_state(at(0), {"claude-opus-5": {"input": 100, "costUSD": 0.25}}, start=1)
+    write(source / "s1.jsonl", [first])
+    load_history(source, state, claim=True)
+    write(source / "s1.jsonl", [first, cost_state(at(60), {"claude-opus-5": {"input": 9, "costUSD": 0.5}}, start=2)])
+    assert len(load_history(source, state, claim=True).model_usage) == 2
 
 
 def test_counts_and_times_out_of_range_dont_fail_the_history(tmp_path):
