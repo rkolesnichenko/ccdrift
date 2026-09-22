@@ -9,8 +9,8 @@ import pytest
 from ccdrift.history import load_history
 from ccdrift.logs import parse_source
 from ccdrift.prices import Price
-from ccdrift.spend import (DIMENSIONS, MATERIAL_SHARE, priced_total, run_spend, spend_json, spend_rows,
-                           spend_turns, total_tokens)
+from ccdrift.spend import (DIMENSIONS, MATERIAL_SHARE, branch_projects, priced_total, run_spend, spend_json,
+                           spend_rows, spend_turns, total_tokens)
 from ccdrift.state import new_state, save_state
 from ccdrift.texts import DIMENSION_NAMES
 from tests.helpers import at, cost_state, line, text, write
@@ -33,6 +33,20 @@ def corpus(tmp_path):
              branch="topic"),
         line("a2", text(40), ts=at(180), entrypoint="cli", sidechain=True, agent_type="Explore",
              branch="topic", mcp_server="context7", model="claude-haiku-4-5"),
+    ])
+    return spend_turns(parse_source(tmp_path), TODAY)
+
+
+def branches_across_projects(tmp_path):
+    """`main` reached from two project folders and `topic` from one: the shape that makes
+    a branch row name more than one place at once. On the owner's corpus on 2026-09-22,
+    3 branch names of 191 did this and carried 18.0% of the window between them."""
+    write(tmp_path / "proj-a" / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), entrypoint="cli", branch="main"),
+        line("m2", text(40), ts=at(60), entrypoint="cli", branch="topic"),
+    ])
+    write(tmp_path / "proj-b" / "s2.jsonl", [
+        line("m3", text(40), ts=at(120), entrypoint="cli", branch="main"),
     ])
     return spend_turns(parse_source(tmp_path), TODAY)
 
@@ -449,3 +463,41 @@ def test_the_json_prices_only_the_models_the_window_actually_ran(tmp_path):
     prices = {**OPUS, "claude-sonnet-5": Price(2e-6, 10e-6, 0.0, 0.0, 12)}
     payload = json.loads(spend_json(turns, ["model"], prices, ["2026-09-01"]))
     assert [row["model"] for row in payload["priced_models"]] == ["claude-opus-5"]
+
+
+def test_a_branch_bucket_counts_the_project_folders_it_drew_on(tmp_path):
+    assert branch_projects(branches_across_projects(tmp_path)) == {"main": 2, "topic": 1}
+
+
+def test_a_branch_reached_from_more_than_one_project_says_how_many(tmp_path, capsys):
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    branches_across_projects(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, by="branch", today=TODAY)
+    out = capsys.readouterr().out
+    assert bucket_line(out, "main").endswith("2 projects")
+    assert not bucket_line(out, "topic").rstrip().endswith("projects")
+
+
+def test_no_dimension_but_branch_carries_a_project_count(tmp_path, capsys):
+    # A count beside `general-purpose` or `superpowers` would say only that the reader
+    # works in more than one place. A branch name is the only bucket key whose meaning is
+    # scoped to a project, so it is the only one where the count says anything.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    branches_across_projects(tmp_path / "logs")
+    for dimension in ("thread", "agent", "skill", "plugin", "mcp", "model", "project"):
+        run_spend(tmp_path / "logs", state, by=dimension, today=TODAY)
+        assert "projects" not in capsys.readouterr().out
+
+
+def test_the_project_count_stays_out_of_the_json(tmp_path, capsys):
+    # The branch dimension is withheld from --json entirely, so a count there would
+    # describe folders the JSON exists not to name.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    branches_across_projects(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, as_json=True, today=TODAY)
+    payload = json.loads(capsys.readouterr().out)
+    assert "branch" in payload["withheld"]
+    assert all("projects" not in row for rows in payload["dimensions"].values() for row in rows)

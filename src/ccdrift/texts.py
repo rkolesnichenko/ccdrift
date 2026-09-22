@@ -67,11 +67,13 @@ def approx(value: float) -> str:
 
 
 def spend_line(bucket: str, responses: int, tokens: float, share: float, dollars: Optional[float],
-               unpriced: Sequence[str] = ()) -> str:
+               unpriced: Sequence[str] = (), projects: int = 1) -> str:
     """"  general-purpose            52,078   19.6B   53.1%   $412.18". A bucket holding a
     model ccdrift could not price shows "no price: claude-fable-5-1" where the money would
     be, since a column that simply goes blank reads as broken arithmetic. A bucket that is
-    itself the model says "no price" alone: repeating its own name explains nothing."""
+    itself the model says "no price" alone: repeating its own name explains nothing. A
+    bucket drawn from more than one project folder says so, which only the branch
+    dimension ever passes: every other key means the same thing wherever it appears."""
     if dollars is not None:
         money = f"  {'$' + format(dollars, ',.2f'):>12}"
     elif unpriced:
@@ -79,7 +81,8 @@ def spend_line(bucket: str, responses: int, tokens: float, share: float, dollars
         money = "  no price" + (": " + ", ".join(named) if named else "")
     else:
         money = ""
-    return f"  {bucket:<34}  {responses:>8,}  {approx(tokens):>7}  {share:>6.1%}{money}"
+    pooled = f"  {projects} projects" if projects > 1 else ""
+    return f"  {bucket:<34}  {responses:>8,}  {approx(tokens):>7}  {share:>6.1%}{money}{pooled}"
 
 
 # Models named in the "no price" line before it gives up and counts the rest.

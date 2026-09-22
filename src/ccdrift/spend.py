@@ -81,6 +81,22 @@ def buckets(turns: pd.DataFrame, dimension: str) -> pd.Series:
     return values.where(values.notna() & (values.astype(str) != ""), absent).astype(str)
 
 
+def branch_projects(turns: pd.DataFrame) -> dict[str, int]:
+    """How many project folders each branch bucket drew on. A branch name is the only
+    bucket key whose meaning is scoped to a project: two repositories both have a `main`,
+    and one row holding both names two places at once. Measured over the owner's corpus on
+    2026-09-22: 3 of 191 branch names spanned more than one repository and carried 18.0%
+    of the window between them, `main` alone 16.6% over five repositories whose largest
+    share was 11.7%. Counting is all ccdrift can honestly do here. It reads a project
+    folder, which is a cwd, not a git repository root, so naming the split would take a
+    repository identity it does not have."""
+    if turns.empty:
+        return {}
+    frame = pd.DataFrame({"branch": buckets(turns, "branch").to_numpy(),
+                          "project": buckets(turns, "project").to_numpy()})
+    return {str(name): int(count) for name, count in frame.groupby("branch")["project"].nunique().items()}
+
+
 def response_dollars(turns: pd.DataFrame, prices: dict[str, Price]) -> pd.Series:
     """What each response cost, NaN where its model has no price, so a bucket holding one
     unpriced response reports no dollars rather than a total that quietly omits it."""
@@ -213,16 +229,23 @@ def spend_lines(turns: pd.DataFrame, dimension: str, prices: dict[str, Price]) -
     """One dimension's section, starting with a blank line. A bucket with no dollars names
     the models that have none, unless nothing in the window is priced at all: a history
     with no cost record prices nothing, which is the common case and reads as normal, so
-    "no price" on every line there would be noise rather than an explanation."""
+    "no price" on every line there would be noise rather than an explanation.
+
+    A branch row also says how many project folders it drew on, when that is more than
+    one. No other dimension does: see branch_projects for why the count means something
+    there and nothing anywhere else."""
     rows = spend_rows(turns, dimension, prices)
     if rows.empty:
         return []
     explain = bool(priced_in_window(turns, prices))
+    # Only the branch dimension: a project count beside `general-purpose` would say that
+    # the reader works in more than one place, which is not what its row is about.
+    pooled = branch_projects(turns) if dimension == "branch" else {}
     lines = ["", f"By {DIMENSION_NAMES[dimension]}"]
     for row in rows.itertuples(index=False):
         dollars = None if pd.isna(row.dollars) else float(row.dollars)
         lines.append(spend_line(row.bucket, int(row.responses), float(row.tokens), float(row.share), dollars,
-                                row.unpriced if explain else ()))
+                                row.unpriced if explain else (), pooled.get(row.bucket, 1)))
     return lines
 
 
@@ -245,7 +268,10 @@ def run_spend(source: Path, state_path: Path, days: Optional[int] = None, by: Op
     prices = fit_prices(tables.model_usage)
     dimensions = [by] if by else list(DEFAULT_ORDER)
     if as_json:
-        print(spend_json(turns, dimensions, prices, window), end="")
+        # The default view's DEFAULT_ORDER never asks for project or branch, but the JSON
+        # contract promises to name every dimension it withholds rather than saying nothing
+        # about one nobody asked for: with no --by, the private dimensions still go in.
+        print(spend_json(turns, dimensions if by else list(DIMENSIONS), prices, window), end="")
         return 0
     total = priced_total(turns, prices)
     money = "" if total is None else f", {'$' + format(total, ',.2f')}"
