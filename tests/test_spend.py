@@ -51,6 +51,25 @@ def branches_across_projects(tmp_path):
     return spend_turns(parse_source(tmp_path), TODAY)
 
 
+def branch_and_agent_share_a_name(tmp_path):
+    """A branch called `general-purpose`, reached from two project folders, and an agent
+    of that same name in a third response on one of them. Nothing stops a branch being
+    named after an agent, so the collision is a fair case and not a contrived one: it is
+    the only fixture shape that can tell "the project count is looked up for the branch
+    dimension" apart from "the project count is looked up by bucket name and happens not
+    to collide", since `branch_projects`' keys are branch names and a lookup that ignores
+    the dimension guard would hit any other dimension's bucket of the identical name."""
+    write(tmp_path / "proj-a" / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), entrypoint="cli", branch="general-purpose"),
+    ])
+    write(tmp_path / "proj-b" / "s2.jsonl", [
+        line("m2", text(40), ts=at(60), entrypoint="cli", branch="general-purpose"),
+        line("a1", text(40), ts=at(120), entrypoint="cli", sidechain=True, agent_type="general-purpose",
+             branch="topic"),
+    ])
+    return spend_turns(parse_source(tmp_path), TODAY)
+
+
 # What the cost records in money_corpus say each model costs, per token in and out. Round
 # numbers, $5.00/$25.00 and $1.00/$5.00 per Mtok, so every dollar figure below can be
 # checked by hand. What the owner's corpus actually fitted is in docs/findings.md.
@@ -428,6 +447,19 @@ def test_the_json_names_no_project_even_when_asked_for_one(tmp_path, capsys):
     assert json.loads(out)["withheld"] == ["project"]
 
 
+def test_the_default_json_names_both_private_dimensions_withheld_instead_of_dropping_them(tmp_path, capsys):
+    # run_spend's own default dimension list (DEFAULT_ORDER) never asks for project or
+    # branch, so with no --by at all the withheld check above never even ran: shipped
+    # 0.12.0 returned "withheld": [] here, silently dropping both instead of naming them.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    corpus(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, as_json=True, today=TODAY)
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload["withheld"]) == {"project", "branch"}
+    assert "project" not in payload["dimensions"] and "branch" not in payload["dimensions"]
+
+
 def test_the_json_says_what_it_could_not_price(tmp_path, capsys):
     state = tmp_path / "state.json"
     save_state(state, new_state())
@@ -479,16 +511,21 @@ def test_a_branch_reached_from_more_than_one_project_says_how_many(tmp_path, cap
     assert not bucket_line(out, "topic").rstrip().endswith("projects")
 
 
-def test_no_dimension_but_branch_carries_a_project_count(tmp_path, capsys):
-    # A count beside `general-purpose` or `superpowers` would say only that the reader
-    # works in more than one place. A branch name is the only bucket key whose meaning is
-    # scoped to a project, so it is the only one where the count says anything.
+def test_the_project_count_belongs_to_the_branch_dimension_even_when_another_buckets_name_matches_it(tmp_path,
+                                                                                                       capsys):
+    # `pooled` is keyed by branch name alone, so a lookup that forgot to restrict itself to
+    # the branch dimension would hit any other dimension's bucket sharing that name, not by
+    # rule but by luck of the fixture not colliding. This fixture makes them collide on
+    # purpose: do not "simplify" it back to non-overlapping names, or the guard it pins
+    # stops being pinned by anything.
     state = tmp_path / "state.json"
     save_state(state, new_state())
-    branches_across_projects(tmp_path / "logs")
-    for dimension in ("thread", "agent", "skill", "plugin", "mcp", "model", "project"):
-        run_spend(tmp_path / "logs", state, by=dimension, today=TODAY)
-        assert "projects" not in capsys.readouterr().out
+    branch_and_agent_share_a_name(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, by="branch", today=TODAY)
+    assert bucket_line(capsys.readouterr().out, "general-purpose").endswith("2 projects")
+
+    run_spend(tmp_path / "logs", state, by="agent", today=TODAY)
+    assert not bucket_line(capsys.readouterr().out, "general-purpose").rstrip().endswith("projects")
 
 
 def test_the_project_count_stays_out_of_the_json(tmp_path, capsys):
