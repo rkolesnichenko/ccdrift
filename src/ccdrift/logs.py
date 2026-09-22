@@ -91,6 +91,23 @@ def field_get(obj: dict, logical: str, default: Any = None) -> Any:
     return default
 
 
+# How deep the census of a record's keys reaches. Below these the keys are per-call
+# detail (`toolUseResult` alone carries over 40 in one person's logs), which would
+# tally the shape of every tool result rather than the shape of a response.
+CENSUS_NESTED = ("message", "message.usage")
+
+
+def record_paths(obj: dict) -> set[str]:
+    """The dotted key paths one assistant record carries: its own keys, `message.*` and
+    `message.usage.*`. Fifty of them in one person's logs over 25 Claude Code versions."""
+    paths = set(obj)
+    for prefix in CENSUS_NESTED:
+        nested = _dig(obj, prefix)
+        if isinstance(nested, dict):
+            paths.update(f"{prefix}.{name}" for name in nested)
+    return paths
+
+
 def is_assistant(obj: dict) -> bool:
     role = field_get(obj, "role")
     # "type" variant carries "assistant"; "message.role" variant also "assistant".
@@ -187,12 +204,15 @@ TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_creation", "cache_read",
 @dataclass
 class ParsedFile:
     """One transcript's responses, turn durations, hook runs and compactions by key,
-    the transcript's first session id, and line counts for --verbose."""
+    the transcript's first session id, line counts for --verbose, and the key census
+    (field_census, field_days) of its responses."""
     responses: dict[str, dict] = field(default_factory=dict)
     durations: dict[str, dict] = field(default_factory=dict)
     hook_runs: dict[str, dict] = field(default_factory=dict)
     compactions: dict[str, dict] = field(default_factory=dict)
     failures: dict[str, dict] = field(default_factory=dict)
+    field_census: dict[tuple[str, str, str], int] = field(default_factory=dict)
+    field_days: dict[tuple[str, str], int] = field(default_factory=dict)
     session_id: Optional[str] = None
     lines: int = 0
     bad_json: int = 0
@@ -374,6 +394,9 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                     # before it, which the transcript they came from owns.
                     "opens_transcript": not is_sidechain and not main_thread_seen,
                     "source_file":      rel,
+                    # Folded into field_census below and removed, so the row stays the
+                    # shape `frame` and the store expect.
+                    "census_paths":     set(),
                 }
                 main_thread_seen = main_thread_seen or not is_sidechain
             prompt_pending = compact_pending = False
@@ -393,6 +416,25 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
             row["signature_chars"] += signature
             row["visible_chars"] += visible
             row["n_mcp_calls"] += len(mcp_tool_names(content))
+            row["census_paths"].update(record_paths(obj))
+    # The census counts only the responses the daily check judges on the thread test,
+    # so a share worked out from it is a share of the population the rule judges. The
+    # day is not yet known to be complete, which the rule applies instead.
+    for row in parsed.responses.values():
+        paths = row.pop("census_paths", None)
+        if not paths or row["timestamp"] is None or row["is_sidechain"]:
+            continue
+        if str(row["entrypoint"] or "").startswith(SDK_ENTRYPOINT_PREFIX):
+            continue
+        day = row["timestamp"].date().isoformat()
+        version = row["version"] or "unknown"
+        parsed.field_days[(day, version)] = parsed.field_days.get((day, version), 0) + 1
+        for path in paths:
+            clean = _text(path)
+            if clean is None:
+                continue
+            key = (day, version, clean)
+            parsed.field_census[key] = parsed.field_census.get(key, 0) + 1
     # A transcript is one session, even when a resumed session's lines carry
     # another id.
     session = parsed.session_id or fp.stem
@@ -513,20 +555,41 @@ def failure_frame(rows) -> pd.DataFrame:
     return _record_frame(rows, ("status",), ("is_sidechain",))
 
 
+CENSUS_COLUMNS = ("day", "version", "path", "responses", "day_responses")
+
+
+def census_frame(census: Mapping[tuple[str, str, str], int],
+                 days: Mapping[tuple[str, str], int]) -> pd.DataFrame:
+    """The key census: one row per UTC day, Claude Code version and key path, with the
+    responses that carried the path and the responses of that day and version. Sorted,
+    so two runs over one history read the same."""
+    rows = [{"day": day, "version": version, "path": path, "responses": count,
+             "day_responses": days.get((day, version), 0)}
+            for (day, version, path), count in census.items()]
+    df = pd.DataFrame(rows, columns=list(CENSUS_COLUMNS))
+    if df.empty:
+        return df
+    return df.sort_values(["day", "version", "path"], kind="stable").reset_index(drop=True)
+
+
 @dataclass
 class Tables:
-    """Everything ccdrift reads from transcripts, one table per record kind."""
+    """Everything ccdrift reads from transcripts, one table per record kind, plus the
+    key census (field_census)."""
     responses: pd.DataFrame
     durations: pd.DataFrame
     hook_runs: pd.DataFrame
     compactions: pd.DataFrame
     failures: pd.DataFrame
+    field_census: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def parse_all(source: Path) -> Tables:
     """Every transcript under `source`, read once. A record copied into a second
     transcript counts from the one whose path sorts first."""
     kinds = {"responses": {}, "durations": {}, "hook_runs": {}, "compactions": {}, "failures": {}}
+    census: dict[tuple[str, str, str], int] = {}
+    days: dict[tuple[str, str], int] = {}
     for fp, rel in jsonl_files(source):
         try:
             parsed = parse_file(fp, rel)
@@ -535,10 +598,18 @@ def parse_all(source: Path) -> Tables:
         for kind, rows in kinds.items():
             for key, row in getattr(parsed, kind).items():
                 rows.setdefault(key, row)
+        # Summed rather than deduplicated: a response copied into a resumed session's
+        # transcript lands in the numerator and the denominator alike, so every share
+        # worked out from the census is exact either way.
+        for key, count in parsed.field_census.items():
+            census[key] = census.get(key, 0) + count
+        for day_key, count in parsed.field_days.items():
+            days[day_key] = days.get(day_key, 0) + count
     return Tables(frame(list(kinds["responses"].values())), duration_frame(list(kinds["durations"].values())),
                   hook_frame(list(kinds["hook_runs"].values())),
                   compaction_frame(list(kinds["compactions"].values())),
-                  failure_frame(list(kinds["failures"].values())))
+                  failure_frame(list(kinds["failures"].values())),
+                  census_frame(census, days))
 
 
 def parse_durations(source: Path) -> pd.DataFrame:

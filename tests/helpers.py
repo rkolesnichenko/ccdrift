@@ -26,7 +26,7 @@ def thinking(signature_chars: int) -> dict:
 def line(mid, block, *, ts, sid="s1", out=100, cache_read=0, cache_creation=0,
          model="claude-opus-5", sidechain=False, version=None, entrypoint=None, effort=None,
          cache_1h=None, cache_5m=None, thinking_logged=None, speed=None, service_tier=None,
-         agent_type=None, stop_reason=None, miss_reason=None):
+         agent_type=None, stop_reason=None, miss_reason=None, extra=None):
     """One JSONL line as Claude Code writes it: a single content block, with the
     response's message.id, usage and diagnostics repeated on every line of that response.
     Fields left as None are left out, as older Claude Code versions do."""
@@ -55,6 +55,10 @@ def line(mid, block, *, ts, sid="s1", out=100, cache_read=0, cache_creation=0,
     if mid is not None:
         msg["id"] = mid
         rec["requestId"] = f"req_{mid}"
+    # Top-level keys ccdrift does not read, so a fixture can carry a field Claude Code
+    # has started logging.
+    if extra:
+        rec.update(extra)
     return rec
 
 
