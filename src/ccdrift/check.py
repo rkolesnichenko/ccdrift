@@ -18,7 +18,7 @@ from ccdrift.digest import digest_due, digest_week, weekly_digest
 from ccdrift.early import early_message, early_warning
 from ccdrift.failures import (cut_short, cut_short_message, failing_requests, failure_counts, judged_failures,
                               requests_message)
-from ccdrift.fields import field_gaps, gap_message
+from ccdrift.fields import field_gaps, gap_message, new_fields, new_fields_message
 from ccdrift.history import load_history
 from ccdrift.hooks import failure_message, hook_failures, judged_hook_runs
 from ccdrift.incidents import (RECOVERY_BINS, describe, incident_cost, incident_versions, update_incidents,
@@ -35,8 +35,10 @@ from ccdrift.texts import LOOP_NAMES, approx
 # kind, title, message, and lines for the log only
 Alert = tuple[str, str, str, list[str]]
 
-# Alerts that only go to the log: nothing changed that the owner can act on.
-LOG_ONLY = frozenset({"context_dropped"})
+# Alerts that only go to the log: nothing changed that the owner can act on. A field
+# that vanishes silences an alert and is worth a notification; a field that arrives
+# breaks nothing, and arrives about once a week.
+LOG_ONLY = frozenset({"context_dropped", "new_fields"})
 
 
 # The alert kind of a tool-loop warning for each stream.
@@ -223,6 +225,9 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     for gap in field_gaps(turns, state, today):
         notes = release_notes(changelog, [] if gap["version"] == "unknown" else [gap["version"]], "fields")
         alerts.append(("fields", "ccdrift: Claude Code stopped logging a field", gap_message(gap), note_lines(notes)))
+    for record in new_fields(tables.field_census, turns, state, today):
+        alerts.append(("new_fields", "ccdrift: Claude Code logs a field ccdrift doesn't read",
+                       new_fields_message(record), []))
     blank = blank_cache_stretch(turns, state)
     if blank:
         alerts.append(("blank_cache", "ccdrift can't compute the cache metric",

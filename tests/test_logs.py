@@ -198,6 +198,25 @@ def test_settings_missing_from_older_versions_are_left_empty(tmp_path):
     assert row["version"] is None and row["effort"] is None
 
 
+def test_a_response_keeps_the_reason_claude_code_recorded_for_a_cache_miss(tmp_path):
+    write(tmp_path / "s1.jsonl", response("m1", thinking(400), text(40), ts=at(0),
+                                          miss_reason="system_changed"))
+    assert parse_source(tmp_path)["miss_reason"].tolist() == ["system_changed"]
+
+
+def test_a_response_without_a_recorded_reason_has_none(tmp_path):
+    write(tmp_path / "s1.jsonl", [line("m1", text(40), ts=at(0))])
+    assert parse_source(tmp_path)["miss_reason"].isna().all()
+
+
+def test_the_first_line_of_a_response_that_records_a_reason_wins(tmp_path):
+    write(tmp_path / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), miss_reason="system_changed"),
+        line("m1", text(40), ts=at(1), miss_reason="tools_changed"),
+    ])
+    assert parse_source(tmp_path)["miss_reason"].tolist() == ["system_changed"]
+
+
 def test_cache_writes_are_split_into_the_1_hour_and_5_minute_tiers(tmp_path):
     # Claude Code writes the main thread's cache for an hour and subagents' and
     # Agent SDK sessions' for 5 minutes.
@@ -341,3 +360,44 @@ def test_agent_sdk_sessions_are_told_apart_by_their_entrypoint():
     rows = pd.DataFrame({"entrypoint": ["cli", "sdk-py", None, "SDK-ts"]})
     assert outside_sdk(rows).tolist() == [True, False, True, True]
     assert outside_sdk(pd.DataFrame({"day": ["2026-09-01"]})).tolist() == [True]
+
+
+def test_the_census_counts_a_response_once_however_many_lines_it_spans(tmp_path):
+    write(tmp_path / "s1.jsonl", response("m1", thinking(400), text(40), ts=at(0), version="2.1.226"))
+    census = parse_all(tmp_path).field_census
+    row = census[census["path"] == "version"]
+    assert row["responses"].tolist() == [1] and row["day_responses"].tolist() == [1]
+
+
+def test_the_census_unions_the_paths_of_a_responses_lines(tmp_path):
+    write(tmp_path / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), version="2.1.226"),
+        line("m1", text(40), ts=at(1), version="2.1.226", extra={"advisorModel": "claude-opus-5"}),
+    ])
+    paths = set(parse_all(tmp_path).field_census["path"])
+    assert "advisorModel" in paths and "message.usage.input_tokens" in paths
+
+
+def test_the_census_reaches_three_levels_and_no_deeper(tmp_path):
+    write(tmp_path / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), extra={"toolUseResult": {"file": {"filePath": "/home/someone/x"}}}),
+    ])
+    paths = set(parse_all(tmp_path).field_census["path"])
+    assert "toolUseResult" in paths
+    assert not any(path.startswith("toolUseResult.") for path in paths)
+
+
+def test_the_census_leaves_out_subagent_and_sdk_responses(tmp_path):
+    write(tmp_path / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), version="2.1.226"),
+        line("m2", text(40), ts=at(1), version="2.1.226", sidechain=True),
+        line("m3", text(40), ts=at(2), version="2.1.226", entrypoint="sdk-py"),
+    ])
+    census = parse_all(tmp_path).field_census
+    assert census["day_responses"].max() == 1
+
+
+def test_the_census_rows_come_out_in_the_same_order_every_run(tmp_path):
+    write(tmp_path / "s1.jsonl", [line(f"m{k}", text(40), ts=at(k), version="2.1.226") for k in range(5)])
+    first = parse_all(tmp_path).field_census
+    pd.testing.assert_frame_equal(first, parse_all(tmp_path).field_census)

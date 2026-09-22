@@ -24,8 +24,9 @@ from ccdrift.history import HistoryError, load_history
 from ccdrift.incidents import OPEN_END, RECOVERY_BINS, exclusions, incident_cost, incident_versions
 from ccdrift.logs import judged_turns, no_transcripts_message
 from ccdrift.loops import loop_turns
+from ccdrift.report import reason_counts
 from ccdrift.state import load_state
-from ccdrift.texts import PERSISTENT_DAYS, SHORT_NAMES, approx, version_key
+from ccdrift.texts import PERSISTENT_DAYS, SHORT_NAMES, approx, reason_name, version_key
 
 AFTER_DAYS = 14  # judged days after an incident that the draft compares with
 PAUSES = [(60, "≤1 min"), (300, "1–5 min"), (900, "5–15 min"), (3600, "15–60 min")]
@@ -168,6 +169,24 @@ def _cache_sections(responses: pd.DataFrame, turns: pd.DataFrame, incident: dict
             f"The {turns_text} during read a median {read[0]:,} tokens from the cache (middle half "
             f"{read[1]:,}–{read[2]:,}) and wrote a median {wrote[0]:,} (middle half {wrote[1]:,}–{wrote[2]:,}), "
             "so each wrote most of its input to the cache again.")
+    # Counted over every judged response of the period, not over the new-prompt turns
+    # the rest of this draft is about: Claude Code records a reason on any response
+    # whose prompt did not match what it had cached.
+    over = {name: _on_days(turns, periods[name]) for name in PERIODS}
+    reasons = {name: reason_counts(rows) for name, rows in over.items()}
+    if reasons["during"]:
+        shown = [name for name in PERIODS if periods[name]]
+        named = sorted({reason for counts in reasons.values() for reason in counts},
+                       key=lambda reason: (-reasons["during"].get(reason, 0), reason))
+        rows = [[reason_name(reason).capitalize(),
+                 *(f"{reasons[name].get(reason, 0):,} ({_rate(reasons[name].get(reason, 0), len(over[name]))})"
+                   for name in shown)]
+                for reason in named]
+        sections.append(
+            "### Why the cache missed\n\n"
+            "Claude Code records a reason on a response whose prompt did not match what it had cached. "
+            "ccdrift counts them and does not judge them: no alert of its own turns on these numbers.\n\n"
+            + _table(["Reason", *(name.capitalize() for name in shown)], rows))
     if len(during):
         rows, low = [], -1.0
         for high, label in PAUSES:

@@ -18,12 +18,12 @@ from typing import Any, Optional
 import pandas as pd
 
 from ccdrift.logs import (MAX_TIME, MIN_TIME, SDK_ENTRYPOINT_PREFIX, SETTING_FIELDS, TOKEN_FIELDS, ParsedFile, Tables,
-                          compaction_frame, duration_frame, failure_frame, frame, hook_frame, jsonl_files, parse_all,
-                          parse_file)
+                          census_frame, compaction_frame, duration_frame, failure_frame, frame, hook_frame,
+                          jsonl_files, parse_all, parse_file)
 from ccdrift.state import make_private
 
 HISTORY_FILE = "history.sqlite"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 # Bump whenever parse_file's output changes, so every transcript still on disk is
 # read again. Rows of transcripts Claude Code already deleted keep their values.
 # 3: counts, times and ids out of range or of the wrong type read as missing.
@@ -31,9 +31,10 @@ SCHEMA_VERSION = 4
 #    store is cleaned.
 # 5: control characters are dropped from text.
 # 6: failed requests are kept, and each response's stop reason.
-PARSER_VERSION = 6
+# 7: each response's cache-miss reason, and the census of the keys its record carries.
+PARSER_VERSION = 7
 
-TEXT_COLUMNS = ("model", "stop_reason") + SETTING_FIELDS
+TEXT_COLUMNS = ("model", "stop_reason", "miss_reason") + SETTING_FIELDS
 FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction", "opens_transcript")
 COUNT_COLUMNS = TOKEN_FIELDS + ("thinking_logged", "signature_chars", "visible_chars", "n_mcp_calls")
 RESPONSE_COLUMNS = TEXT_COLUMNS + FLAG_COLUMNS + COUNT_COLUMNS
@@ -54,7 +55,7 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE TABLE IF NOT EXISTS responses (
     key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
     model TEXT, version TEXT, entrypoint TEXT, effort TEXT, speed TEXT, service_tier TEXT, agent_type TEXT,
-    stop_reason TEXT, is_sidechain INTEGER, new_prompt INTEGER, after_compaction INTEGER,
+    stop_reason TEXT, miss_reason TEXT, is_sidechain INTEGER, new_prompt INTEGER, after_compaction INTEGER,
     input_tokens INTEGER, output_tokens INTEGER, cache_creation INTEGER, cache_read INTEGER,
     cache_1h INTEGER, cache_5m INTEGER, thinking_logged INTEGER,
     signature_chars INTEGER, visible_chars INTEGER, n_mcp_calls INTEGER,
@@ -77,6 +78,12 @@ CREATE TABLE IF NOT EXISTS failures (
     key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
     version TEXT, entrypoint TEXT, is_sidechain INTEGER, kind TEXT, status INTEGER);
 CREATE INDEX IF NOT EXISTS failures_file ON failures (file_id);
+CREATE TABLE IF NOT EXISTS field_census (
+    file_id INTEGER NOT NULL, day TEXT NOT NULL, version TEXT NOT NULL, path TEXT NOT NULL,
+    responses INTEGER NOT NULL, PRIMARY KEY (file_id, day, version, path));
+CREATE TABLE IF NOT EXISTS field_days (
+    file_id INTEGER NOT NULL, day TEXT NOT NULL, version TEXT NOT NULL,
+    responses INTEGER NOT NULL, PRIMARY KEY (file_id, day, version));
 """
 
 
@@ -219,6 +226,9 @@ class History:
         if from_version < 4 and columns and "stop_reason" not in columns:
             with self.db:
                 self.db.execute("ALTER TABLE responses ADD COLUMN stop_reason TEXT")
+        if from_version < 5 and columns and "miss_reason" not in columns:
+            with self.db:
+                self.db.execute("ALTER TABLE responses ADD COLUMN miss_reason TEXT")
         file_columns = {row[1] for row in self.db.execute("PRAGMA table_info(files)")}
         if from_version < 3 and file_columns and "last_ts" not in file_columns:
             with self.db:
@@ -289,6 +299,8 @@ class History:
             self.db.execute("DELETE FROM hook_runs WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM compactions WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM failures WHERE file_id = ?", (file_id,))
+            self.db.execute("DELETE FROM field_census WHERE file_id = ?", (file_id,))
+            self.db.execute("DELETE FROM field_days WHERE file_id = ?", (file_id,))
             self.db.executemany(_upsert("responses", RESPONSE_COLUMNS), [
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]),
                  *(row[c] for c in TEXT_COLUMNS), *(int(row[c]) for c in FLAG_COLUMNS),
@@ -311,6 +323,13 @@ class History:
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]), row["version"], row["entrypoint"],
                  int(row["is_sidechain"]), row["kind"], _count(row["status"]))
                 for row in parsed.failures.values()])
+            self.db.executemany(
+                "INSERT INTO field_census (file_id, day, version, path, responses) VALUES (?, ?, ?, ?, ?)",
+                [(file_id, day, version, path, count)
+                 for (day, version, path), count in parsed.field_census.items()])
+            self.db.executemany(
+                "INSERT INTO field_days (file_id, day, version, responses) VALUES (?, ?, ?, ?)",
+                [(file_id, day, version, count) for (day, version), count in parsed.field_days.items()])
             self.db.execute("UPDATE files SET last_ts = (SELECT MAX(ts) FROM responses WHERE file_id = ?) WHERE id = ?",
                             (file_id, file_id))
 
@@ -386,6 +405,16 @@ class History:
         """Every stored failed request, or those from `since`, as parse_all's `failures` table."""
         return failure_frame(_decode(self._records("failures", FAILURE_COLUMNS, since), ("is_sidechain",)))
 
+    def field_census(self, since: Optional[str] = None) -> pd.DataFrame:
+        """The census of the keys response records carry, summed over transcripts, or
+        that of days from `since`, as parse_all's `field_census` table."""
+        where, params = ("", ()) if since is None else (" WHERE day >= ?", (since,))
+        census = {(day, version, path): count for day, version, path, count in self.db.execute(
+            "SELECT day, version, path, SUM(responses) FROM field_census" + where + " GROUP BY 1, 2, 3", params)}
+        days = {(day, version): count for day, version, count in self.db.execute(
+            "SELECT day, version, SUM(responses) FROM field_days" + where + " GROUP BY 1, 2", params)}
+        return census_frame(census, days)
+
 
 def load_history(source: Path, state_path: Path, claim: bool, since: Optional[str] = None,
                  active_days: int = 0, active_responses: int = 0) -> Tables:
@@ -413,7 +442,7 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
                 active_start = history.active_day_start(active_days, active_responses)
                 since = None if active_start is None else min(since, active_start)
             return Tables(history.responses(since), history.durations(since), history.hook_runs(since),
-                          history.compactions(since), history.failures(since))
+                          history.compactions(since), history.failures(since), history.field_census(since))
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc
     except pd.errors.DatabaseError as exc:

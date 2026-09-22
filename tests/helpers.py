@@ -26,9 +26,9 @@ def thinking(signature_chars: int) -> dict:
 def line(mid, block, *, ts, sid="s1", out=100, cache_read=0, cache_creation=0,
          model="claude-opus-5", sidechain=False, version=None, entrypoint=None, effort=None,
          cache_1h=None, cache_5m=None, thinking_logged=None, speed=None, service_tier=None,
-         agent_type=None, stop_reason=None):
+         agent_type=None, stop_reason=None, miss_reason=None, extra=None):
     """One JSONL line as Claude Code writes it: a single content block, with the
-    response's message.id and usage repeated on every line of that response.
+    response's message.id, usage and diagnostics repeated on every line of that response.
     Fields left as None are left out, as older Claude Code versions do."""
     usage = {"input_tokens": 10, "output_tokens": out,
              "cache_read_input_tokens": cache_read,
@@ -44,6 +44,8 @@ def line(mid, block, *, ts, sid="s1", out=100, cache_read=0, cache_creation=0,
     msg = {"role": "assistant", "model": model, "content": [block], "usage": usage}
     if stop_reason is not None:
         msg["stop_reason"] = stop_reason
+    if miss_reason is not None:
+        msg["diagnostics"] = {"cache_miss_reason": {"type": miss_reason}}
     rec = {"type": "assistant", "timestamp": ts, "sessionId": sid,
            "isSidechain": sidechain, "message": msg}
     for name, value in (("version", version), ("entrypoint", entrypoint), ("effort", effort),
@@ -53,6 +55,10 @@ def line(mid, block, *, ts, sid="s1", out=100, cache_read=0, cache_creation=0,
     if mid is not None:
         msg["id"] = mid
         rec["requestId"] = f"req_{mid}"
+    # Top-level keys ccdrift does not read, so a fixture can carry a field Claude Code
+    # has started logging.
+    if extra:
+        rec.update(extra)
     return rec
 
 
@@ -216,8 +222,10 @@ def main_thread_days(path, days, per_day=60, first_day=0):
     1-hour cache. Each entry of `days` can set that day's `version` (default
     "2.1.226"), `haiku` (how many responses come from Haiku, default 0), `misses` (how
     many of the day's last responses miss the cache, writing 1000 tokens, default 0),
-    `tier` ("1h" or "5m" cache writes, default "1h"), `effort` (default "xhigh") and
-    `entrypoint` (default "cli")."""
+    `tier` ("1h" or "5m" cache writes, default "1h"), `effort` (default "xhigh"),
+    `entrypoint` (default "cli"), `reason` (the cache-miss reason Claude Code recorded
+    that day, default None), `reasons` (how many of the day's responses carry it,
+    default 0) and `extra` (top-level keys ccdrift does not read, default None)."""
     for d, spec in enumerate(days, start=first_day):
         tier = spec.get("tier", "1h")
         records = []
@@ -225,12 +233,13 @@ def main_thread_days(path, days, per_day=60, first_day=0):
             ts = at(d * DAY + 60 * k)
             model = "claude-haiku-4-5" if k < spec.get("haiku", 0) else "claude-opus-5"
             read, written = (0, 1000) if k >= per_day - spec.get("misses", 0) else (900, 100)
+            reason = spec.get("reason") if k < spec.get("reasons", 0) else None
             records += [prompt(ts, sid=f"s{d}"),
                         line(f"m{d}-{k}", text(40), ts=ts, sid=f"s{d}", model=model,
                              cache_read=read, cache_creation=written,
                              cache_1h=written if tier == "1h" else 0, cache_5m=written if tier == "5m" else 0,
                              version=spec.get("version", "2.1.226"), entrypoint=spec.get("entrypoint", "cli"),
-                             effort=spec.get("effort", "xhigh"))]
+                             effort=spec.get("effort", "xhigh"), miss_reason=reason, extra=spec.get("extra"))]
         write(path / f"s{d}.jsonl", records)
 
 

@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 
 from ccdrift.cli import main
-from ccdrift.status import run_status, short_status
+from ccdrift.state import new_state
+from ccdrift.status import run_status, short_status, status_report
 
 EEST = timezone(timedelta(hours=3))
 NOW = datetime(2026, 9, 20, 12, 0, tzinfo=EEST)
@@ -142,6 +143,14 @@ def test_status_lists_other_changes_of_the_last_30_days(tmp_path, capsys):
         "  subagent cache misses rising at 2026-09-20 08:40 UTC: 1 of 180 turns in 1 session (usually 0.18%), "
         "~3.2M tokens rewritten",
     ]
+
+
+def test_status_lists_a_new_field_under_other_changes():
+    state = new_state()
+    state["last_run"] = {"started": "2026-09-19T10:00:00", "ok": True, "error": None}
+    state["new_fields"].append({"paths": ["advisorModel"], "version": "2.1.276", "share": 0.94,
+                                "responses": 1602, "reported_on": "2026-09-19"})
+    assert "1 new field on 2.1.276: advisorModel" in status_report(state, datetime(2026, 9, 20, 10, 0))
 
 
 def test_status_before_the_first_check_says_how_to_set_it_up(tmp_path, capsys):

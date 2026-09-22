@@ -78,6 +78,8 @@ def weekly_digest(turns: pd.DataFrame, state: dict[str, Any], week_start: date,
             parts.append(digest_part(failures, days))
     parts.append(_count(sum(1 for i in state["incidents"] if i["status"] == "open"), "open incident"))
     parts.append(_count(sum(1 for c in state["settings"] if c["reported_on"] in days), "setting change"))
+    parts.append(_count(sum(len(record["paths"]) for record in state.get("new_fields", [])
+                            if record["reported_on"] in days), "new field"))
     ran = len(set(state.get("runs", [])) & set(days))
     parts.append(f"check ran on {ran} of 7 days")
     return f"Week of {days[0][5:]}: " + "; ".join(parts) + "."

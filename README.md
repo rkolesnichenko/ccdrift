@@ -108,6 +108,7 @@ set this in `~/.claude/settings.json`:
 | **ccdrift: requests failing** | A day had at least 5 failed requests (API errors Claude Code showed, or requests it retried), at least twice the busiest of the judged days in the 2 weeks before, with at least 5 such days to compare with. Banners blaming your Mac for going to sleep are counted in `ccdrift report` but never alert. | Usually the API or your connection, not your setup. `ccdrift report` shows the days; check status.claude.com. |
 | **ccdrift: responses cut short** | At least 5 responses stopped at the token limit (or were refused) on a day, on at least 0.5% of that day's main-thread responses and 3 times the worst share of the judged days before, a clean fortnight counting as 0.1%. The comparison leaves out the days of the same run, so a regression that starts on a quiet day is still reported. | A Claude Code update may have changed the output limit. `ccdrift report --by version` compares versions. |
 | **ccdrift: Claude Code stopped logging a field** | A new Claude Code version logs a field ccdrift reads on under 10% of responses. | `ccdrift peek` shows what it reads. Please open an issue. |
+| **ccdrift: Claude Code logs a field ccdrift doesn't read** | A Claude Code version first seen in the last 2 weeks carries a field on 90% or more of its responses that under 10% of the responses in the 2 weeks before it carried. It goes to the log, the weekly summary and `ccdrift status`, never a notification: a field arriving breaks nothing. | Nothing. Please open an issue if ccdrift should read it. |
 | **ccdrift can't compute the cache metric** | 3 busy days had no usable cache values. Claude Code's log format has most likely changed. | `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it, with text, ids and paths shown only as their length. Please open an issue with what it prints. |
 | **ccdrift: weekly summary** | Monday's one-line summary of the week before. | Nothing. `--no-digest` turns it off. |
 | **ccdrift check failed** | The check itself stopped with an error. | `~/.ccdrift/check.log` has the details. |
@@ -168,8 +169,10 @@ fields and early warnings.
 
 `--exec` runs a command through the shell for each alert, with `CCDRIFT_ALERT` (`flag`,
 `recovered`, `persistent`, `history`, `early`, `loop`, `subagent_loop`, `setting`,
-`context`, `hooks`, `fields`, `blank_cache`, `digest` or `failed`), `CCDRIFT_TITLE` and
-`CCDRIFT_MESSAGE` set. For example, to send alerts to [ntfy](https://ntfy.sh):
+`context`, `hooks`, `failed_requests`, `cut_short`, `fields`, `blank_cache`, `digest` or
+`failed`), `CCDRIFT_TITLE` and `CCDRIFT_MESSAGE` set. The `new_fields` and
+`context_dropped` alerts go to the log only and never run `--exec`. For example, to send
+alerts to [ntfy](https://ntfy.sh):
 
 ```sh
 ccdrift schedule install --exec 'curl -s -d "$CCDRIFT_MESSAGE" https://ntfy.sh/your-topic'
@@ -200,13 +203,16 @@ ccdrift schedule status
 ```
 
 `report --by version` also shows each version's median session start size once it has
-3 or more sessions, where automatic compaction started, and up to 2 release note lines
+3 or more sessions, where automatic compaction started, up to 2 release note lines
 about caching, Haiku and default models, effort, the system prompt and tool
-definitions, hooks, or subagent models. `ccdrift report` also shows stop-hook runs,
+definitions, hooks, or subagent models, and a sub-line under each version for why the
+cache missed, as Claude Code recorded it. `ccdrift report` also shows stop-hook runs,
 the models subagents ran on, and tool-loop cache misses on the main thread and in
 subagents, which `report --by version` shows as a share per version.
 
-`report --json` holds aggregates only: no paths, session ids or project names.
+`report --json` holds aggregates only: no paths, session ids or project names. It adds
+a `miss_reasons` key of counts per cache-miss reason, on the day view's window as a
+whole and on each version's own record in `--by version`.
 
 `report --html FILE` writes the day view as one self-contained page: the cache ratio and
 Haiku share drawn per day, with the days of a recorded incident on that metric shaded and
@@ -272,6 +278,10 @@ weeks before without that.
 For each Claude Code version first seen in the last 2 weeks with 50 or more
 responses, a field logged on at least 90% of the responses in the 2 weeks before it
 and on under 10% of the new version's is reported.
+
+Claude Code records a reason on a response whose prompt did not match what it had
+cached. ccdrift counts those reasons in `ccdrift report` and in `ccdrift incident
+draft`, and no rule turns on them.
 
 ## Linux notes
 

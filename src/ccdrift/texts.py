@@ -7,7 +7,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import datetime
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 # NUL, line breaks, and the escapes that move a terminal's cursor or retitle its window.
 # It lives here rather than in `logs`, so the two things that must strip it, parsing and
@@ -28,6 +28,15 @@ LOOP_NAMES = {"main": "tool-loop cache misses rising", "subagent": "subagent cac
 
 SETTING_NAMES = {"cache_tier": "cache tier", "effort": "effort", "speed": "speed", "service_tier": "service tier"}
 TIER_NAMES = {"1h": "1-hour", "5m": "5-minute"}
+
+# The reasons Claude Code records on a response whose prompt did not match what it had
+# cached (message.diagnostics.cache_miss_reason.type). Five of them over 25 versions in
+# one person's logs, on 925 of 147,500 responses.
+REASON_NAMES = {"messages_changed": "the messages changed",
+                "previous_message_not_found": "the previous message wasn't found",
+                "system_changed": "the system prompt changed",
+                "tools_changed": "the tools changed",
+                "unavailable": "the cache was unavailable"}
 
 
 def number(value: Any, spec: str) -> str:
@@ -206,6 +215,12 @@ def field_gap_line(gap: dict[str, Any]) -> str:
             f"{gap['share_before']:.0%} before")
 
 
+def new_field_line(record: dict[str, Any]) -> str:
+    paths = record["paths"]
+    return (f"{len(paths)} new field{'' if len(paths) == 1 else 's'} on {record['version']}: "
+            f"{', '.join(paths)}")
+
+
 def loop_warning_line(warning: dict[str, Any]) -> str:
     sessions = f"{warning['sessions']} session{'' if warning['sessions'] == 1 else 's'}"
     return (f"{LOOP_NAMES[warning['stream']]} at {warning['at'][:16].replace('T', ' ')} UTC: {warning['misses']} of "
@@ -216,3 +231,16 @@ def loop_warning_line(warning: dict[str, Any]) -> str:
 def early_warning_line(warning: dict[str, Any]) -> str:
     return (f"cache misses rising at {warning['at'][:16].replace('T', ' ')} UTC: {warning['misses']} of "
             f"{warning['turns']} new-prompt turns (usually {warning['base_rate']:.1%})")
+
+
+def reason_name(reason: str) -> str:
+    """A cache-miss reason's English name, or the reason itself when ccdrift hasn't seen
+    it, so a sixth one arriving is visible without a release."""
+    return REASON_NAMES.get(reason, reason)
+
+
+def miss_reason_line(counts: Mapping[str, int]) -> str:
+    """"the messages changed 329, the system prompt changed 114", largest first, ties by
+    name so two runs over one history read the same."""
+    return ", ".join(f"{reason_name(reason)} {count:,}"
+                     for reason, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])))

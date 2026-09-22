@@ -16,7 +16,7 @@ from ccdrift.detector import DetectorConfig
 from ccdrift.draft import _version_span, draft_markdown, draft_periods, find_incident, os_text, run_draft
 from ccdrift.logs import judged_turns, parse_source
 from ccdrift.state import new_state, save_state
-from tests.helpers import DAY, at, busy_days, line, main_thread_days, prompt, text, tool_loop_days, write
+from tests.helpers import DAY, at, busy_days, line, main_thread_days, nth_day, prompt, text, tool_loop_days, write
 
 
 BASELINE_NOTE = ("Before is the baseline ccdrift judged the incident against: the days it compared with, which skip "
@@ -206,6 +206,40 @@ def test_a_cache_draft_says_how_tool_loop_turns_fared(tmp_path):
                           "macOS 26.5.2")
     assert ("### Tool-loop turns\n\nTurns inside the tool loop on the main thread missed 0 of 1,386 (0.00%) before, "
             "0 of 396 (0.00%) during and 10 of 297 (3.37%) after.") in text
+
+
+def test_a_cache_draft_says_why_claude_code_recorded_the_misses(tmp_path):
+    days = [{}] * 20 + [{"reason": "system_changed", "reasons": 4, "misses": 6}] * 3 + [{}] * 5
+    main_thread_days(tmp_path / "logs", days)
+    responses = parse_source(tmp_path / "logs")
+    inc = incident("cache_ratio", nth_day(20), nth_day(22))
+    drafted = draft_markdown(responses, inc, [inc], {}, date(2026, 10, 20), DetectorConfig(), "macOS 26.5.2")
+    section = drafted.split("### Why the cache missed")[1]
+    # 4 responses on each of the 3 days of the incident, of that period's 180.
+    assert "| The system prompt changed | 0 (0.00%) | 12 (6.67%) |" in section
+    # Answers the question "What a missed turn looks like" raises, so it follows that section
+    # and comes before the next one, "Pause before the prompt".
+    assert (drafted.index("### What a missed turn looks like") < drafted.index("### Why the cache missed")
+           < drafted.index("### Pause before the prompt"))
+
+
+def test_a_cache_draft_leaves_the_reason_section_out_when_none_was_recorded(tmp_path):
+    main_thread_days(tmp_path / "logs", [{}] * 28)
+    responses = parse_source(tmp_path / "logs")
+    inc = incident("cache_ratio", nth_day(20), nth_day(22))
+    drafted = draft_markdown(responses, inc, [inc], {}, date(2026, 10, 20), DetectorConfig(), "macOS 26.5.2")
+    assert "Why the cache missed" not in drafted
+
+
+def test_a_cache_draft_leaves_the_reason_section_out_when_only_before_or_after_carries_one(tmp_path):
+    # The incident's during window (the middle 3 days) carries no reason; only the
+    # days after it do. The section is about the during window, not any window.
+    days = [{}] * 20 + [{}] * 3 + [{"reason": "unavailable", "reasons": 2}] * 5
+    main_thread_days(tmp_path / "logs", days)
+    responses = parse_source(tmp_path / "logs")
+    inc = incident("cache_ratio", nth_day(20), nth_day(22))
+    drafted = draft_markdown(responses, inc, [inc], {}, date(2026, 10, 20), DetectorConfig(), "macOS 26.5.2")
+    assert "Why the cache missed" not in drafted
 
 
 def test_a_haiku_incident_draft_compares_haiku_share_and_the_models_during(tmp_path):

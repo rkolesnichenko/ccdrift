@@ -41,7 +41,8 @@ def test_a_quiet_week_reads_as_one_line():
              "settings": [{"reported_on": "2026-09-16"}, {"reported_on": "2026-09-10"}]}
     assert weekly_digest(week_turns(), state, date(2026, 9, 14)) == (
         "Week of 09-14: 70 responses on 2.1.261–2.1.270; cache ratio 0.976 (1.4% misses); no Haiku; "
-        "no tool-loop turns, no subagent loop turns; no open incidents; 1 setting change; check ran on 7 of 7 days.")
+        "no tool-loop turns, no subagent loop turns; no open incidents; 1 setting change; no new fields; "
+        "check ran on 7 of 7 days.")
 
 
 def test_the_digest_counts_haiku_open_incidents_and_missed_runs():
@@ -49,7 +50,8 @@ def test_the_digest_counts_haiku_open_incidents_and_missed_runs():
              "settings": [{"reported_on": "2026-09-15"}, {"reported_on": "2026-09-19"}]}
     assert weekly_digest(week_turns(haiku=1), state, date(2026, 9, 14)) == (
         "Week of 09-14: 70 responses on 2.1.261–2.1.270; cache ratio 0.976 (1.4% misses); Haiku 1.4% of responses; "
-        "no tool-loop turns, no subagent loop turns; 1 open incident; 2 setting changes; check ran on 2 of 7 days.")
+        "no tool-loop turns, no subagent loop turns; 1 open incident; 2 setting changes; no new fields; "
+        "check ran on 2 of 7 days.")
 
 
 def test_the_digest_counts_the_weeks_tool_loop_misses():
@@ -62,4 +64,16 @@ def test_the_digest_counts_the_weeks_tool_loop_misses():
 
 def test_a_week_without_responses_says_so():
     assert weekly_digest(week_turns().iloc[0:0], new_state(), date(2026, 9, 14)) == (
-        "Week of 09-14: no responses; no open incidents; no setting changes; check ran on 0 of 7 days.")
+        "Week of 09-14: no responses; no open incidents; no setting changes; no new fields; "
+        "check ran on 0 of 7 days.")
+
+
+def test_the_weekly_summary_counts_the_new_fields_reported_that_week():
+    state = new_state()
+    state["new_fields"].append({"paths": ["advisorModel", "perTurnEffort"], "version": "2.1.276",
+                                "share": 1.0, "responses": 120, "reported_on": "2026-09-09"})
+    assert "2 new fields" in weekly_digest(pd.DataFrame(), state, date(2026, 9, 7))
+
+
+def test_the_weekly_summary_says_no_new_fields_when_none_arrived():
+    assert "no new fields" in weekly_digest(pd.DataFrame(), new_state(), date(2026, 9, 7))

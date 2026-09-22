@@ -633,7 +633,7 @@ def test_check_sends_the_weekly_summary_on_the_first_run_after_monday_9(tmp_path
     assert sent == ["ccdrift: weekly summary"]
     assert ("ccdrift: weekly summary: Week of 09-14: 420 responses on 2.1.226; cache ratio 0.900 (0.0% misses); "
             "no Haiku; no tool-loop turns, no subagent loop turns; no failed requests; no open incidents; "
-            "no setting changes; "
+            "no setting changes; no new fields; "
             "check ran on 1 of 7 days.") in capsys.readouterr().out
 
 
@@ -690,3 +690,31 @@ def test_an_incident_dismissed_while_the_check_runs_stays_dismissed(tmp_path, se
     assert dismissing[0].wait(timeout=60) == 0
     saved = load_state(state_path)
     assert (saved["incidents"][0]["status"], saved["last_run"]["ok"]) == ("dismissed", True)
+
+
+def a_new_field_history(tmp_path):
+    """14 days on one version, then 2 on a version that carries a field ccdrift
+    doesn't read."""
+    source, state_path = tmp_path / "logs", tmp_path / "state.json"
+    save_state(state_path, new_state())
+    main_thread_days(source, [{"version": "2.1.270"}] * 14
+                     + [{"version": "2.1.280", "extra": {"advisorModel": "claude-opus-5"}}] * 2)
+    return source, state_path
+
+
+def test_a_field_claude_code_has_started_logging_is_reported_to_the_log(tmp_path, capsys):
+    source, state_path = a_new_field_history(tmp_path)
+    assert run_check(source, state_path, today=date(2026, 9, 17)) == 0
+    assert "logs 1 field ccdrift doesn't read: advisorModel" in capsys.readouterr().out
+
+
+def test_a_new_field_does_not_notify(tmp_path, sent):
+    source, state_path = a_new_field_history(tmp_path)
+    run_check(source, state_path, notify_user=True, today=date(2026, 9, 17))
+    assert not any("field ccdrift doesn't read" in title for title in sent)
+
+
+def test_a_new_field_is_recorded_in_the_state(tmp_path):
+    source, state_path = a_new_field_history(tmp_path)
+    run_check(source, state_path, today=date(2026, 9, 17))
+    assert load_state(state_path)["new_fields"][0]["paths"] == ["advisorModel"]
