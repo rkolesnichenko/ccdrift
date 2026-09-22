@@ -156,6 +156,19 @@ def _cache_sections(responses: pd.DataFrame, turns: pd.DataFrame, incident: dict
               f"{by_period[name]['cache_read_ratio'].mean():.3f}" if len(by_period[name]) else "-"]
              for name in PERIODS if periods[name]]),
     ]
+    versions = _version_table(by_period, "is_miss", ["Turns", "Misses", "Miss rate"])
+    if versions:
+        sections.append("### By Claude Code version\n\n" + versions)
+    missed = during[during["is_miss"].astype(bool)]
+    if len(missed):
+        read = missed["cache_read"].quantile([0.5, 0.25, 0.75]).round().astype(int).tolist()
+        wrote = missed["cache_creation"].quantile([0.5, 0.25, 0.75]).round().astype(int).tolist()
+        turns_text = f"{len(missed):,} missed turn{'' if len(missed) == 1 else 's'}"
+        sections.append(
+            "### What a missed turn looks like\n\n"
+            f"The {turns_text} during read a median {read[0]:,} tokens from the cache (middle half "
+            f"{read[1]:,}–{read[2]:,}) and wrote a median {wrote[0]:,} (middle half {wrote[1]:,}–{wrote[2]:,}), "
+            "so each wrote most of its input to the cache again.")
     # Counted over every judged response of the period, not over the new-prompt turns
     # the rest of this draft is about: Claude Code records a reason on any response
     # whose prompt did not match what it had cached.
@@ -174,19 +187,6 @@ def _cache_sections(responses: pd.DataFrame, turns: pd.DataFrame, incident: dict
             "Claude Code records a reason on a response whose prompt did not match what it had cached. "
             "ccdrift counts them and does not judge them: no alert of its own turns on these numbers.\n\n"
             + _table(["Reason", *(name.capitalize() for name in shown)], rows))
-    versions = _version_table(by_period, "is_miss", ["Turns", "Misses", "Miss rate"])
-    if versions:
-        sections.append("### By Claude Code version\n\n" + versions)
-    missed = during[during["is_miss"].astype(bool)]
-    if len(missed):
-        read = missed["cache_read"].quantile([0.5, 0.25, 0.75]).round().astype(int).tolist()
-        wrote = missed["cache_creation"].quantile([0.5, 0.25, 0.75]).round().astype(int).tolist()
-        turns_text = f"{len(missed):,} missed turn{'' if len(missed) == 1 else 's'}"
-        sections.append(
-            "### What a missed turn looks like\n\n"
-            f"The {turns_text} during read a median {read[0]:,} tokens from the cache (middle half "
-            f"{read[1]:,}–{read[2]:,}) and wrote a median {wrote[0]:,} (middle half {wrote[1]:,}–{wrote[2]:,}), "
-            "so each wrote most of its input to the cache again.")
     if len(during):
         rows, low = [], -1.0
         for high, label in PAUSES:

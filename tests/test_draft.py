@@ -209,7 +209,7 @@ def test_a_cache_draft_says_how_tool_loop_turns_fared(tmp_path):
 
 
 def test_a_cache_draft_says_why_claude_code_recorded_the_misses(tmp_path):
-    days = [{}] * 20 + [{"reason": "system_changed", "reasons": 4}] * 3 + [{}] * 5
+    days = [{}] * 20 + [{"reason": "system_changed", "reasons": 4, "misses": 6}] * 3 + [{}] * 5
     main_thread_days(tmp_path / "logs", days)
     responses = parse_source(tmp_path / "logs")
     inc = incident("cache_ratio", nth_day(20), nth_day(22))
@@ -217,6 +217,10 @@ def test_a_cache_draft_says_why_claude_code_recorded_the_misses(tmp_path):
     section = drafted.split("### Why the cache missed")[1]
     # 4 responses on each of the 3 days of the incident, of that period's 180.
     assert "| The system prompt changed | 0 (0.00%) | 12 (6.67%) |" in section
+    # Answers the question "What a missed turn looks like" raises, so it follows that section
+    # and comes before the next one, "Pause before the prompt".
+    assert (drafted.index("### What a missed turn looks like") < drafted.index("### Why the cache missed")
+           < drafted.index("### Pause before the prompt"))
 
 
 def test_a_cache_draft_leaves_the_reason_section_out_when_none_was_recorded(tmp_path):
