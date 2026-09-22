@@ -229,15 +229,18 @@ branch` reach the two dimensions the default view leaves out. Every section acco
 for all of the window's tokens, not only the attributable slice, so a response can
 appear in more than one section: one that carries both a skill and a plugin counts
 once in each. It reports and never alerts: no rule, no threshold, no cutoff turns on
-any number here.
+any number here. A branch name is scoped to its
+repository, so a row like `main` can hold several at once; a row drawn from more than
+one project folder says how many, which is as far as the transcripts allow, since they
+record a working directory and not a repository root.
 
 Dollars appear only where ccdrift could fit a price for the model from Claude Code's
-own cost records. A bucket holding a model it could not price shows no dollars at all
-rather than a figure quietly missing one, and names the model that left it without
-any, in every section and not only the by-model one. The window's total is shown only
-once the models with no price are under 1% of its tokens between them; a partial total
-would be quietly wrong, so it's left out instead, and a line under the header names
-the models that withheld it.
+own cost records. One cutoff decides every dollar figure: a total, or a bucket's, is
+shown once the models with no price are under 1% of its tokens between them, and
+withheld above that, because a partial figure would be quietly wrong while an absent
+one is merely unhelpful. A bucket that withholds names the model that made it, in
+every section and not only the by-model one, and a line under the header names the
+models with no price whatever the rest of the output does.
 
 `ccdrift cost --json` withholds project and branch, exactly as `report --json`
 already withholds project folders, and lists them under a `withheld` key rather than
