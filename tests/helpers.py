@@ -65,6 +65,28 @@ def line(mid, block, *, ts, sid="s1", out=100, cache_read=0, cache_creation=0,
     return rec
 
 
+def deep_line(mid, depth, *, ts, **kw):
+    """line() for a tool call whose input nests `depth` lists deep, as JSONL text:
+    json.dumps can't write a depth near the recursion limit, so the nesting is spliced in."""
+    rec = line(mid, {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"deep": "NESTING"}}, ts=ts, **kw)
+    return json.dumps(rec).replace('"NESTING"', "[" * depth + "]" * depth) + "\n"
+
+
+def decode_limit():
+    """The shallowest list nesting json.loads refuses with RecursionError on this Python,
+    called from here: about 1,000 on 3.10, where the recursion limit applies, and about
+    10,000 on 3.13, whose decoder has a C stack limit of its own."""
+    low, high = 1, 1_000_000
+    while low < high:
+        mid = (low + high) // 2
+        try:
+            json.loads("[" * mid + "]" * mid)
+            low = mid + 1
+        except RecursionError:
+            high = mid
+    return low
+
+
 def response(mid, *blocks, ts, **kw):
     """All lines of one API response."""
     return [line(mid, b, ts=ts, **kw) for b in blocks]

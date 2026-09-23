@@ -1,5 +1,6 @@
 """Parsing Claude Code transcripts into responses and their metric columns."""
 
+import json
 from datetime import date
 
 import pandas as pd
@@ -7,7 +8,7 @@ import pytest
 
 from ccdrift.detector import bin_metrics
 from ccdrift.logs import frame, judged_turns, outside_sdk, parse_all, parse_durations, parse_file, parse_source
-from tests.helpers import (DAY, at, compact_boundary, cost_state, line, prompt, response, stop_hook_summary, text,
+from tests.helpers import (DAY, at, compact_boundary, cost_state, decode_limit, deep_line, line, prompt, response, stop_hook_summary, text,
                            thinking, tool_result, turn_duration, write)
 
 
@@ -22,6 +23,26 @@ def test_turn_takes_the_final_output_token_count(tmp_path):
         line("m1", text(400), ts=at(1), out=250),
     ])
     assert parse_source(tmp_path).loc[0, "output_tokens"] == 250
+
+
+def test_a_line_nested_too_deep_to_decode_counts_as_bad_json(tmp_path):
+    # json.loads raises RecursionError, not JSONDecodeError, on deep nesting. Uncaught,
+    # it failed every check until Claude Code deleted the transcript.
+    path = tmp_path / "s1.jsonl"
+    path.write_text(deep_line("m1", 100_000, ts=at(0)) + json.dumps(line("m2", text(40), ts=at(1))) + "\n")
+    parsed = parse_file(path, "s1.jsonl")
+    assert parsed.bad_json == 1
+    assert len(parsed.responses) == 1
+
+
+def test_no_nesting_near_the_depth_the_decoder_refuses_makes_parsing_raise(tmp_path):
+    # The frames between here and parse_file's json.loads move the boundary a few levels,
+    # and a line that decodes is walked again afterwards: content_chars dumps a tool call's input.
+    limit = decode_limit()
+    path = tmp_path / "s1.jsonl"
+    path.write_text("".join(deep_line(f"m{depth}", depth, ts=at(0)) for depth in range(limit - 50, limit + 50)))
+    parsed = parse_file(path, "s1.jsonl")
+    assert parsed.bad_json + len(parsed.responses) == 100
 
 
 def test_response_repeated_in_a_second_file_counts_once(tmp_path):

@@ -346,7 +346,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
             parsed.lines += 1
             try:
                 obj = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, RecursionError):  # RecursionError: nested past the decoder's limit
                 parsed.bad_json += 1
                 continue
             if not isinstance(obj, dict):
@@ -846,16 +846,22 @@ def peek(source: Path) -> bool:
                         continue
                     try:
                         obj = json.loads(line)
-                    except json.JSONDecodeError:
+                    except (json.JSONDecodeError, RecursionError):  # as in parse_file
                         continue
-                    if isinstance(obj, dict) and is_assistant(obj):
-                        # The transcript's path names the project folder, so it isn't shown.
-                        print("# first assistant line, text shown as its length")
-                        print(json.dumps(_peek_value(obj), indent=2)[:4000])
-                        print("\n# resolved fields:")
-                        for logical in CANDIDATES:
-                            print(f"  {logical:16s} -> {_peek_value(field_get(obj, logical), logical)!r}"[:120])
-                        return True
+                    if not (isinstance(obj, dict) and is_assistant(obj)):
+                        continue
+                    try:
+                        shown = json.dumps(_peek_value(obj), indent=2)[:4000]
+                        resolved = [f"  {logical:16s} -> {_peek_value(field_get(obj, logical), logical)!r}"[:120]
+                                    for logical in CANDIDATES]
+                    except RecursionError:  # decoded, but nested deeper than a walk over it can go
+                        continue
+                    # The transcript's path names the project folder, so it isn't shown.
+                    print("# first assistant line, text shown as its length")
+                    print(shown)
+                    print("\n# resolved fields:")
+                    print("\n".join(resolved))
+                    return True
         except OSError:
             continue
     print(no_transcripts_message(source), file=sys.stderr)

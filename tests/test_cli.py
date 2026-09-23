@@ -1,5 +1,6 @@
 """The ccdrift command line: check, peek, --version, and where it looks by default."""
 
+import json
 import os
 import subprocess
 import sys
@@ -11,7 +12,7 @@ from ccdrift import __version__
 from ccdrift.check import ccdrift_home
 from ccdrift.cli import main
 from ccdrift.logs import default_source
-from tests.helpers import at, busy_days, line, prompt, text, write
+from tests.helpers import at, busy_days, decode_limit, deep_line, line, prompt, text, write
 
 
 def one_response(folder):
@@ -73,6 +74,18 @@ def test_peek_shows_text_ids_and_folders_only_as_their_length(tmp_path, capsys):
     assert "acme" not in out and "0f6c-session" not in out
     assert '"text": "<17 chars>"' in out
     assert "  version" + " " * 10 + "-> '2.1.260'" in out.splitlines()
+
+
+def test_peek_does_not_fail_on_a_line_nested_too_deep_to_decode_or_show(tmp_path, capsys):
+    # One line past the decoder's limit, and one it decodes but that is deeper than
+    # the Python recursion limit a walk over it would need on 3.13.
+    folder = tmp_path / "logs"
+    folder.mkdir()
+    (folder / "s1.jsonl").write_text(deep_line("m1", decode_limit() + 10, ts=at(0))
+                                     + deep_line("m2", sys.getrecursionlimit(), ts=at(1))
+                                     + json.dumps(line("m3", text(40), ts=at(2))) + "\n")
+    assert main(["peek", "--source", str(folder)]) == 0
+    assert "# first assistant line, text shown as its length" in capsys.readouterr().out
 
 
 def test_peek_exits_2_and_names_the_folder_without_transcripts(tmp_path, capsys):
