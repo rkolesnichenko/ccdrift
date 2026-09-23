@@ -13,9 +13,10 @@ import ccdrift.draft
 from ccdrift.changelog import TOPIC_OF, load_changelog
 from ccdrift.cli import main
 from ccdrift.detector import DetectorConfig
-from ccdrift.draft import _version_span, draft_markdown, draft_periods, find_incident, os_text, run_draft
+from ccdrift.draft import draft_markdown, draft_periods, find_incident, os_text, run_draft, title_versions
 from ccdrift.logs import judged_turns, parse_source
 from ccdrift.state import new_state, save_state
+from ccdrift.texts import version_span
 from tests.helpers import DAY, at, busy_days, line, main_thread_days, nth_day, prompt, text, tool_loop_days, write
 
 
@@ -376,7 +377,7 @@ def test_the_title_names_the_versions_the_incident_ran_on_not_a_stale_session(tm
                              DetectorConfig(), "macOS 26.5.2")
     assert drafted.splitlines()[0].endswith("on Claude Code 2.1.280 (usually 0.00%)")
     # The floor is a share, not a rank: a version behind a tenth of the turns is still named.
-    assert _version_span(pd.Series(["2.1.233"] * 73 + ["2.1.235"] * 221)) == "2.1.233–2.1.235"
+    assert version_span(title_versions(pd.Series(["2.1.233"] * 73 + ["2.1.235"] * 221))) == "2.1.233–2.1.235"
     # It is still counted everywhere else: the version table keeps its row.
     assert "| 2.1.100 | during |" in drafted
 
