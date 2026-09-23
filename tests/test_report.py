@@ -388,6 +388,15 @@ def test_report_html_writes_a_page_only_its_owner_can_read(tmp_path, existing):
     assert "Users/me/app" in page.read_text()
 
 
+def test_report_html_writes_to_a_path_under_the_home_folder_given_with_a_tilde(tmp_path, monkeypatch):
+    # A quoted ~, or --html=~/..., reaches ccdrift without the shell expanding it.
+    main_thread_days(tmp_path / "logs" / "-Users-me-app", [{}] * 3)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert main(["report", "--html", "~/report.html", "--source", str(tmp_path / "logs"),
+                 "--state", str(tmp_path / "state.json")]) == 0
+    assert (tmp_path / "report.html").exists()
+
+
 def test_the_html_flag_takes_the_day_view_only_and_not_with_json(tmp_path, capsys):
     main_thread_days(tmp_path / "logs" / "-Users-me-app", [{}] * 3)
     page = tmp_path / "report.html"

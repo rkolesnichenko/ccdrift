@@ -262,7 +262,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.html is not None and args.by == "version":
             args._parser.error("--html draws the day view; drop --by version")
         return run_report(_source(args), _state(args), days=args.days, by=args.by, as_json=args.json,
-                          html_path=args.html)
+                          html_path=None if args.html is None else args.html.expanduser())
     if args.command == "cost":
         from ccdrift.spend import run_spend
         return run_spend(_source(args), _state(args), days=args.days, by=args.by, as_json=args.json)
