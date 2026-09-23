@@ -83,7 +83,8 @@ def fit_prices(usage: pd.DataFrame) -> dict[str, Price]:
     MAX_RESIDUAL is left out: an absent price reads as "not priced", a wrong one reads as
     money. A model whose records never read the cache is rank-deficient on that column and
     left out with them: its read rate cannot be told from nothing, and charging its reads at
-    zero would be a wrong price rather than an absent one."""
+    zero would be a wrong price rather than an absent one. So is one whose reads rest on a
+    single record, which would set the read rate on no evidence at all."""
     if usage.empty or "cost_usd" not in usage:
         return {}
     prices: dict[str, Price] = {}
@@ -102,6 +103,13 @@ def fit_prices(usage: pd.DataFrame) -> dict[str, Price]:
         if searches.any():
             columns.append(searches)
         if len(rows) < len(columns) + MIN_EXTRA_ROWS:
+            continue
+        # The read rate needs as much evidence as the fit as a whole: a column that only one
+        # record reads is exactly determined by that record, which prices whatever its cost
+        # holds beyond its other counts as reads, at a residual of zero by construction. A
+        # column no record reads is left to the rank check below, which refuses it.
+        reading = int((rows["cache_read"] > 0).sum())
+        if 0 < reading < 1 + MIN_EXTRA_ROWS:
             continue
         design = np.column_stack(columns)
         costs = rows["cost_usd"].to_numpy(dtype=float)

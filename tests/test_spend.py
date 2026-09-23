@@ -91,7 +91,8 @@ def cost_record(ts, start, counts):
 def money_corpus(tmp_path, unpriced_out=None):
     """Two responses whose dollars are known exactly, beside the cost records the price
     fit has to recover RATES from: four of them, one more than the three free parameters,
-    with counts that keep the three columns independent. `unpriced_out` adds a subagent
+    with counts that keep the three columns independent, and cache reads on two records
+    per model, since a read rate one record sets is not priced. `unpriced_out` adds a subagent
     response on a model no cost record mentions, so the fit refuses it.
 
     claude-opus-5 on the main thread: 10 input + 1,000,000 output = $25.00005.
@@ -107,7 +108,7 @@ def money_corpus(tmp_path, unpriced_out=None):
               {"claude-opus-5": {"input": 3_000, "output": 700},
                "claude-haiku-4-5": {"input": 5_000, "output": 60, "cache_read": 70_000}},
               {"claude-opus-5": {"input": 50, "output": 5_000, "cache_creation": 900},
-               "claude-haiku-4-5": {"input": 20, "output": 8_000}},
+               "claude-haiku-4-5": {"input": 20, "output": 8_000, "cache_read": 3_000}},
               {"claude-opus-5": {"input": 7_000, "output": 20, "cache_read": 60_000},
                "claude-haiku-4-5": {"input": 900, "output": 30, "cache_creation": 400}}]
     write(tmp_path / "proj-a" / "s1.jsonl",

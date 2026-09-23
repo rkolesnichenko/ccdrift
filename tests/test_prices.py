@@ -119,6 +119,21 @@ def test_a_model_whose_records_never_read_the_cache_is_not_priced():
     assert fit_prices(usage(rows)) == {}
 
 
+def test_a_cache_read_rate_resting_on_one_record_is_not_priced():
+    # A model whose records read the cache on only one of them has its read rate set by that
+    # record alone, exactly: whatever the record's cost holds beyond its other counts becomes
+    # the read rate, and its residual is zero by construction. That is MIN_EXTRA_ROWS's
+    # argument applied to one column. Found in review on 2026-09-23: with 10% of that
+    # record's cost unmodelled, the fit priced reads at 0.1218x against a true 0.1x, at a
+    # residual of 6.4e-16. A second reading record gives the residual something to observe.
+    one = [row if i == 3 else {**row, "cache_read": 0} for i, row in enumerate(RECORDS)]
+    rows = priced(one)
+    rows[3]["cost_usd"] *= 1.1
+    assert fit_prices(usage(rows)) == {}
+    two = [row if i in (0, 3) else {**row, "cache_read": 0} for i, row in enumerate(RECORDS)]
+    assert round(fit_prices(usage(priced(two)))["claude-opus-5"].cache_read_rate * 1e6, 3) == 0.5
+
+
 def test_a_record_with_no_cost_drops_from_the_fit_rather_than_the_model():
     rows = priced(RECORDS[:4])
     rows.append({"input_tokens": 999, "output_tokens": 9, "cache_read": 99, "cost_usd": None})
