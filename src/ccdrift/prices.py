@@ -20,9 +20,13 @@ import pandas as pd
 # well determined, claude-opus-4-7 at 6.25/5.00 per Mtok over 168 records, claude-sonnet-5
 # at 2.50/2.00 over 10 and claude-haiku-4-5-20251001 at 1.25/1.00 over 197. Fixing it is
 # what keeps the fit well posed: free, it returns -$11.58 per Mtok of input for
-# claude-opus-5 over 6 records and -$15.05 for claude-opus-5[1m] over 24. A model that
-# charges some other write ratio is not priced wrong by this; its residual crosses
-# MAX_RESIDUAL and it is refused, as a wrong cache-read ratio was measured to be.
+# claude-opus-5 over 6 records and -$15.05 for claude-opus-5[1m] over 24. It is also an
+# assumption the residual bound guards only in part. A model charging another write ratio
+# is refused once the mismatch moves its residual past MAX_RESIDUAL, as cache reads fixed at
+# 0.05x did on every model priced on that corpus. Where writes are a small share of what its
+# records cost, the fit can instead absorb the mismatch into its other rates within the
+# bound: found in review on 2026-09-23, records made at 2.0x and fitted at 1.25x priced at a
+# 0.36% residual, billing each written token 39% under.
 CACHE_WRITE_RATE = 1.25
 
 # A fit must reproduce the costs it was fitted to this closely to be trusted. This is not a
