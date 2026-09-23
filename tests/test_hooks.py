@@ -2,9 +2,10 @@
 
 from datetime import date
 
-from ccdrift.hooks import failure_message, hook_days, hook_failures, hooks_lines, hooks_summary, judged_hook_runs
+from ccdrift.hooks import hook_days, hook_failures, hooks_lines, hooks_summary, judged_hook_runs
 from ccdrift.logs import parse_all
 from ccdrift.state import new_state
+from ccdrift.texts import hook_failure_message
 from tests.helpers import DAY, at, hook_days_logs, stop_hook_summary, write
 
 
@@ -43,7 +44,7 @@ def test_hooks_failing_two_days_running_after_two_quiet_weeks_are_reported_once(
     assert [(f["since"], f["days"], f["runs"], f["failed"]) for f in failures] == [
         ("2026-09-15", ["2026-09-15", "2026-09-16"], [10, 10], [10, 10])]
     assert hook_failures(runs, state, date(2026, 9, 17)) == []
-    assert failure_message(failures[0], ["2.1.280 (since 09-15)"]) == (
+    assert hook_failure_message(failures[0], ["2.1.280 (since 09-15)"]) == (
         "Stop hooks failed on 10 of 10 runs on 2026-09-15 and 10 of 10 on 2026-09-16, on Claude Code 2.1.280 "
         "(since 09-15). Check your hooks; a Claude Code update may have changed their input.")
 

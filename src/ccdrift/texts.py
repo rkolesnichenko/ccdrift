@@ -295,3 +295,218 @@ def miss_reason_line(counts: Mapping[str, int]) -> str:
     name so two runs over one history read the same."""
     return ", ".join(f"{reason_name(reason)} {count:,}"
                      for reason, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+# ---------------------------------------------------------------------------
+# Alerts
+# ---------------------------------------------------------------------------
+# What each alert says. The module behind a rule decides when it goes out; check.py sends
+# it under the title of its kind, which is also what `--exec` gets as CCDRIFT_ALERT.
+
+ALERT_TITLES = {"flag": "ccdrift flag", "recovered": "ccdrift: back to normal",
+                "persistent": "ccdrift: change persists", "history": "ccdrift: past incidents found",
+                "early": "ccdrift: cache misses rising", "loop": f"ccdrift: {LOOP_NAMES['main']}",
+                "subagent_loop": f"ccdrift: {LOOP_NAMES['subagent']}", "setting": "ccdrift: setting changed",
+                "context": "ccdrift: session start changed",
+                "context_dropped": "ccdrift: a recorded session-start change was dropped",
+                "hooks": "ccdrift: hooks failing", "failed_requests": "ccdrift: requests failing",
+                "cut_short": "ccdrift: responses cut short", "fields": "ccdrift: Claude Code stopped logging a field",
+                "new_fields": "ccdrift: Claude Code logs a field ccdrift doesn't read",
+                "blank_cache": "ccdrift can't compute the cache metric", "digest": "ccdrift: weekly summary",
+                "failed": "ccdrift check failed"}
+
+
+def incident_message(kind: str, incident: dict[str, Any], named: Sequence[str], z: Sequence[float],
+                     run: Sequence[str]) -> tuple[str, list[str]]:
+    """The message and log lines of an incident's `kind` of alert (flag, recovered or
+    persistent), from its metric, start, cost and recovery day; `named` are the versions of
+    the event's days, and `z` and `run` the flagging days' scores and dates."""
+    metric, start = incident["metric"], incident["start"]
+    label = INCIDENT_METRICS[metric]
+    on = f", on Claude Code {', '.join(named)}" if named else ""
+    cost = cost_text(metric, incident["cost"])
+    if kind == "flag":
+        scores = ", ".join(f"{v:+.1f}" for v in z)
+        return (f"{label} {MOVES[metric]} from {start}{on}. {cost[0].upper()}{cost[1:]} so far.",
+                [f"days {', '.join(run)}; z = {scores}"])
+    if kind == "recovered":
+        return f"{label} back to normal from {incident['recovered_from']}{on}. The incident from {start}: {cost}.", []
+    return (f"{label} still {MOVES[metric]} {PERSISTENT_DAYS} days after {start}. ccdrift now treats it as the "
+            "new normal; `ccdrift incident list` has the details.", [])
+
+
+def context_dropped_message(record: dict[str, Any]) -> str:
+    return (f"{record['since']}, ~{approx(record['from'])} -> ~{approx(record['to'])} tokens: "
+            "judged against each project's own level, it isn't a change.")
+
+
+def blank_cache_message(blank: dict[str, Any]) -> str:
+    return (f"no usable cache values on {blank['days']} active days from {blank['first']} "
+            f"({blank['responses']} responses, {blank['prompts']} prompts recognised). "
+            "Claude Code's log format may have changed; run `ccdrift peek`.")
+
+
+def state_unreadable(path: Any, exc: Exception) -> str:
+    return f"can't read the state file {path}: {exc}"
+
+
+FIELD_NAMES = {"version": "its version", "entrypoint": "the entrypoint", "effort": "effort",
+               "speed": "the speed", "service_tier": "the service tier", "thinking_logged": "thinking token counts",
+               "cache_split": "the 1-hour/5-minute cache split"}
+
+
+CONSEQUENCES = {"version": "Alerts can't name versions",
+                "entrypoint": "Agent SDK sessions can't be told apart",
+                "effort": "Effort change alerts can't work",
+                "speed": "The report can't show the speed",
+                "service_tier": "The report can't show the service tier",
+                "thinking_logged": "The lab can't compare logged thinking tokens",
+                "cache_split": "Cache tier alerts can't work"}
+
+
+def gap_message(gap: dict[str, Any]) -> str:
+    where = "Claude Code" if gap["version"] == "unknown" else f"Claude Code {gap['version']}"
+    return (f"{where} no longer logs {FIELD_NAMES[gap['field']]} (on {gap['share']:.0%} of {gap['responses']} "
+            f"responses, {gap['share_before']:.0%} before). {CONSEQUENCES[gap['field']]} until ccdrift reads it "
+            "again; run `ccdrift peek`.")
+
+
+def new_fields_message(record: dict[str, Any]) -> str:
+    paths = record["paths"]
+    count = f"{len(paths)} field{'' if len(paths) == 1 else 's'}"
+    subject = "It may be worth reading" if len(paths) == 1 else "They may be worth reading"
+    return (f"Claude Code {record['version']} logs {count} ccdrift doesn't read: {', '.join(paths)} "
+            f"(on {record['share']:.0%} of {record['responses']:,} responses). {subject}; "
+            "please open an issue.")
+
+
+def early_message(warning: dict[str, Any], now: datetime) -> str:
+    on = f", on Claude Code {', '.join(warning['versions'])}" if warning["versions"] else ""
+    return (f"{warning['misses']} of the last {warning['turns']} new-prompt turns missed the cache "
+            f"(usually {warning['base_rate']:.1%}), since {clock_text(warning['since'], now)}{on}. "
+            "The daily check confirms or clears it within a few days.")
+
+
+def _on_versions(versions: Sequence[str]) -> str:
+    return f", on Claude Code {', '.join(versions)}" if versions else ""
+
+
+def requests_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
+    named = kinds_text(episode["kinds"])
+    before = before_text(episode["before"])
+    return (f"{episode['requests']} requests failed on {episode['since']}"
+            f"{f' ({named})' if named else ''}, {before}{_on_versions(versions)}. Claude Code retries these itself; a run "
+            "of them points at the API or your connection, not your setup.")
+
+
+def cut_short_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
+    what = "stopped at the token limit or refused" if episode["refused"] else "stopped at the token limit"
+    share = episode["cut"] / episode["responses"] if episode["responses"] else 0.0
+    worse = episode.get("worse_than")
+    against = (worse_text(worse) if worse else
+               before_text(f"{episode['before_share']:.2%}" if episode["before_share"] > 0 else None)
+               + run_text(episode.get("run_days", 0)))
+    return (f"{episode['cut']} of {episode['responses']:,} main-thread responses {what} on {episode['since']} "
+            f"({share:.2%}), {against}{_on_versions(versions)}. "
+            "A Claude Code update may have changed the output limit.")
+
+
+def hook_failure_message(failure: dict[str, Any], versions: Sequence[str]) -> str:
+    on = f", on Claude Code {', '.join(versions)}" if versions else ""
+    (first, second), (runs1, runs2), (failed1, failed2) = failure["days"], failure["runs"], failure["failed"]
+    return (f"Stop hooks failed on {failed1} of {runs1} runs on {first} and {failed2} of {runs2} on {second}{on}. "
+            "Check your hooks; a Claude Code update may have changed their input.")
+
+
+STREAM_TURNS = {"main": "tool-loop turns", "subagent": "subagent tool-loop turns"}
+
+
+def loop_message(warning: dict[str, Any], now: datetime) -> str:
+    on = f", on Claude Code {', '.join(warning['versions'])}" if warning["versions"] else ""
+    sessions = f"{warning['sessions']} session{'' if warning['sessions'] == 1 else 's'}"
+    return (f"{warning['misses']} of the last {warning['turns']} {STREAM_TURNS[warning['stream']]} missed the cache "
+            f"(usually {warning['base_rate']:.2%}), since {clock_text(warning['since'], now)}, in {sessions}, "
+            f"rewriting ~{approx(warning['tokens'])} tokens{on}. `ccdrift report` shows whether it lasts.")
+
+
+def replayed_line(incident: dict[str, Any]) -> str:
+    """"cache ratio down 2026-08-18..2026-09-03, back to normal from 2026-09-04, ~16M
+    tokens re-cached, on Claude Code 2.1.235 (since 08-19)"."""
+    metric = incident["metric"]
+    words = f"{METRIC_WORDS[metric]} {MOVES[metric]}"
+    cost = cost_text(metric, incident["cost"])
+    if incident["status"] == "open":
+        text = f"{words} since {incident['start']}, still going, {cost} so far"
+    elif incident["status"] == "persistent":
+        text = f"{words} from {incident['start']}, still changed after {PERSISTENT_DAYS} days, {cost}"
+    else:
+        text = (f"{words} {incident['start']}..{incident['end']}, back to normal from "
+                f"{incident['recovered_from']}, {cost}")
+    return text + (f", on Claude Code {', '.join(incident['versions'])}" if incident["versions"] else "")
+
+
+def history_message(found: Sequence[dict[str, Any]], first_day: str) -> str:
+    """The first check's one alert about the incidents its replay found."""
+    count = f"{len(found)} incident{'' if len(found) == 1 else 's'}"
+    return (f"Replaying your history from {first_day} found {count} ccdrift would have followed: "
+            f"{'; '.join(replayed_line(incident) for incident in found)}. `ccdrift incident list` has the "
+            "details; `ccdrift incident dismiss` puts a false alarm's days back in the baseline.")
+
+
+def _context_where(change: dict[str, Any], new_version: bool) -> str:
+    """Which projects a change reached, and what that says about its cause; "" when no
+    project had the sessions each side to be compared with itself. Every branch counts the
+    projects ccdrift could compare, not the projects the owner used: a machine with six
+    active projects can have two that clear the bar, and "every project you used" would be
+    false about the other four."""
+    moved, seen = len(change.get("projects", [])), change.get("of_projects", 0)
+    if not seen:
+        return ""
+    if not moved:
+        # Every project that could be compared held its level, so whatever moved the
+        # sessions isn't in any of them -- and isn't pinned on anything yet.
+        if seen == 1:
+            return (", though the one project ccdrift could compare with itself didn't move, so something outside "
+                    "it changed.")
+        return f", in none of the {seen} projects ccdrift could compare, so something outside them changed."
+    if seen == 1:
+        # One project is no evidence either way: Claude Code and that project's own files
+        # both move it, and there is nothing to compare it with.
+        if new_version:
+            return (", in the one project ccdrift could compare with itself, and on a Claude Code version none of "
+                    "the sessions before it ran: either that version or the project's own files explain it.")
+        return (", in the one project ccdrift could compare with itself, so its CLAUDE.md, MCP servers or skills "
+                "explain it as readily as Claude Code does.")
+    if moved < seen:
+        that = "That project's" if moved == 1 else "Those projects'"
+        # A version new to these sessions is named in the message's own opening clause, so
+        # ruling Claude Code out here would contradict it: the projects that didn't move
+        # say the cause isn't global, and a version that arrived says it might be.
+        if new_version:
+            return (f", in {moved} of the {seen} projects ccdrift could compare. {that} own files may explain it, "
+                    "though a Claude Code version none of the sessions before it ran also arrived.")
+        return (f", in {moved} of the {seen} projects ccdrift could compare. "
+                f"{that} CLAUDE.md, MCP servers or skills explain it, not Claude Code.")
+    if new_version:
+        return (f", in every project ccdrift could compare ({moved} of {seen}), on a Claude Code version none of "
+                "the sessions before it ran, the likeliest cause.")
+    return (f", in every project ccdrift could compare ({moved} of {seen}), with no new Claude Code version, so "
+            "look at your global configuration in ~/.claude.")
+
+
+def context_message(change: dict[str, Any], versions: Sequence[str]) -> str:
+    on = f", on Claude Code {', '.join(versions)}" if versions else ""
+    direction = "down" if change["to"] < change["from"] else "up"
+    where = _context_where(change, bool(change.get("new_version", False)))
+    tail = where or ". Your MCP servers, plugins or CLAUDE.md can change this too."
+    return (f"New sessions start with ~{approx(change['to'])} tokens of context from {change['since']}{on}, "
+            f"{direction} from ~{approx(change['from'])}{tail}")
+
+
+def change_message(change: dict[str, Any], versions: list[str]) -> str:
+    on = f", on Claude Code {', '.join(versions)}" if versions else ""
+    if change["setting"] == "cache_tier":
+        old, new = (TIER_NAMES.get(change[k], change[k]) for k in ("from", "to"))
+        return f"Cache writes for {change['model']} moved from the {old} to the {new} cache from {change['since']}{on}."
+    return (f"Effort for {change['model']} changed from {change['from']} to {change['to']} from "
+            f"{change['since']}{on}. If you didn't change it, Claude Code's default did.")

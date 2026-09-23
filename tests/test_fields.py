@@ -4,10 +4,10 @@ from datetime import date
 
 import pandas as pd
 
-from ccdrift.fields import (ARRIVED, MIN_BEFORE, MIN_RESPONSES, USUAL, field_gaps, gap_message, new_fields,
-                            new_fields_message)
+from ccdrift.fields import ARRIVED, MIN_BEFORE, MIN_RESPONSES, USUAL, field_gaps, new_fields
 from ccdrift.logs import census_frame
 from ccdrift.state import new_state
+from ccdrift.texts import gap_message, new_fields_message
 from tests.helpers import nth_day
 
 

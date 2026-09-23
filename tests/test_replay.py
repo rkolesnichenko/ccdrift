@@ -9,8 +9,9 @@ from ccdrift.cli import main
 from ccdrift.detector import DetectorConfig
 from ccdrift.incidents import add_incident, dismiss_incident
 from ccdrift.logs import parse_source
-from ccdrift.replay import first_run, history_message, replay_incidents, replayed_line, run_replay
+from ccdrift.replay import first_run, replay_incidents, run_replay
 from ccdrift.state import new_state, save_state
+from ccdrift.texts import history_message, replayed_line
 from tests.helpers import main_thread_days
 
 # Haiku on 12 of 60 responses a day from Sep 15 to 17 on 2.1.233, then none on 2.1.259.

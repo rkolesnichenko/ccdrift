@@ -10,7 +10,7 @@ from typing import Any, Sequence
 
 import pandas as pd
 
-from ccdrift.texts import SETTING_NAMES, TIER_NAMES, change_line
+from ccdrift.texts import SETTING_NAMES, change_line
 
 ALERT_SETTINGS = ("cache_tier", "effort")
 REPORT_SETTINGS = ("cache_tier", "effort", "speed", "service_tier")
@@ -64,15 +64,6 @@ def setting_changes(turns: pd.DataFrame, state: dict[str, Any], today: date) -> 
                 state["settings"].append(change)
                 new.append(change)
     return sorted(new, key=lambda c: c["since"])
-
-
-def change_message(change: dict[str, Any], versions: list[str]) -> str:
-    on = f", on Claude Code {', '.join(versions)}" if versions else ""
-    if change["setting"] == "cache_tier":
-        old, new = (TIER_NAMES.get(change[k], change[k]) for k in ("from", "to"))
-        return f"Cache writes for {change['model']} moved from the {old} to the {new} cache from {change['since']}{on}."
-    return (f"Effort for {change['model']} changed from {change['from']} to {change['to']} from "
-            f"{change['since']}{on}. If you didn't change it, Claude Code's default did.")
 
 
 def settings_summary(turns: pd.DataFrame, days: Sequence[str]) -> list[dict[str, Any]]:

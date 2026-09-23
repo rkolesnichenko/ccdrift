@@ -21,8 +21,8 @@ from ccdrift.detector import DetectorConfig, baseline_bins, bin_metrics, detect,
 from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import first_days_by_version, judged_turns
 from ccdrift.state import load_state
-from ccdrift.texts import (INCIDENT_METRICS, MOVES, PERSISTENT_DAYS, SHORT_NAMES, approx, cost_text,
-                           incident_line)
+from ccdrift.texts import (ALERT_TITLES, INCIDENT_METRICS, MOVES, PERSISTENT_DAYS, SHORT_NAMES, approx,
+                           incident_line, incident_message)
 
 # A first run stays quiet about flags from weeks ago but covers a week or so
 # without a run.
@@ -218,28 +218,14 @@ def describe(event: Event, turns: pd.DataFrame, incidents: Sequence[dict],
     incident's first, or when it has none: a recovery happens on other versions than
     the incident did."""
     incident = event.incident
-    metric, start = incident["metric"], incident["start"]
-    label = INCIDENT_METRICS[metric]
     named = versions_text(turns, event.days)
     if event.kind == "flag":
         incident["versions"] = named
     elif not incident["versions"]:
         incident["versions"] = incident_versions(turns, incident)
     incident["cost"] = round(incident_cost(turns, incident, incidents, cfg))
-    on = f", on Claude Code {', '.join(named)}" if named else ""
-    cost = cost_text(metric, incident["cost"])
-    if event.kind == "flag":
-        z = ", ".join(f"{v:+.1f}" for v in event.z)
-        return ("flag", "ccdrift flag",
-                f"{label} {MOVES[metric]} from {start}{on}. {cost[0].upper()}{cost[1:]} so far.",
-                [f"days {', '.join(event.run)}; z = {z}"], named)
-    if event.kind == "recovered":
-        return ("recovered", "ccdrift: back to normal",
-                f"{label} back to normal from {incident['recovered_from']}{on}. The incident from {start}: {cost}.",
-                [], named)
-    return ("persistent", "ccdrift: change persists",
-            f"{label} still {MOVES[metric]} {PERSISTENT_DAYS} days after {start}. ccdrift now treats it as the "
-            "new normal; `ccdrift incident list` has the details.", [], [])
+    message, details = incident_message(event.kind, incident, named, event.z, event.run)
+    return event.kind, ALERT_TITLES[event.kind], message, details, [] if event.kind == "persistent" else named
 
 
 def parse_days(text: str) -> tuple[str, str]:

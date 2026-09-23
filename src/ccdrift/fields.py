@@ -14,16 +14,6 @@ import pandas as pd
 from ccdrift.logs import READ_PATHS, first_days_by_version
 
 FIELDS = ("version", "entrypoint", "effort", "speed", "service_tier", "thinking_logged", "cache_split")
-FIELD_NAMES = {"version": "its version", "entrypoint": "the entrypoint", "effort": "effort",
-               "speed": "the speed", "service_tier": "the service tier", "thinking_logged": "thinking token counts",
-               "cache_split": "the 1-hour/5-minute cache split"}
-CONSEQUENCES = {"version": "Alerts can't name versions",
-                "entrypoint": "Agent SDK sessions can't be told apart",
-                "effort": "Effort change alerts can't work",
-                "speed": "The report can't show the speed",
-                "service_tier": "The report can't show the service tier",
-                "thinking_logged": "The lab can't compare logged thinking tokens",
-                "cache_split": "Cache tier alerts can't work"}
 MIN_RESPONSES = 50   # a new version's responses, to judge it
 MIN_BEFORE = 200     # responses in the days before it
 BEFORE_DAYS = 14
@@ -90,13 +80,6 @@ def field_gaps(turns: pd.DataFrame, state: dict[str, Any], today: date) -> list[
     return new
 
 
-def gap_message(gap: dict[str, Any]) -> str:
-    where = "Claude Code" if gap["version"] == "unknown" else f"Claude Code {gap['version']}"
-    return (f"{where} no longer logs {FIELD_NAMES[gap['field']]} (on {gap['share']:.0%} of {gap['responses']} "
-            f"responses, {gap['share_before']:.0%} before). {CONSEQUENCES[gap['field']]} until ccdrift reads it "
-            "again; run `ccdrift peek`.")
-
-
 def _census_shares(census: pd.DataFrame, mask: pd.Series) -> tuple[dict[str, float], int]:
     """Each key path's share of the responses the census rows under `mask` cover, and how
     many responses that is. The denominator counts each day and version once, since every
@@ -156,12 +139,3 @@ def new_fields(census: pd.DataFrame, turns: pd.DataFrame, state: dict[str, Any],
         known.update(found)
         new.append(record)
     return new
-
-
-def new_fields_message(record: dict[str, Any]) -> str:
-    paths = record["paths"]
-    count = f"{len(paths)} field{'' if len(paths) == 1 else 's'}"
-    subject = "It may be worth reading" if len(paths) == 1 else "They may be worth reading"
-    return (f"Claude Code {record['version']} logs {count} ccdrift doesn't read: {', '.join(paths)} "
-            f"(on {record['share']:.0%} of {record['responses']:,} responses). {subject}; "
-            "please open an issue.")
