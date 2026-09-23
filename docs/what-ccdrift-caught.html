@@ -287,7 +287,7 @@ footer {
 
 <main>
   <header class="masthead">
-    <p class="eyebrow">Claude Code session logs · Aug 6 – Sep 19, 2026</p>
+    <p class="eyebrow">Claude Code session logs · Aug 6 – Sep 22, 2026</p>
     <h1>What ccdrift caught</h1>
     <p class="dek">ccdrift is a small experiment that reads Claude Code’s local session logs and looks for silent changes in service: the prompt cache missing more often, requests quietly routed to Haiku, or less thinking per response. Run against one developer’s logs, it surfaced a real caching regression and showed which of those changes a single person’s history can reveal.</p>
     <dl class="verdicts">
@@ -344,7 +344,7 @@ footer {
     <figure>
       <div class="chart" id="versions">
         <div class="panel-head"><span class="panel-title">New-prompt turns that lost their conversation cache, by Claude Code version</span></div>
-        <svg role="group" aria-label="Bar chart. 0.9% of new-prompt turns lost their cache on Claude Code 2.1.231 and earlier (1 of 110), 4.3% on 2.1.233 to 2.1.258 (38 of 877), and 0.5% on 2.1.259 and later (2 of 440)."></svg>
+        <svg role="group" aria-label="Bar chart. 0.9% of new-prompt turns lost their cache on Claude Code 2.1.231 and earlier (1 of 110), 4.3% on 2.1.233 to 2.1.258 (38 of 877), and 0.5% on 2.1.259 and later (5 of 968)."></svg>
         <div class="tip" hidden></div>
       </div>
       <figcaption>A turn counts as a miss when less than half of its input was read from cache. Counts cover the logs that remain after the cleanup.</figcaption>
@@ -385,19 +385,19 @@ footer {
 
   <section aria-labelledby="s-catch">
     <h2 id="s-catch">What ccdrift can catch in these logs</h2>
-    <p class="col">To measure sensitivity, ccdrift plants an artificial drop in the logs and checks whether its detectors notice. The Aug 16 – Sep 4 incident is left out first. That leaves 16 clean days, with room to start the planted drop on any of the eight days from Sep 9 to Sep 18: each start needs 7 days of baseline before it and 3 days after.</p>
+    <p class="col">To measure sensitivity, ccdrift plants an artificial drop in the logs and checks whether its detectors notice. The Aug 16 – Sep 4 incident is left out first. That leaves 18 clean days, with room to start the planted drop on any of the nine days from Sep 9 to Sep 19: each start needs 7 days of baseline before it and 3 days after.</p>
     <div class="table-wrap">
       <table>
-        <caption>Smallest planted drop caught from all eight starting days</caption>
+        <caption>Smallest planted drop caught from all nine starting days</caption>
         <thead><tr><th scope="col">Metric</th><th scope="col" class="num">All turns</th><th scope="col" class="num">Main thread only</th></tr></thead>
         <tbody>
           <tr><th scope="row">Prompt cache ratio</th><td class="num">5%</td><td class="num dim">same data</td></tr>
-          <tr><th scope="row">Haiku share</th><td class="num">5%</td><td class="num">5%</td></tr>
+          <tr><th scope="row">Haiku share</th><td class="num">none, up to 70%</td><td class="num">5%</td></tr>
           <tr><th scope="row">Reasoning effort</th><td class="num">none, up to 70%</td><td class="num">none, up to 70%</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="aside col">5% is the smallest size tested, so the real floors for the cache ratio and Haiku share may be lower. The cache metric already counts main-thread turns only. Sixteen clean days is still a thin base, and more history will firm these results up.</p>
+    <p class="aside col">5% is the smallest size tested, so the real floors for the cache ratio and Haiku share may be lower. The cache metric already counts main-thread turns only. Across all turns, the Haiku share flags on its own from Sep 14 with nothing planted, since only subagents use Haiku here and their share moves with the work: a planted shift is caught at 5% from the three starts before that and at no size up to 70% from the six after. Through Sep 19 all seven starts then possible still caught 5%. ccdrift judges the main thread alone, where 5% is caught from all nine. Eighteen clean days is still a thin base, and more history will firm these results up.</p>
 
     <h3>Turn by turn</h3>
     <p class="col">A second detector, a CUSUM, scores new-prompt turns one at a time instead of whole days. Its threshold <span class="mono">h</span> trades false alarms against speed. Here it was asked to catch a planted 30% drop in the cache ratio.</p>
@@ -406,21 +406,21 @@ footer {
         <caption>Cache detector, turn by turn, with a planted 30% drop</caption>
         <thead><tr><th scope="col">Threshold h</th><th scope="col" class="num">False alarms, incident left out</th><th scope="col" class="num">Responses until caught</th></tr></thead>
         <tbody>
-          <tr><th scope="row" class="mono">3–4</th><td class="num">4</td><td class="num">258</td></tr>
-          <tr><th scope="row" class="mono">5–6</th><td class="num">4</td><td class="num">382</td></tr>
-          <tr><th scope="row" class="mono">8</th><td class="num">2</td><td class="num">425</td></tr>
-          <tr><th scope="row" class="mono">10–12</th><td class="num">1</td><td class="num">433</td></tr>
-          <tr><th scope="row" class="mono">15</th><td class="num">1</td><td class="num">729</td></tr>
-          <tr class="pick"><th scope="row"><span class="mono">20</span><span class="tag">first with no false alarms</span></th><td class="num">0</td><td class="num">831</td></tr>
+          <tr><th scope="row" class="mono">3–4</th><td class="num">5</td><td class="num">26</td></tr>
+          <tr><th scope="row" class="mono">5–6</th><td class="num">5</td><td class="num">87</td></tr>
+          <tr><th scope="row" class="mono">8</th><td class="num">3</td><td class="num">112</td></tr>
+          <tr><th scope="row" class="mono">10–12</th><td class="num">1</td><td class="num">163</td></tr>
+          <tr><th scope="row" class="mono">15</th><td class="num">1</td><td class="num">279</td></tr>
+          <tr class="pick"><th scope="row"><span class="mono">20</span><span class="tag">first with no false alarms</span></th><td class="num">0</td><td class="num">349</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="aside col">These logs average about 2,100 responses a day, so 831 responses is about two fifths of a typical day. Every threshold catches the planted drop; what they trade is speed against false alarms, counted with the incident's own days left out through <code>--incident</code>. On 12 clean days this table put that first clean threshold at <span class="mono">h</span> = 8. Four more days, one of them Sep 17, moved it to 20, which is the honest reading of a setting measured on a base this thin. The early warning ccdrift ships is a different test, on miss counts rather than a 30% shift, and is measured in <code>lab/early_warning.py</code>.</p>
+    <p class="aside col">These logs average about 2,300 responses a day, so 349 responses is about a seventh of a typical day. Every threshold catches the planted drop; what they trade is speed against false alarms, counted with the incident's own days left out through <code>--incident</code>. How many responses a catch takes depends on where in the logs the planted drop starts, and that point moves as the logs grow: through Sep 19 the same thresholds took 188 to 810. On 12 clean days this table put that first clean threshold at <span class="mono">h</span> = 8. Four more days, one of them Sep 17, moved it to 20, and 18 clean days keep it there, which is the honest reading of a setting measured on a base this thin. The early warning ccdrift ships is a different test, on miss counts rather than a 30% shift, and is measured in <code>lab/early_warning.py</code>.</p>
   </section>
 
   <section aria-labelledby="s-effort">
     <h2 id="s-effort">Reasoning effort needs more than one person’s logs</h2>
-    <p class="col">Claude Code stores thinking as a signature rather than readable text, so ccdrift estimates thinking from signature length, which tracks the thinking tokens implied by logged output counts (r = 0.97). Over the 16 clean days, the daily share of output spent thinking moved between 0.22 and 0.75 as the work changed. A planted 70% cut in thinking tokens moves it less than that, so no size of drop was caught, on all turns or on the main thread alone. On synthetic logs with steadier traffic, the detector needs a drop of 40–70% (median 50%). Catching effort changes points to pooling data from many users.</p>
+    <p class="col">Claude Code stores thinking as a signature rather than readable text, so ccdrift estimates thinking from signature length, which tracks the thinking tokens implied by logged output counts (r = 0.97). Over the 18 clean days, the daily share of output spent thinking moved between 0.22 and 0.75 as the work changed. A planted 70% cut in thinking tokens moves it less than that, so no size of drop was caught, on all turns or on the main thread alone. On synthetic logs with steadier traffic, the detector needs a drop of 40–70% (median 50%). Catching effort changes points to pooling data from many users.</p>
   </section>
 
   <section aria-labelledby="s-limits">
@@ -429,7 +429,7 @@ footer {
       <li><strong>Some history is gone.</strong> Claude Code deletes transcripts after 30 days by default. During the analysis it removed part of Aug 15–16, which was enough to hide the incident from the detector’s first rule. Retention on this machine is now 365 days.</li>
       <li><strong>The flag rule changed after this incident.</strong> Counting 3 of any 4 days instead of 3 in a row catches it again, and the smallest drops caught in these logs stayed the same. On 5 synthetic 40-day logs it added no false flags on the cache ratio, effort or main-thread Haiku, but Haiku across all turns, which subagent bursts make noisy, was falsely flagged on 3 logs instead of 1.</li>
       <li><strong>One developer, one workload.</strong> Every number here describes these logs, not Claude Code users in general.</li>
-      <li><strong>Sixteen clean days.</strong> The detection results rest on eight starting days.</li>
+      <li><strong>Eighteen clean days.</strong> The detection results rest on nine starting days.</li>
     </ul>
   </section>
 
@@ -449,7 +449,7 @@ footer {
     </dl>
   </section>
 </main>
-<footer>Prepared Sep 21, 2026 from local transcripts. Only aggregate counts appear here: no prompts, code, file names or project names.</footer>
+<footer>Prepared Sep 23, 2026 from local transcripts. Only aggregate counts appear here: no prompts, code, file names or project names.</footer>
 
 <script>
 (() => {
@@ -486,12 +486,14 @@ footer {
     { d: "2026-09-16", r: 0.9904, n: 58, z: -0.50 },
     { d: "2026-09-17", r: 0.9436, n: 37, z: -4.57 },
     { d: "2026-09-18", r: 0.9992, n: 90, z: 0.30 },
-    { d: "2026-09-19", r: 0.9991, n: 34, z: 0.14 }
+    { d: "2026-09-19", r: 0.9991, n: 34, z: 0.14 },
+    { d: "2026-09-21", r: 0.9962, n: 131, z: -0.25 },
+    { d: "2026-09-22", r: 0.9913, n: 149, z: -1.23 }
   ];
   const VERS = [
     { label: "2.1.231 and earlier", misses: 1, turns: 110 },
     { label: "2.1.233 – 2.1.258", misses: 38, turns: 877, affected: true },
-    { label: "2.1.259 and later", misses: 4, turns: 688 }
+    { label: "2.1.259 and later", misses: 5, turns: 968 }
   ];
 
   const NS = "http://www.w3.org/2000/svg";
@@ -536,7 +538,7 @@ footer {
   const svgR = tl.querySelector("svg.ratio");
   const svgZ = tl.querySelector("svg.zscore");
   const tip = tl.querySelector(".tip");
-  const T0 = utc("2026-08-05"), T1 = utc("2026-09-16");
+  const T0 = utc("2026-08-05"), T1 = utc("2026-09-23");
   const B0 = utc("2026-08-16"), B1 = utc("2026-09-05");
   let geom = null;
   let active = -1;
@@ -591,8 +593,8 @@ footer {
       el("text", { class: "cutoff-label", x: fx0, y: fy - 6 }, svgZ, "flagged");
     }
     const ticks = narrow
-      ? ["2026-08-08", "2026-08-22", "2026-09-05"]
-      : ["2026-08-08", "2026-08-15", "2026-08-22", "2026-08-29", "2026-09-05", "2026-09-12"];
+      ? ["2026-08-08", "2026-08-22", "2026-09-05", "2026-09-19"]
+      : ["2026-08-08", "2026-08-15", "2026-08-22", "2026-08-29", "2026-09-05", "2026-09-12", "2026-09-19"];
     ticks.forEach(s => el("text", { class: "tick", x: X(utc(s)), y: H2 - 8, "text-anchor": "middle" }, svgZ, fmtShort.format(utc(s))));
     const cross2 = el("line", { class: "cross", x1: 0, x2: 0, y1: top2, y2: H2 - bot2, visibility: "hidden" }, svgZ);
 
