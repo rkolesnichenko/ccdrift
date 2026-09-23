@@ -8,8 +8,8 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from ccdrift.failures import digest_part
-from ccdrift.texts import version_key
+from ccdrift.failures import week_failures
+from ccdrift.texts import digest_text, version_key
 
 DIGEST_HOUR = 9
 
@@ -37,53 +37,40 @@ def digest_due(state: dict[str, Any], now: datetime) -> Optional[date]:
     return monday - timedelta(days=7)
 
 
-def _count(n: int, noun: str) -> str:
-    return f"no {noun}s" if n == 0 else f"{n} {noun}{'' if n == 1 else 's'}"
-
-
-def _loop_part(loops: Optional[pd.DataFrame], days: list[str]) -> str:
-    """"tool-loop misses 2 of 1,880, subagent 36 of 13,400" over `days` of `loops`
-    (loops.loop_counts by day)."""
-    week = loops[loops.index.isin(days)].sum() if loops is not None and not loops.empty else {}
-    parts = []
-    for prefix, found, missing in (("loop", "tool-loop misses", "no tool-loop turns"),
-                                   ("subagent_loop", "subagent", "no subagent loop turns")):
-        turns, misses = int(week.get(f"{prefix}_turns", 0)), int(week.get(f"{prefix}_misses", 0))
-        parts.append(f"{found} {misses:,} of {turns:,}" if turns else missing)
-    return ", ".join(parts)
+def week_summary(turns: pd.DataFrame, state: dict[str, Any], week_start: date,
+                 loops: Optional[pd.DataFrame] = None, failures: Optional[pd.DataFrame] = None) -> dict[str, Any]:
+    """The numbers the weekly summary states (texts.digest_text words them): the judged
+    turns of the week from `week_start`, their versions, cache ratio, misses and Haiku
+    share, its tool-loop turns and misses from `loops` (loops.loop_counts by day), its
+    failed requests and responses cut short from `failures` (failures.failure_counts),
+    the open incidents, the setting changes and new fields reported that week, and the
+    days the check ran."""
+    days = [(week_start + timedelta(days=i)).isoformat() for i in range(7)]
+    week = turns[turns["day"].astype(str).isin(days)] if not turns.empty else turns
+    summary: dict[str, Any] = {"week_start": days[0], "responses": len(week), "versions": [], "prompts": None,
+                               "haiku": 0.0, "loops": {}, "failures": None}
+    if not week.empty:
+        if "version" in week:
+            summary["versions"] = sorted(week["version"].dropna().astype(str).unique(), key=version_key)
+        prompts = week[week["prompt_within_ttl"].astype(bool)]
+        if not prompts.empty:
+            summary["prompts"] = (float(prompts["cache_read_ratio"].mean()),
+                                  float(prompts["is_miss"].astype(bool).mean()))
+        summary["haiku"] = float(week["is_haiku"].mean())
+        counted = loops[loops.index.isin(days)].sum() if loops is not None and not loops.empty else {}
+        summary["loops"] = {prefix: (int(counted.get(f"{prefix}_turns", 0)), int(counted.get(f"{prefix}_misses", 0)))
+                            for prefix in ("loop", "subagent_loop")}
+        if failures is not None:
+            summary["failures"] = week_failures(failures, days)
+    summary["open_incidents"] = sum(1 for i in state["incidents"] if i["status"] == "open")
+    summary["setting_changes"] = sum(1 for c in state["settings"] if c["reported_on"] in days)
+    summary["new_fields"] = sum(len(record["paths"]) for record in state.get("new_fields", [])
+                                if record["reported_on"] in days)
+    summary["ran"] = len(set(state.get("runs", [])) & set(days))
+    return summary
 
 
 def weekly_digest(turns: pd.DataFrame, state: dict[str, Any], week_start: date,
                   loops: Optional[pd.DataFrame] = None, failures: Optional[pd.DataFrame] = None) -> str:
-    """One line on the judged turns of the week from `week_start`, its tool-loop misses
-    from `loops` (loops.loop_counts by day), its failed requests from `failures`
-    (failures.failure_counts), the open incidents, the setting changes reported that
-    week, and the days the check ran."""
-    days = [(week_start + timedelta(days=i)).isoformat() for i in range(7)]
-    week = turns[turns["day"].astype(str).isin(days)] if not turns.empty else turns
-    parts = []
-    if week.empty:
-        parts.append("no responses")
-    else:
-        versions = (sorted(week["version"].dropna().astype(str).unique(), key=version_key)
-                    if "version" in week else [])
-        span = "" if not versions else f" on {versions[0]}" + (f"–{versions[-1]}" if len(versions) > 1 else "")
-        parts.append(f"{len(week):,} responses{span}")
-        prompts = week[week["prompt_within_ttl"].astype(bool)]
-        if prompts.empty:
-            parts.append("no new-prompt turns")
-        else:
-            parts.append(f"cache ratio {prompts['cache_read_ratio'].mean():.3f} "
-                         f"({prompts['is_miss'].astype(bool).mean():.1%} misses)")
-        haiku = float(week["is_haiku"].mean())
-        parts.append("no Haiku" if haiku == 0 else f"Haiku {haiku:.1%} of responses")
-        parts.append(_loop_part(loops, days))
-        if failures is not None:
-            parts.append(digest_part(failures, days))
-    parts.append(_count(sum(1 for i in state["incidents"] if i["status"] == "open"), "open incident"))
-    parts.append(_count(sum(1 for c in state["settings"] if c["reported_on"] in days), "setting change"))
-    parts.append(_count(sum(len(record["paths"]) for record in state.get("new_fields", [])
-                            if record["reported_on"] in days), "new field"))
-    ran = len(set(state.get("runs", [])) & set(days))
-    parts.append(f"check ran on {ran} of 7 days")
-    return f"Week of {days[0][5:]}: " + "; ".join(parts) + "."
+    """The weekly summary of the week from `week_start` as one line (see week_summary)."""
+    return digest_text(week_summary(turns, state, week_start, loops, failures))

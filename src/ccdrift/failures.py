@@ -269,13 +269,10 @@ def failure_lines(summary: Optional[dict[str, Any]]) -> list[str]:
     return ["", "Failures over these days: " + ", ".join(parts)]
 
 
-def digest_part(counts: pd.DataFrame, days: Sequence[str]) -> str:
-    """The weekly summary's failures part: "no failed requests", or what there was."""
+def week_failures(counts: pd.DataFrame, days: Sequence[str]) -> tuple[int, int]:
+    """The failed requests that count and the responses cut short on `days`, for the
+    weekly summary (texts.week_failures_text words them)."""
     summary = failure_summary(counts, days)
-    counted = sum(count for kind, count in (summary or {"kinds": {}})["kinds"].items() if kind in COUNTED)
-    if summary is None or (not counted and not summary["cut"]):
-        return "no failed requests"
-    parts = [f"{counted} failed request{'' if counted == 1 else 's'}"] if counted else []
-    if summary["cut"]:
-        parts.append(f"{summary['cut']} response{'' if summary['cut'] == 1 else 's'} cut short")
-    return ", ".join(parts)
+    if summary is None:
+        return 0, 0
+    return sum(count for kind, count in summary["kinds"].items() if kind in COUNTED), summary["cut"]

@@ -7,6 +7,7 @@ import pytest
 
 from ccdrift.digest import digest_due, weekly_digest
 from ccdrift.state import new_state
+from ccdrift.texts import digest_text
 
 EEST = timezone(timedelta(hours=3))
 MONDAY = datetime(2026, 9, 21, 9, 30, tzinfo=EEST)  # ISO week 2026-W39
@@ -81,3 +82,14 @@ def test_the_weekly_summary_counts_the_new_fields_reported_that_week():
 
 def test_the_weekly_summary_says_no_new_fields_when_none_arrived():
     assert "no new fields" in weekly_digest(pd.DataFrame(), new_state(), date(2026, 9, 7))
+
+
+def test_the_digest_line_is_worded_from_plain_numbers_the_status_path_can_import():
+    # texts imports nothing heavy; the counting stays with pandas in digest.week_summary.
+    summary = {"week_start": "2026-09-14", "responses": 70, "versions": ["2.1.261", "2.1.270"],
+               "prompts": (0.976, 1 / 70), "haiku": 0.0, "loops": {"loop": (1880, 2), "subagent_loop": (0, 0)},
+               "failures": (3, 1), "open_incidents": 1, "setting_changes": 0, "new_fields": 2, "ran": 6}
+    assert digest_text(summary) == (
+        "Week of 09-14: 70 responses on 2.1.261–2.1.270; cache ratio 0.976 (1.4% misses); no Haiku; "
+        "tool-loop misses 2 of 1,880, no subagent loop turns; 3 failed requests, 1 response cut short; "
+        "1 open incident; no setting changes; 2 new fields; check ran on 6 of 7 days.")

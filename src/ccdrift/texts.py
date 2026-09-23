@@ -510,3 +510,57 @@ def change_message(change: dict[str, Any], versions: list[str]) -> str:
         return f"Cache writes for {change['model']} moved from the {old} to the {new} cache from {change['since']}{on}."
     return (f"Effort for {change['model']} changed from {change['from']} to {change['to']} from "
             f"{change['since']}{on}. If you didn't change it, Claude Code's default did.")
+
+
+# ---------------------------------------------------------------------------
+# Weekly summary
+# ---------------------------------------------------------------------------
+
+def _count_text(n: int, noun: str) -> str:
+    return f"no {noun}s" if n == 0 else f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+# Each tool-loop stream in the summary: what its misses are called, and what it says with no turns.
+DIGEST_LOOPS = (("loop", "tool-loop misses", "no tool-loop turns"),
+                ("subagent_loop", "subagent", "no subagent loop turns"))
+
+
+def week_failures_text(counted: int, cut: int) -> str:
+    """The weekly summary's failures part: "no failed requests", or what there was."""
+    if not counted and not cut:
+        return "no failed requests"
+    parts = [f"{counted} failed request{'' if counted == 1 else 's'}"] if counted else []
+    if cut:
+        parts.append(f"{cut} response{'' if cut == 1 else 's'} cut short")
+    return ", ".join(parts)
+
+
+def digest_text(summary: dict[str, Any]) -> str:
+    """"Week of 09-14: 70 responses on 2.1.261–2.1.270; cache ratio 0.976 (1.4% misses);
+    ..." from the numbers digest.week_summary counts."""
+    parts = []
+    if not summary["responses"]:
+        parts.append("no responses")
+    else:
+        versions = summary["versions"]
+        span = "" if not versions else f" on {versions[0]}" + (f"–{versions[-1]}" if len(versions) > 1 else "")
+        parts.append(f"{summary['responses']:,} responses{span}")
+        if summary["prompts"] is None:
+            parts.append("no new-prompt turns")
+        else:
+            ratio, missed = summary["prompts"]
+            parts.append(f"cache ratio {ratio:.3f} ({missed:.1%} misses)")
+        haiku = summary["haiku"]
+        parts.append("no Haiku" if haiku == 0 else f"Haiku {haiku:.1%} of responses")
+        loops = []
+        for prefix, found, missing in DIGEST_LOOPS:
+            turns, misses = summary["loops"].get(prefix, (0, 0))
+            loops.append(f"{found} {misses:,} of {turns:,}" if turns else missing)
+        parts.append(", ".join(loops))
+        if summary["failures"] is not None:
+            parts.append(week_failures_text(*summary["failures"]))
+    parts.append(_count_text(summary["open_incidents"], "open incident"))
+    parts.append(_count_text(summary["setting_changes"], "setting change"))
+    parts.append(_count_text(summary["new_fields"], "new field"))
+    parts.append(f"check ran on {summary['ran']} of 7 days")
+    return f"Week of {summary['week_start'][5:]}: " + "; ".join(parts) + "."
