@@ -19,11 +19,35 @@ from typing import Callable, Mapping, Optional
 from ccdrift.logs import CONTROL_CHARS, default_source
 from ccdrift.notify import notify as send_notification
 from ccdrift.state import LOG_FILE, ccdrift_home, make_private
+from ccdrift.texts import SCHEDULE_LINES
 
 LAUNCHD_LABEL = "io.github.rkolesnichenko.ccdrift"
 SYSTEMD_UNIT = "ccdrift-check"
-CRON_MARKER = "# ccdrift check"
 BOOTSTRAP_ATTEMPTS = 5
+
+# The schedulers' own formats, not ccdrift's wording: the marker that finds ccdrift's
+# crontab line again, what `crontab -l` prints without a crontab, the fields of `launchctl
+# print` shown as they are, and the systemd unit files.
+CRON_MARKER = "# ccdrift check"
+CRONTAB_MISSING = "no crontab"
+LAUNCHD_FIELDS = ("runs", "last exit code")
+SERVICE_UNIT = ("[Unit]\n"
+                "Description=ccdrift check\n"
+                "\n"
+                "[Service]\n"
+                "Type=oneshot\n"
+                "ExecStart={command}\n"
+                "StandardOutput=append:{log}\n"
+                "StandardError=append:{log}\n")
+TIMER_UNIT = ("[Unit]\n"
+              "Description=Run the ccdrift check\n"
+              "\n"
+              "[Timer]\n"
+              "OnCalendar={calendar}\n"
+              "Persistent=true\n"
+              "\n"
+              "[Install]\n"
+              "WantedBy=timers.target\n")
 
 Run = Callable[..., subprocess.CompletedProcess]
 
@@ -42,7 +66,8 @@ def run_command(argv: list[str], input: Optional[str] = None) -> subprocess.Comp
 
 def _failure(argv: list[str], result: subprocess.CompletedProcess) -> str:
     output = (result.stderr or result.stdout or "").strip()
-    return f"`{' '.join(argv)}` exited with {result.returncode}" + (f": {output}" if output else "")
+    return (SCHEDULE_LINES["exited"].format(command=" ".join(argv), code=result.returncode)
+            + (SCHEDULE_LINES["output"].format(output=output) if output else ""))
 
 
 def _checked(run: Run, argv: list[str], input: Optional[str] = None) -> subprocess.CompletedProcess:
@@ -86,14 +111,16 @@ class Job:
         return self.hour is None
 
     def when(self) -> str:
-        return "every hour" if self.hourly else f"daily at {self.hour:02d}:{self.minute:02d}"
+        if self.hourly:
+            return SCHEDULE_LINES["hourly"]
+        return SCHEDULE_LINES["daily"].format(time=SCHEDULE_LINES["clock"].format(hour=self.hour, minute=self.minute))
 
 
 def parse_at(text: str) -> tuple[int, int]:
     """'09:00' -> (9, 0). Raises ValueError for anything but a 24-hour HH:MM time."""
     match = re.fullmatch(r"(\d{1,2}):(\d{2})", text)
     if not match or int(match.group(1)) > 23 or int(match.group(2)) > 59:
-        raise ValueError(f"--at takes a 24-hour time like 09:00, not {text!r}")
+        raise ValueError(SCHEDULE_LINES["bad_at"].format(text=text))
     return int(match.group(1)), int(match.group(2))
 
 
@@ -118,7 +145,7 @@ def last_log_line(log: Path) -> str:
         lines = [line for line in log.read_text(errors="replace").splitlines() if line.strip()]
     except OSError:
         lines = []
-    return f"last log line: {lines[-1]}" if lines else f"log: nothing written yet ({log})"
+    return SCHEDULE_LINES["last_log"].format(line=lines[-1]) if lines else SCHEDULE_LINES["no_log"].format(log=log)
 
 
 def launchd_plist(job: Job) -> str:
@@ -169,9 +196,8 @@ class Launchd:
             try:
                 self._bootstrap()
             except ScheduleError:
-                raise ScheduleError(f"{exc}. The job installed before is back in place but didn't load; "
-                                    "`ccdrift schedule status` shows it.") from exc
-            raise ScheduleError(f"{exc}. The job installed before is back in place.") from exc
+                raise ScheduleError(SCHEDULE_LINES["restored_unloaded"].format(error=exc)) from exc
+            raise ScheduleError(SCHEDULE_LINES["restored"].format(error=exc)) from exc
 
     def _bootstrap(self) -> None:
         """Load the agent. bootout can return while the agent it unloads, or a check
@@ -195,28 +221,27 @@ class Launchd:
 
     def status(self) -> list[str]:
         if not self.plist.exists():
-            return ["not installed"]
+            return [SCHEDULE_LINES["not_installed"]]
         # The plist is ccdrift's own, but a half-written or hand-edited one must read as a
         # status rather than as a traceback: `status` is what someone runs to find out why
         # the job is misbehaving.
         try:
             job = plistlib.loads(self.plist.read_bytes())
         except (OSError, ValueError, plistlib.InvalidFileException) as exc:
-            raise ScheduleError(f"{self.plist} isn't a readable plist: {exc}. "
-                                "Run `ccdrift schedule install` again.") from exc
+            raise ScheduleError(SCHEDULE_LINES["bad_plist"].format(plist=self.plist, error=exc)) from exc
         when = job.get("StartCalendarInterval") or {}
-        schedule = (f"daily at {when.get('Hour', 0):02d}:{when.get('Minute', 0):02d}" if when
-                    else "every hour")
-        lines = [f"installed: launchd agent {LAUNCHD_LABEL}, {schedule}"]
+        clock = SCHEDULE_LINES["clock"].format(hour=when.get("Hour", 0), minute=when.get("Minute", 0))
+        schedule = SCHEDULE_LINES["daily"].format(time=clock) if when else SCHEDULE_LINES["hourly"]
+        lines = [SCHEDULE_LINES["launchd_installed"].format(label=LAUNCHD_LABEL, schedule=schedule)]
         printed = self.run(["launchctl", "print", self.service])
         if printed.returncode != 0:
-            lines.append("not loaded; run `ccdrift schedule install` again")
-        for key in ("runs", "last exit code"):
+            lines.append(SCHEDULE_LINES["not_loaded"])
+        for key in LAUNCHD_FIELDS:
             found = re.search(rf"^\s*{key} = (.+)$", printed.stdout or "", re.MULTILINE)
             if found:
-                lines.append(f"{key}: {found.group(1).strip()}")
+                lines.append(SCHEDULE_LINES["field"].format(key=key, value=found.group(1).strip()))
         log = job.get("StandardOutPath")
-        lines.append(last_log_line(Path(log)) if log else "log: the agent names no log file")
+        lines.append(last_log_line(Path(log)) if log else SCHEDULE_LINES["no_log_file"])
         return lines
 
 
@@ -229,28 +254,9 @@ def systemd_units(job: Job) -> dict[str, str]:
     """The service and timer files for a systemd user timer that runs `job` every hour or daily."""
     command = " ".join(_systemd_quote(arg) for arg in job.argv())
     log = str(job.log).replace("%", "%%")
-    service = (
-        "[Unit]\n"
-        "Description=ccdrift check\n"
-        "\n"
-        "[Service]\n"
-        "Type=oneshot\n"
-        f"ExecStart={command}\n"
-        f"StandardOutput=append:{log}\n"
-        f"StandardError=append:{log}\n"
-    )
-    timer = (
-        "[Unit]\n"
-        "Description=Run the ccdrift check\n"
-        "\n"
-        "[Timer]\n"
-        f"OnCalendar={'hourly' if job.hourly else f'*-*-* {job.hour:02d}:{job.minute:02d}:00'}\n"
-        "Persistent=true\n"
-        "\n"
-        "[Install]\n"
-        "WantedBy=timers.target\n"
-    )
-    return {f"{SYSTEMD_UNIT}.service": service, f"{SYSTEMD_UNIT}.timer": timer}
+    calendar = "hourly" if job.hourly else f"*-*-* {job.hour:02d}:{job.minute:02d}:00"
+    return {f"{SYSTEMD_UNIT}.service": SERVICE_UNIT.format(command=command, log=log),
+            f"{SYSTEMD_UNIT}.timer": TIMER_UNIT.format(calendar=calendar)}
 
 
 class Systemd:
@@ -267,8 +273,7 @@ class Systemd:
         self.service = self.unit_dir / f"{SYSTEMD_UNIT}.service"
 
     def install_notes(self, job: Job) -> list[str]:
-        return ["systemd user timers run only while you're logged in, unless lingering is on "
-                "(loginctl enable-linger)."]
+        return [SCHEDULE_LINES["systemd_note"]]
 
     def install(self, job: Job) -> None:
         """Write both units, enable the timer and start a first run. On failure, put
@@ -293,9 +298,8 @@ class Systemd:
                     path.unlink(missing_ok=True)
             self.run(["systemctl", "--user", "daemon-reload"])
             if self.run(["systemctl", "--user", "enable", "--now", self.timer.name]).returncode != 0:
-                raise ScheduleError(f"{exc}. The job installed before is back in place but couldn't be enabled; "
-                                    "`ccdrift schedule status` shows it.") from exc
-            raise ScheduleError(f"{exc}. The job installed before is back in place.") from exc
+                raise ScheduleError(SCHEDULE_LINES["restored_disabled"].format(error=exc)) from exc
+            raise ScheduleError(SCHEDULE_LINES["restored"].format(error=exc)) from exc
 
     def _delete(self) -> None:
         self.run(["systemctl", "--user", "disable", "--now", self.timer.name])
@@ -311,21 +315,24 @@ class Systemd:
 
     def status(self) -> list[str]:
         if not self.timer.exists():
-            return ["not installed"]
+            return [SCHEDULE_LINES["not_installed"]]
         text = self.timer.read_text()
         daily = re.search(r"^OnCalendar=\*-\*-\* (\d\d:\d\d):00$", text, re.MULTILINE)
         if re.search(r"^OnCalendar=hourly$", text, re.MULTILINE):
-            schedule = "every hour"
+            schedule = SCHEDULE_LINES["hourly"]
         else:
-            schedule = f"daily at {daily.group(1) if daily else 'an unreadable time'}"
-        lines = [f"installed: systemd timer {self.timer.name}, {schedule}"]
+            clock = daily.group(1) if daily else SCHEDULE_LINES["unreadable_time"]
+            schedule = SCHEDULE_LINES["daily"].format(time=clock)
+        lines = [SCHEDULE_LINES["systemd_installed"].format(timer=self.timer.name, schedule=schedule)]
         enabled = self.run(["systemctl", "--user", "is-enabled", self.timer.name])
-        lines.append(f"enabled: {(enabled.stdout or '').strip() or 'unknown'}")
+        state = (enabled.stdout or "").strip() or SCHEDULE_LINES["unknown"]
+        lines.append(SCHEDULE_LINES["enabled"].format(state=state))
         shown = self.run(["systemctl", "--user", "show", self.service.name,
                           "-p", "ExecMainStartTimestamp", "-p", "ExecMainStatus"])
         props = dict(line.split("=", 1) for line in (shown.stdout or "").splitlines() if "=" in line)
-        lines.append(f"last run: {props.get('ExecMainStartTimestamp') or 'never'}")
-        lines.append(f"last exit code: {props.get('ExecMainStatus', 'unknown')}")
+        started = props.get("ExecMainStartTimestamp") or SCHEDULE_LINES["never"]
+        lines.append(SCHEDULE_LINES["last_run"].format(at=started))
+        lines.append(SCHEDULE_LINES["last_exit"].format(code=props.get("ExecMainStatus", SCHEDULE_LINES["unknown"])))
         log = re.search(r"^StandardOutput=append:(.+)$", self.service.read_text(), re.MULTILINE)
         if log:
             lines.append(last_log_line(Path(log.group(1).replace("%%", "%"))))
@@ -346,14 +353,14 @@ def _cron_schedule(line: str) -> str:
     ccdrift's job: it is described as unreadable rather than crashing the status."""
     fields = line.split()
     if len(fields) < 2:
-        return "an unreadable schedule"
+        return SCHEDULE_LINES["unreadable_schedule"]
     minute, hour = fields[0], fields[1]
     if hour == "*":
-        return "every hour" if minute == "0" else f"every hour at minute {minute}"
+        return SCHEDULE_LINES["hourly"] if minute == "0" else SCHEDULE_LINES["hourly_at"].format(minute=minute)
     try:
-        return f"daily at {int(hour):02d}:{int(minute):02d}"
+        return SCHEDULE_LINES["daily"].format(time=SCHEDULE_LINES["clock"].format(hour=int(hour), minute=int(minute)))
     except ValueError:
-        return f"on the schedule `{' '.join(fields[:5])}`"
+        return SCHEDULE_LINES["cron_schedule"].format(fields=" ".join(fields[:5]))
 
 
 def _spawn(argv: list[str], log: Path) -> None:
@@ -372,10 +379,9 @@ class Cron:
         self.spawn = spawn
 
     def install_notes(self, job: Job) -> list[str]:
-        notes = ["Cron doesn't catch up on runs missed while the machine was off."]
+        notes = [SCHEDULE_LINES["cron_catch_up"]]
         if job.notify:
-            notes.append("Jobs started by cron usually can't show notifications, so alerts will mostly "
-                         "reach only the log.")
+            notes.append(SCHEDULE_LINES["cron_notify"])
         return notes
 
     @staticmethod
@@ -387,7 +393,7 @@ class Cron:
         listed = self.run(argv)
         if listed.returncode == 0:
             return (listed.stdout or "").splitlines()
-        if "no crontab" in (listed.stderr or "").lower():
+        if CRONTAB_MISSING in (listed.stderr or "").lower():
             return []
         raise ScheduleError(_failure(argv, listed))
 
@@ -404,7 +410,7 @@ class Cron:
             self.spawn(job.argv(), job.log)
         except OSError as exc:
             self._write(lines)
-            raise ScheduleError(f"couldn't start a first run: {exc}") from exc
+            raise ScheduleError(SCHEDULE_LINES["first_run_failed"].format(error=exc)) from exc
 
     def remove(self) -> bool:
         lines = self._lines()
@@ -417,9 +423,9 @@ class Cron:
     def status(self) -> list[str]:
         ours = [line for line in self._lines() if self._ours(line)]
         if not ours:
-            return ["not installed"]
-        lines = [f"installed: crontab line, {_cron_schedule(ours[0])}",
-                 "cron keeps no run history; the log shows each run"]
+            return [SCHEDULE_LINES["not_installed"]]
+        lines = [SCHEDULE_LINES["cron_installed"].format(schedule=_cron_schedule(ours[0])),
+                 SCHEDULE_LINES["cron_history"]]
         # The line ends `>> LOG 2>&1 # ccdrift check`; an --exec command can hold `>> ` too.
         try:
             words = shlex.split(ours[0].replace("\\%", "%"))
@@ -438,13 +444,13 @@ def install(job: Job, backend, send: Callable[[str, str], None] = send_notificat
     as a line of its own."""
     for value in (*job.argv(), str(job.log)):
         if CONTROL_CHARS.search(value):
-            raise ScheduleError(f"a line break or other control character can't go into a scheduled job: {value!r}")
+            raise ScheduleError(SCHEDULE_LINES["control_char"].format(value=value))
     job.log.parent.mkdir(parents=True, exist_ok=True)
     # launchd, systemd and cron append to a log that exists and keep its permissions.
     make_private(job.log)
     backend.install(job)
     if job.notify:
-        send("ccdrift", f"The check will run {job.when()}. Alerts will look like this.")
+        send(SCHEDULE_LINES["test_title"], SCHEDULE_LINES["test_message"].format(when=job.when()))
 
 
 def choose_backend(platform: str = sys.platform, run: Run = run_command,

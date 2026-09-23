@@ -742,3 +742,49 @@ def failure_lines(summary: Optional[dict[str, Any]]) -> list[str]:
     if summary["cut"]:
         parts.append(f"{summary['cut']} response{'' if summary['cut'] == 1 else 's'} cut short")
     return ["", "Failures over these days: " + ", ".join(parts)]
+
+
+# ---------------------------------------------------------------------------
+# ccdrift schedule
+# ---------------------------------------------------------------------------
+
+SCHEDULE_LINES = {"exited": "`{command}` exited with {code}",
+                  "output": ": {output}",
+                  "hourly": "every hour",
+                  "daily": "daily at {time}",
+                  "clock": "{hour:02d}:{minute:02d}",
+                  "unreadable_time": "an unreadable time",
+                  "bad_at": "--at takes a 24-hour time like 09:00, not {text!r}",
+                  "last_log": "last log line: {line}",
+                  "no_log": "log: nothing written yet ({log})",
+                  "restored": "{error}. The job installed before is back in place.",
+                  "restored_unloaded": "{error}. The job installed before is back in place but didn't load; "
+                                       "`ccdrift schedule status` shows it.",
+                  "restored_disabled": "{error}. The job installed before is back in place but couldn't be "
+                                       "enabled; `ccdrift schedule status` shows it.",
+                  "not_installed": "not installed",
+                  "bad_plist": "{plist} isn't a readable plist: {error}. Run `ccdrift schedule install` again.",
+                  "launchd_installed": "installed: launchd agent {label}, {schedule}",
+                  "not_loaded": "not loaded; run `ccdrift schedule install` again",
+                  "field": "{key}: {value}",
+                  "no_log_file": "log: the agent names no log file",
+                  "systemd_note": "systemd user timers run only while you're logged in, unless lingering is on "
+                                  "(loginctl enable-linger).",
+                  "systemd_installed": "installed: systemd timer {timer}, {schedule}",
+                  "enabled": "enabled: {state}",
+                  "unknown": "unknown",
+                  "last_run": "last run: {at}",
+                  "never": "never",
+                  "last_exit": "last exit code: {code}",
+                  "unreadable_schedule": "an unreadable schedule",
+                  "hourly_at": "every hour at minute {minute}",
+                  "cron_schedule": "on the schedule `{fields}`",
+                  "cron_catch_up": "Cron doesn't catch up on runs missed while the machine was off.",
+                  "cron_notify": "Jobs started by cron usually can't show notifications, so alerts will mostly "
+                                 "reach only the log.",
+                  "cron_installed": "installed: crontab line, {schedule}",
+                  "cron_history": "cron keeps no run history; the log shows each run",
+                  "first_run_failed": "couldn't start a first run: {error}",
+                  "control_char": "a line break or other control character can't go into a scheduled job: {value!r}",
+                  "test_title": "ccdrift",
+                  "test_message": "The check will run {when}. Alerts will look like this."}
