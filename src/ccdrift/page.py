@@ -13,7 +13,8 @@ from typing import Any, Mapping, Optional, Sequence
 
 import pandas as pd
 
-from ccdrift.texts import INCIDENT_METRICS, SHORT_NAMES, incident_line, misses, number, settings_lines
+from ccdrift.texts import (DAY_TABLE, INCIDENT_METRICS, PAGE_LINES, SHORT_NAMES, incident_line, misses, number,
+                           settings_lines)
 
 WIDTH = 720          # the drawing area of a chart, in SVG user units
 HEIGHT = 160         # the metric line's height
@@ -129,7 +130,7 @@ def z_strip(days: Sequence[str], zs: Sequence[Any], cutoff: float, *, above: boo
     # dividing by it.
     scale = (STRIP / 2) / reach if reach else 0.0
     parts = [f'<svg viewBox="0 0 {PAD_LEFT + WIDTH + PAD_RIGHT} {PAD_TOP * 2 + STRIP}" role="img" '
-             f'aria-label="{escape(label)} per day">']
+             f'aria-label="{escape(PAGE_LINES["strip"].format(label=label))}">']
     parts.append(f'<line class="axis" x1="{PAD_LEFT}" y1="{middle}" x2="{PAD_LEFT + WIDTH}" y2="{middle}" />')
     for i, z in enumerate(zs):
         if _missing(z):
@@ -181,9 +182,9 @@ def blocks(lines: Sequence[str]) -> list[tuple[str, list[str]]]:
             for heading, body in found]
 
 
-TABLE_COLUMNS = [("day", "day"), ("responses", "responses"), ("cache_ratio", "cache ratio"), ("cache_z", "z"),
-                 ("haiku_share", "haiku share"), ("haiku_z", "z"), ("loop", "loop misses"),
-                 ("subagent", "subagent misses"), ("flagged", "flagged")]
+# The terminal's day table's columns, under the terminal's own headings.
+TABLE_COLUMNS = list(zip(("day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", "loop", "subagent",
+                          "flagged"), (heading for heading, _ in DAY_TABLE)))
 
 
 def _cell(row: Any, key: str) -> str:
@@ -253,12 +254,6 @@ def flagged_on(rows: pd.DataFrame, metric: str) -> list[str]:
             if short in [name.strip() for name in str(row.flagged).split(",")]]
 
 
-# The page is the artefact meant to be sent on, and its reader can't ask what a mark means.
-KEY = ("A ring marks a day ccdrift flagged; a shaded column is a day inside a recorded incident for that "
-       "metric; the bars under each chart are that day’s z, with the dashed line the cutoff. Days with no "
-       "main-thread activity are left out, so the line joins the days there are.")
-
-
 def render(rows: pd.DataFrame, entries: Sequence[tuple[dict, float]], reported: dict, summary: Sequence[dict],
            extra: Sequence[str], cfg: Any, *, version: str, today: date, source: Any,
            incident_days: Optional[Mapping[str, Sequence[str]]] = None) -> str:
@@ -273,37 +268,36 @@ def render(rows: pd.DataFrame, entries: Sequence[tuple[dict, float]], reported: 
     parts = [
         "<!DOCTYPE html>", '<html lang="en"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f"<title>ccdrift report {escape(today.isoformat())}</title>", f"<style>{STYLE}</style>",
+        f"<title>{PAGE_LINES['title'].format(date=escape(today.isoformat()))}</title>", f"<style>{STYLE}</style>",
         "</head><body>",
-        f"<h1>ccdrift report, {escape(today.isoformat())}</h1>",
-        f'<p class="rule">The last {len(days)} complete UTC days with main-thread activity. A metric is '
-        f"flagged once {cfg.deviant_bins} of any {cfg.flag_window} days in a row pass the cutoff: "
-        f"z ≤ −{cache_cutoff:.1f} for the cache ratio, z ≥ +{haiku_cutoff:.1f} for the Haiku share.</p>",
+        f"<h1>{PAGE_LINES['heading'].format(date=escape(today.isoformat()))}</h1>",
+        '<p class="rule">' + PAGE_LINES["rule"].format(days=len(days), bins=cfg.deviant_bins, window=cfg.flag_window,
+                                                       cache=cache_cutoff, haiku=haiku_cutoff) + "</p>",
     ]
     if days:
         parts.append(chart(days, [row.cache_ratio for row in rows.itertuples(index=False)],
-                           title="Cache read ratio per day", low=0.0, high=1.0,
+                           title=PAGE_LINES["cache_chart"], low=0.0, high=1.0,
                            marked=flagged_on(rows, "cache_ratio"),
                            shaded=shaded.get("cache_ratio", ()), fmt=".2f"))
         parts.append(z_strip(days, [row.cache_z for row in rows.itertuples(index=False)],
-                             -cache_cutoff, above=False, label="Cache read ratio z"))
+                             -cache_cutoff, above=False, label=PAGE_LINES["cache_z"]))
         shares = [row.haiku_share for row in rows.itertuples(index=False)]
-        parts.append(chart(days, shares, title="Haiku share of main-thread responses per day", low=0.0,
+        parts.append(chart(days, shares, title=PAGE_LINES["haiku_chart"], low=0.0,
                            high=top(shares, 0.2), marked=flagged_on(rows, "haiku_fraction"),
                            shaded=shaded.get("haiku_fraction", ()), fmt=".2f"))
         parts.append(z_strip(days, [row.haiku_z for row in rows.itertuples(index=False)],
-                             haiku_cutoff, above=True, label="Haiku share z"))
-        parts.append(f'<p class="key">{escape(KEY)}</p>')
+                             haiku_cutoff, above=True, label=PAGE_LINES["haiku_z"]))
+        parts.append(f'<p class="key">{escape(PAGE_LINES["key"])}</p>')
         parts.append(table(rows))
     incidents = [incident_line(incident, cost) for incident, cost in entries]
-    parts.append(section("Incidents", incidents or ["none yet"]))
-    legacy = [f"{label} from {day}" for metric, label in INCIDENT_METRICS.items() for day in reported.get(metric, [])]
+    parts.append(section(PAGE_LINES["incidents"], incidents or [PAGE_LINES["none_yet"]]))
+    legacy = [PAGE_LINES["legacy"].format(label=label, day=day)
+              for metric, label in INCIDENT_METRICS.items() for day in reported.get(metric, [])]
     if legacy:
-        parts.append(section("Flags reported before ccdrift followed incidents", legacy))
+        parts.append(section(PAGE_LINES["legacy_head"], legacy))
     for heading, body in blocks([*settings_lines(list(summary)), *extra]):
         parts.append(section(heading, body))
-    parts.append(f"<footer>Written by ccdrift {escape(version)} on {escape(today.isoformat())} from the "
-                 f"transcripts in {escape(source)}. This page holds local paths, and nothing left this "
-                 "machine to make it.</footer>")
+    parts.append("<footer>" + PAGE_LINES["footer"].format(version=escape(version), date=escape(today.isoformat()),
+                                                          source=escape(source)) + "</footer>")
     parts.append("</body></html>")
     return "\n".join(part for part in parts if part) + "\n"

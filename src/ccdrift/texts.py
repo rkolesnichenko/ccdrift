@@ -1016,3 +1016,38 @@ REPLAY_LINES = {"recorded": "recorded",
                 "event": "{day}  {title}: {message}",
                 "none": "No incidents: the check would have sent no incident alert over these days.",
                 "found": "Incidents the replay found:"}
+
+
+# ---------------------------------------------------------------------------
+# report --html, the state file and the alert command
+# ---------------------------------------------------------------------------
+
+PAGE_LINES = {"title": "ccdrift report {date}",
+              "heading": "ccdrift report, {date}",
+              "rule": "The last {days} complete UTC days with main-thread activity. A metric is flagged once {bins} of "
+                      "any {window} days in a row pass the cutoff: z ≤ −{cache:.1f} for the cache ratio, "
+                      "z ≥ +{haiku:.1f} for the Haiku share.",
+              "cache_chart": "Cache read ratio per day",
+              "cache_z": "Cache read ratio z",
+              "haiku_chart": "Haiku share of main-thread responses per day",
+              "haiku_z": "Haiku share z",
+              "strip": "{label} per day",
+              # The page is the artefact meant to be sent on, and its reader can't ask what a mark means.
+              "key": "A ring marks a day ccdrift flagged; a shaded column is a day inside a recorded incident for "
+                     "that metric; the bars under each chart are that day’s z, with the dashed line the cutoff. "
+                     "Days with no main-thread activity are left out, so the line joins the days there are.",
+              "incidents": "Incidents",
+              "none_yet": "none yet",
+              "legacy_head": "Flags reported before ccdrift followed incidents",
+              "legacy": "{label} from {day}",
+              "footer": "Written by ccdrift {version} on {date} from the transcripts in {source}. This page holds "
+                        "local paths, and nothing left this machine to make it."}
+
+STATE_LINES = {"not_object": "{path} doesn't hold a JSON object",
+               "unknown_version": "{path} has an unknown state version: {version!r}",
+               "newer": "{path} was written by a newer ccdrift (state version {version}); upgrade ccdrift",
+               "waiting": "Waiting for another ccdrift command to finish with {path}..."}
+
+NOTIFY_LINES = {"timed_out": "timed out after {seconds} s",
+                "exit": "exit {code}",
+                "stderr": ": {line}"}

@@ -5,8 +5,8 @@ from datetime import date
 import pandas as pd
 
 from ccdrift.detector import DetectorConfig
-from ccdrift.page import KEY, blocks, chart, escape, points, render, section, table, top, z_strip
-from ccdrift.texts import settings_lines
+from ccdrift.page import blocks, chart, escape, points, render, section, table, top, z_strip
+from ccdrift.texts import PAGE_LINES, settings_lines
 
 DAYS = ["2026-09-01", "2026-09-02", "2026-09-03"]
 
@@ -130,7 +130,7 @@ def test_the_page_holds_the_rule_both_charts_the_table_and_the_footer_and_no_scr
     assert ("A metric is flagged once 3 of any 4 days in a row pass the cutoff: z ≤ −3.0 for the cache ratio, "
             "z ≥ +3.5 for the Haiku share.") in page
     # The page is sent on, so it says what its own marks mean.
-    assert f'<p class="key">{KEY}</p>' in page
+    assert f'<p class="key">{PAGE_LINES["key"]}</p>' in page
     assert ("A ring marks a day ccdrift flagged; a shaded column is a day inside a recorded incident for "
             "that metric; the bars under each chart are that day’s z, with the dashed line the cutoff. "
             "Days with no main-thread activity are left out, so the line joins the days there are.") in page
