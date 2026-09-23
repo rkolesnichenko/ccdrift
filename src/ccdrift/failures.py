@@ -13,7 +13,7 @@ import pandas as pd
 from ccdrift.logs import outside_sdk
 # BEFORE_DAYS, the window a day is judged against, lives in texts with before_text: the
 # status line names it too, and nothing that only prints should have to import pandas.
-from ccdrift.texts import BEFORE_DAYS, before_text, kinds_text, run_text, worse_text
+from ccdrift.texts import BEFORE_DAYS, kinds_text
 
 # Every kind parse_file records, and those a rule counts: a banner blaming the user's
 # own Mac for going to sleep is no drift, so it is reported but never alerts.
@@ -244,30 +244,6 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
         state["cut_short"].append(episode)
         new.append(episode)
     return new
-
-
-def _on(versions: Sequence[str]) -> str:
-    return f", on Claude Code {', '.join(versions)}" if versions else ""
-
-
-def requests_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
-    named = kinds_text(episode["kinds"])
-    before = before_text(episode["before"])
-    return (f"{episode['requests']} requests failed on {episode['since']}"
-            f"{f' ({named})' if named else ''}, {before}{_on(versions)}. Claude Code retries these itself; a run "
-            "of them points at the API or your connection, not your setup.")
-
-
-def cut_short_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
-    what = "stopped at the token limit or refused" if episode["refused"] else "stopped at the token limit"
-    share = episode["cut"] / episode["responses"] if episode["responses"] else 0.0
-    worse = episode.get("worse_than")
-    against = (worse_text(worse) if worse else
-               before_text(f"{episode['before_share']:.2%}" if episode["before_share"] > 0 else None)
-               + run_text(episode.get("run_days", 0)))
-    return (f"{episode['cut']} of {episode['responses']:,} main-thread responses {what} on {episode['since']} "
-            f"({share:.2%}), {against}{_on(versions)}. "
-            "A Claude Code update may have changed the output limit.")
 
 
 def failure_summary(counts: pd.DataFrame, days: Sequence[str]) -> Optional[dict[str, Any]]:

@@ -7,13 +7,12 @@ import pandas as pd
 import pytest
 
 from ccdrift.check import run_check
-from ccdrift.failures import (FAILURE_DAY_COLUMNS, _judged_days, cut_short, cut_short_message, digest_part,
-                              failing_requests, failure_counts, failure_lines, failure_summary, judged_failures,
-                              requests_message)
+from ccdrift.failures import (FAILURE_DAY_COLUMNS, _judged_days, cut_short, digest_part, failing_requests,
+                              failure_counts, failure_lines, failure_summary, judged_failures)
 from ccdrift.history import History, load_history
 from ccdrift.logs import judged_turns, parse_all, parse_source
 from ccdrift.state import load_state, new_state, save_state
-from ccdrift.texts import cut_short_line, failure_line
+from ccdrift.texts import cut_short_line, cut_short_message, failure_line, requests_message
 from tests.helpers import DAY, api_error, at, failure_days, line, no_response_stub, prompt, retry_record, text, write
 
 

@@ -7,9 +7,9 @@ import pytest
 
 from ccdrift.logs import parse_source
 from ccdrift.sessions import (SOURCE_PROJECT, ContextChange, MIN_BASELINE, WINDOW, context_alerts, context_changes_in,
-                              context_message, first_of_each, found_changes, project_lines, project_of,
+                              first_of_each, found_changes, project_lines, project_of,
                               project_summary, ratio_starts, rejudged, session_starts)
-from ccdrift.texts import context_change_line, project_path
+from ccdrift.texts import context_change_line, context_message, project_path
 from ccdrift.state import new_state
 from tests.helpers import DAY, at, line, nth_day, prompt, text, write
 

@@ -6,9 +6,9 @@ import pandas as pd
 
 import ccdrift.loops
 from ccdrift.early import alarm_runs, clamp_rate
-from ccdrift.loops import (COUNT_COLUMNS, LoopSetting, loop_counts, loop_message, loop_turns, loop_warning,
-                           qualifying_alarms)
+from ccdrift.loops import COUNT_COLUMNS, LoopSetting, loop_counts, loop_turns, loop_warning, qualifying_alarms
 from ccdrift.state import new_state
+from ccdrift.texts import loop_message
 from tests.helpers import nth_day
 
 

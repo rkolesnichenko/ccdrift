@@ -89,10 +89,3 @@ def hook_failures(runs: pd.DataFrame, state: dict[str, Any], today: date) -> lis
         state["hook_failures"].append(failure)
         new.append(failure)
     return new
-
-
-def failure_message(failure: dict[str, Any], versions: Sequence[str]) -> str:
-    on = f", on Claude Code {', '.join(versions)}" if versions else ""
-    (first, second), (runs1, runs2), (failed1, failed2) = failure["days"], failure["runs"], failure["failed"]
-    return (f"Stop hooks failed on {failed1} of {runs1} runs on {first} and {failed2} of {runs2} on {second}{on}. "
-            "Check your hooks; a Claude Code update may have changed their input.")

@@ -16,23 +16,24 @@ from ccdrift.changelog import (TOPIC_OF, changelog_path, days_before, load_chang
                                release_notes)
 from ccdrift.detector import DetectorConfig
 from ccdrift.digest import digest_due, digest_week, weekly_digest
-from ccdrift.early import early_message, early_warning
-from ccdrift.failures import (cut_short, cut_short_message, failing_requests, failure_counts, judged_failures,
-                              requests_message)
-from ccdrift.fields import field_gaps, gap_message, new_fields, new_fields_message
+from ccdrift.early import early_warning
+from ccdrift.failures import cut_short, failing_requests, failure_counts, judged_failures
+from ccdrift.fields import field_gaps, new_fields
 from ccdrift.history import load_history
-from ccdrift.hooks import failure_message, hook_failures, judged_hook_runs
+from ccdrift.hooks import hook_failures, judged_hook_runs
 from ccdrift.incidents import (RECOVERY_BINS, describe, incident_cost, incident_versions, update_incidents,
                                versions_text)
 from ccdrift.logs import judged_turns, no_transcripts_message
-from ccdrift.loops import STREAMS, loop_counts, loop_message, loop_warning
+from ccdrift.loops import STREAMS, loop_counts, loop_warning
 from ccdrift.notify import notify, run_exec
-from ccdrift.replay import REPLAY_SOURCE, first_run, history_message, replay_incidents
-from ccdrift.sessions import context_alerts, context_message, rejudged, session_starts
-from ccdrift.settings import change_message, setting_changes
+from ccdrift.replay import REPLAY_SOURCE, first_run, replay_incidents
+from ccdrift.sessions import context_alerts, rejudged, session_starts
+from ccdrift.settings import setting_changes
 from ccdrift.state import (CONTEXT_RULE, LOG_FILE, ccdrift_home, load_state, make_stream_private, record_run,
                            save_state, state_lock)
-from ccdrift.texts import LOOP_NAMES, approx
+from ccdrift.texts import (ALERT_TITLES, blank_cache_message, change_message, context_dropped_message,
+                           context_message, cut_short_message, early_message, gap_message, history_message,
+                           hook_failure_message, loop_message, new_fields_message, requests_message, state_unreadable)
 
 # kind, title, message, and lines for the log only
 Alert = tuple[str, str, str, list[str]]
@@ -157,7 +158,7 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
                     quoted = note_versions(turns, incident["versions"], days_before(incident["start"], 7),
                                            first_days[-1])
                     notes += release_notes(changelog, quoted, TOPIC_OF[incident["metric"]])
-            alerts.append(("history", "ccdrift: past incidents found",
+            alerts.append(("history", ALERT_TITLES["history"],
                            history_message(found, str(turns["day"].min())), note_lines(notes)))
         # A regression still going is why someone installs ccdrift mid-flight, and the
         # summary above reads as history. It also gets the flag alert it would have had,
@@ -177,13 +178,13 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
         alerts.append((kind, title, message, details + note_lines(notes)))
     warning = early_warning(df, incidents, state, now)
     if warning:
-        alerts.append(("early", "ccdrift: cache misses rising", early_message(warning, now), []))
+        alerts.append(("early", ALERT_TITLES["early"], early_message(warning, now), []))
     for stream in STREAMS:
         loop = loop_warning(df, stream, state, now)
         if loop:
             since, alarm_day = loop["since"][:10], loop["at"][:10]
             quoted = note_versions(turns, loop["versions"], days_before(since, 7), alarm_day)
-            alerts.append((LOOP_KINDS[stream], f"ccdrift: {LOOP_NAMES[stream]}", loop_message(loop, now),
+            alerts.append((LOOP_KINDS[stream], ALERT_TITLES[LOOP_KINDS[stream]], loop_message(loop, now),
                            note_lines(release_notes(changelog, quoted, "cache"))))
     # `ccdrift status` reads only the state file, so it shows the cost and versions
     # saved here: for open incidents, and for incidents added or closed by hand, which
@@ -200,46 +201,40 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
             incident["versions"] = incident_versions(turns, incident)
     for change in setting_changes(turns, state, today):
         versions, notes = _change_notes(turns, changelog, change, TOPIC_OF[change["setting"]])
-        alerts.append(("setting", "ccdrift: setting changed", change_message(change, versions), notes))
+        alerts.append(("setting", ALERT_TITLES["setting"], change_message(change, versions), notes))
     starts = session_starts(df)
     for change in context_alerts(starts, state, today):
         versions, notes = _change_notes(turns, changelog, change, "context")
-        alerts.append(("context", "ccdrift: session start changed", context_message(change, versions), notes))
+        alerts.append(("context", ALERT_TITLES["context"], context_message(change, versions), notes))
     # A state written before the rule judged each project against itself may hold changes
     # that were only a move between projects. They are re-judged once, and the run says so
     # in its log without alerting: nothing changed for the owner to act on.
     if state.get("context_rule", 1) < CONTEXT_RULE:
         for record in rejudged(starts, state, today):
-            alerts.append(("context_dropped", "ccdrift: a recorded session-start change was dropped",
-                           f"{record['since']}, ~{approx(record['from'])} -> ~{approx(record['to'])} tokens: "
-                           "judged against each project's own level, it isn't a change.", []))
+            alerts.append(("context_dropped", ALERT_TITLES["context_dropped"], context_dropped_message(record), []))
         state["context_rule"] = CONTEXT_RULE
     for failure in hook_failures(judged_hook_runs(tables.hook_runs, today), state, today):
         versions, notes = _change_notes(turns, changelog, failure, "hooks")
-        alerts.append(("hooks", "ccdrift: hooks failing", failure_message(failure, versions), notes))
+        alerts.append(("hooks", ALERT_TITLES["hooks"], hook_failure_message(failure, versions), notes))
     counts = failure_counts(judged_failures(tables.failures, today), turns)
     for episode in failing_requests(counts, state, today):
         versions, notes = _change_notes(turns, changelog, episode, "errors")
-        alerts.append(("failed_requests", "ccdrift: requests failing", requests_message(episode, versions), notes))
+        alerts.append(("failed_requests", ALERT_TITLES["failed_requests"], requests_message(episode, versions), notes))
     for episode in cut_short(counts, state, today):
         versions, notes = _change_notes(turns, changelog, episode, "errors")
-        alerts.append(("cut_short", "ccdrift: responses cut short", cut_short_message(episode, versions), notes))
+        alerts.append(("cut_short", ALERT_TITLES["cut_short"], cut_short_message(episode, versions), notes))
     for gap in field_gaps(turns, state, today):
         notes = release_notes(changelog, [] if gap["version"] == "unknown" else [gap["version"]], "fields")
-        alerts.append(("fields", "ccdrift: Claude Code stopped logging a field", gap_message(gap), note_lines(notes)))
+        alerts.append(("fields", ALERT_TITLES["fields"], gap_message(gap), note_lines(notes)))
     for record in new_fields(tables.field_census, turns, state, today):
-        alerts.append(("new_fields", "ccdrift: Claude Code logs a field ccdrift doesn't read",
-                       new_fields_message(record), []))
+        alerts.append(("new_fields", ALERT_TITLES["new_fields"], new_fields_message(record), []))
     blank = blank_cache_stretch(turns, state)
     if blank:
-        alerts.append(("blank_cache", "ccdrift can't compute the cache metric",
-                       f"no usable cache values on {blank['days']} active days from {blank['first']} "
-                       f"({blank['responses']} responses, {blank['prompts']} prompts recognised). "
-                       "Claude Code's log format may have changed; run `ccdrift peek`.", []))
+        alerts.append(("blank_cache", ALERT_TITLES["blank_cache"], blank_cache_message(blank), []))
     week_start = digest_due(state, now) if digest else None
     if week_start is not None:
         state["digest_week"] = digest_week(now)
-        alerts.append(("digest", "ccdrift: weekly summary",
+        alerts.append(("digest", ALERT_TITLES["digest"],
                        weekly_digest(turns, state, week_start, loop_counts(df, today), counts), []))
     return alerts
 
@@ -252,7 +247,7 @@ def _run_on_state(source: Path, state_path: Path, cfg: DetectorConfig, today: da
         state = load_state(state_path)
     except (OSError, ValueError) as exc:
         traceback.print_exc()
-        return [], f"can't read the state file {state_path}: {exc}"
+        return [], state_unreadable(state_path, exc)
     updated = copy.deepcopy(state)
     try:
         alerts = _alerts(source, state_path, updated, cfg, today, started, digest)
@@ -329,10 +324,10 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
                                             today or datetime.now(timezone.utc).date(), started, digest)
     except OSError as exc:
         traceback.print_exc()
-        alerts, failure = [], f"can't read the state file {state_path}: {exc}"
+        alerts, failure = [], state_unreadable(state_path, exc)
     # Alerts go out once the lock is released: notifications and --exec take their time.
     if failure is not None:
-        alert("failed", "ccdrift check failed", failure, failure_notice_due())
+        alert("failed", ALERT_TITLES["failed"], failure, failure_notice_due())
         return 1
     try:
         notice.unlink(missing_ok=True)

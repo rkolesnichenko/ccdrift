@@ -17,7 +17,6 @@ import pandas as pd
 from ccdrift.early import alarm_runs, rise_first
 from ccdrift.incidents import versions_text
 from ccdrift.logs import outside_sdk
-from ccdrift.texts import approx, clock_text
 
 STREAMS = ("main", "subagent")
 LoopSetting = namedtuple("LoopSetting", "p1 h min_sessions")
@@ -133,14 +132,3 @@ def loop_warning(responses: pd.DataFrame, stream: str, state: dict[str, Any], no
                "reported_on": now.date().isoformat()}
     state["loop_warnings"].append(warning)
     return warning
-
-
-STREAM_TURNS = {"main": "tool-loop turns", "subagent": "subagent tool-loop turns"}
-
-
-def loop_message(warning: dict[str, Any], now: datetime) -> str:
-    on = f", on Claude Code {', '.join(warning['versions'])}" if warning["versions"] else ""
-    sessions = f"{warning['sessions']} session{'' if warning['sessions'] == 1 else 's'}"
-    return (f"{warning['misses']} of the last {warning['turns']} {STREAM_TURNS[warning['stream']]} missed the cache "
-            f"(usually {warning['base_rate']:.2%}), since {clock_text(warning['since'], now)}, in {sessions}, "
-            f"rewriting ~{approx(warning['tokens'])} tokens{on}. `ccdrift report` shows whether it lasts.")

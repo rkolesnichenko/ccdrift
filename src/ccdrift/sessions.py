@@ -263,47 +263,6 @@ def context_alerts(starts: pd.DataFrame, state: dict[str, Any], today: date) -> 
     return new
 
 
-def _where(change: dict[str, Any], new_version: bool) -> str:
-    """Which projects a change reached, and what that says about its cause; "" when no
-    project had the sessions each side to be compared with itself. Every branch counts the
-    projects ccdrift could compare, not the projects the owner used: a machine with six
-    active projects can have two that clear the bar, and "every project you used" would be
-    false about the other four."""
-    moved, seen = len(change.get("projects", [])), change.get("of_projects", 0)
-    if not seen:
-        return ""
-    if not moved:
-        # Every project that could be compared held its level, so whatever moved the
-        # sessions isn't in any of them -- and isn't pinned on anything yet.
-        if seen == 1:
-            return (", though the one project ccdrift could compare with itself didn't move, so something outside "
-                    "it changed.")
-        return f", in none of the {seen} projects ccdrift could compare, so something outside them changed."
-    if seen == 1:
-        # One project is no evidence either way: Claude Code and that project's own files
-        # both move it, and there is nothing to compare it with.
-        if new_version:
-            return (", in the one project ccdrift could compare with itself, and on a Claude Code version none of "
-                    "the sessions before it ran: either that version or the project's own files explain it.")
-        return (", in the one project ccdrift could compare with itself, so its CLAUDE.md, MCP servers or skills "
-                "explain it as readily as Claude Code does.")
-    if moved < seen:
-        that = "That project's" if moved == 1 else "Those projects'"
-        # A version new to these sessions is named in the message's own opening clause, so
-        # ruling Claude Code out here would contradict it: the projects that didn't move
-        # say the cause isn't global, and a version that arrived says it might be.
-        if new_version:
-            return (f", in {moved} of the {seen} projects ccdrift could compare. {that} own files may explain it, "
-                    "though a Claude Code version none of the sessions before it ran also arrived.")
-        return (f", in {moved} of the {seen} projects ccdrift could compare. "
-                f"{that} CLAUDE.md, MCP servers or skills explain it, not Claude Code.")
-    if new_version:
-        return (f", in every project ccdrift could compare ({moved} of {seen}), on a Claude Code version none of "
-                "the sessions before it ran, the likeliest cause.")
-    return (f", in every project ccdrift could compare ({moved} of {seen}), with no new Claude Code version, so "
-            "look at your global configuration in ~/.claude.")
-
-
 def rejudged(starts: pd.DataFrame, state: dict[str, Any], today: date) -> list[dict[str, Any]]:
     """The recorded changes an older ccdrift found that this version's rule doesn't: the
     pooled rule counted a move between projects as a change. Two rules keep a record that
@@ -338,12 +297,3 @@ def rejudged(starts: pd.DataFrame, state: dict[str, Any], today: date) -> list[d
             kept.append(record)
     state["context_changes"] = kept
     return dropped
-
-
-def context_message(change: dict[str, Any], versions: Sequence[str]) -> str:
-    on = f", on Claude Code {', '.join(versions)}" if versions else ""
-    direction = "down" if change["to"] < change["from"] else "up"
-    where = _where(change, bool(change.get("new_version", False)))
-    tail = where or ". Your MCP servers, plugins or CLAUDE.md can change this too."
-    return (f"New sessions start with ~{approx(change['to'])} tokens of context from {change['since']}{on}, "
-            f"{direction} from ~{approx(change['from'])}{tail}")

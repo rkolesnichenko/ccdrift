@@ -4,8 +4,9 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
-from ccdrift.early import alarm_runs, clamp_rate, early_message, early_warning, miss_cusum
+from ccdrift.early import alarm_runs, clamp_rate, early_warning, miss_cusum
 from ccdrift.state import new_state
+from ccdrift.texts import early_message
 from tests.helpers import nth_day
 
 

@@ -4,8 +4,9 @@ from datetime import date
 
 import pandas as pd
 
-from ccdrift.settings import change_line, change_message, setting_changes, settings_lines, settings_summary
+from ccdrift.settings import change_line, setting_changes, settings_lines, settings_summary
 from ccdrift.state import new_state
+from ccdrift.texts import change_message
 from tests.helpers import nth_day
 
 

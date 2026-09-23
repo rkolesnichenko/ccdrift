@@ -17,7 +17,6 @@ import pandas as pd
 
 from ccdrift.incidents import versions_text
 from ccdrift.logs import outside_sdk
-from ccdrift.texts import clock_text
 
 P1 = 0.05
 MIN_P0 = 0.002
@@ -134,10 +133,3 @@ def early_warning(responses: pd.DataFrame, incidents: Sequence[dict], state: dic
                "reported_on": now.date().isoformat()}
     state["early_warnings"].append(warning)
     return warning
-
-
-def early_message(warning: dict[str, Any], now: datetime) -> str:
-    on = f", on Claude Code {', '.join(warning['versions'])}" if warning["versions"] else ""
-    return (f"{warning['misses']} of the last {warning['turns']} new-prompt turns missed the cache "
-            f"(usually {warning['base_rate']:.1%}), since {clock_text(warning['since'], now)}{on}. "
-            "The daily check confirms or clears it within a few days.")
