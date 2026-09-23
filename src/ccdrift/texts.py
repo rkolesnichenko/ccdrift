@@ -564,3 +564,53 @@ def digest_text(summary: dict[str, Any]) -> str:
     parts.append(_count_text(summary["new_fields"], "new field"))
     parts.append(f"check ran on {summary['ran']} of 7 days")
     return f"Week of {summary['week_start'][5:]}: " + "; ".join(parts) + "."
+
+
+# ---------------------------------------------------------------------------
+# The status line and `ccdrift status`
+# ---------------------------------------------------------------------------
+
+LIVE_NAMES = {"cache_ratio": "cache ratio down", "haiku_fraction": "Haiku share up"}
+
+# status.short_status fills these; its docstring says which one wins.
+STATUS_LINES = {"no_check": "ccdrift: no check yet",
+                "failed": "ccdrift: check failed {at:%m-%d %H:%M}",
+                "stale": "ccdrift: no check for {days} days",
+                "live": "{name} since {since}",
+                "incidents": "ccdrift: {incidents}",
+                "hooks": "ccdrift: hooks failing since {since}",
+                "rising": "ccdrift: cache misses rising since {since}",
+                "loop": "ccdrift: {name} since {since}",
+                "unreadable": "ccdrift: can't read state",
+                "not_run": "The check hasn't run yet. `ccdrift schedule install` sets it up.\n",
+                "last": "Last check: {at:%Y-%m-%d %H:%M}, {outcome}",
+                "ok": "ok",
+                "outcome_failed": "failed: {error}",
+                "last_ok": "Last successful check: {at:%Y-%m-%d %H:%M}",
+                "open": "Open incidents",
+                "closed": "Closed in the last {days} days",
+                "settings": "Setting changes in the last {days} days",
+                "other": "Other changes in the last {days} days",
+                "section": "{title}:",
+                "empty_section": "{title}: none"}
+
+
+# ---------------------------------------------------------------------------
+# What the commands print
+# ---------------------------------------------------------------------------
+
+COMMAND_LINES = {"no_scheduler": "ccdrift can't set up a scheduled job on this system. Run this command every hour, "
+                                 "or once a day, with your system's scheduler:",
+                 "not_installed": "Nothing installed: {error}",
+                 "installed": "Installed a {backend} job: `ccdrift check` runs {when}.",
+                 "log": "Log: {log}",
+                 "first_run": "A first run has started. Check `ccdrift schedule status` in a minute.",
+                 "not_removed": "Nothing removed: {error}",
+                 "removed": "Removed the ccdrift job.",
+                 "nothing_to_remove": "No ccdrift job was installed.",
+                 "schedule_unreadable": "Couldn't read the schedule: {error}",
+                 "state_unchangeable": "Can't change the state file {path}: {error}",
+                 "state_unreadable": "Can't read the state file {path}: {error}",
+                 "unchanged": "Nothing changed: {error}",
+                 "added": "Added {metric} {start}..{end}. `ccdrift incident list` shows what it cost.",
+                 "html_by_version": "--html draws the day view; drop --by version"}
