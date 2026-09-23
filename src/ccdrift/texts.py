@@ -788,3 +788,199 @@ SCHEDULE_LINES = {"exited": "`{command}` exited with {code}",
                   "control_char": "a line break or other control character can't go into a scheduled job: {value!r}",
                   "test_title": "ccdrift",
                   "test_message": "The check will run {when}. Alerts will look like this."}
+
+
+# ---------------------------------------------------------------------------
+# ccdrift incident draft
+# ---------------------------------------------------------------------------
+# draft.draft_facts counts; draft_text writes the Markdown issue from what it counted.
+
+DRAFT_LINES = {"no_incident_on": "No {name} incident starts on {start}.",
+               "no_incident": "No {name} incident is recorded.",
+               "no_days": "The history holds no judged days during the {name} incident from {start}.",
+               "macos": "macOS {version}",
+               "system": "{system} {release}"}
+
+# The pause before a prompt, by the upper bound of its bucket in seconds.
+PAUSE_NAMES = {60: "≤1 min", 300: "1–5 min", 900: "5–15 min", 3600: "15–60 min"}
+
+# The settings the environment names: the column, what it is called, and what its share counts.
+DRAFT_SETTINGS = (("cache_tier", "cache tier", " that write to the cache"), ("effort", "effort", ""))
+
+BASELINE_NOTE = ("Before is the baseline ccdrift judged the incident against: the days it compared with, which skip "
+                 "the days of other incidents, except ones dismissed or taken as the new normal, so they need not "
+                 "run up to the day it started.\n\n")
+
+
+def version_span(names: Sequence[str]) -> str:
+    """"2.1.233–2.1.258" for the versions a title names, oldest first; "" for none."""
+    if not names:
+        return ""
+    return names[0] if len(names) == 1 else f"{names[0]}–{names[-1]}"
+
+
+def _rate(part: float, whole: float) -> str:
+    return f"{part / whole:.2%}" if whole else "-"
+
+
+def _day_span(days: Sequence[str]) -> str:
+    return f"{days[0][5:]}..{days[-1][5:]}"
+
+
+def _days(count: int) -> str:
+    return f"{count} day{'' if count == 1 else 's'}"
+
+
+def _markdown_table(header: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
+    lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
+    return "\n".join(lines + ["| " + " | ".join(str(cell) for cell in row) + " |" for row in rows])
+
+
+def _compared(parts: Mapping[str, tuple[int, int]], periods: Mapping[str, Sequence[str]]) -> str:
+    """", against 1 of 200 (0.50%) on the 5 days before and 2 of 566 (0.35%) on the 11
+    days after", for the periods that have days."""
+    clauses = [f"{parts[name][0]:,} of {parts[name][1]:,} ({_rate(*parts[name])}) on the "
+               f"{_days(len(periods[name]))} {name}" for name in ("before", "after") if periods[name]]
+    return f", against {' and '.join(clauses)}" if clauses else ""
+
+
+def _lead(incident: Mapping[str, Any], periods: Mapping[str, Sequence[str]]) -> str:
+    if incident["status"] == "persistent":
+        return f"From {incident['start']} to {incident['end']}, still changed after {PERSISTENT_DAYS} days"
+    if incident["end"]:
+        return f"From {incident['start']} to {incident['end']}"
+    as_of = f" as of {periods['during'][-1]}" if periods["during"] else ""
+    return f"From {incident['start']}, still going{as_of}"
+
+
+def _version_table(rows: Sequence[tuple[str, str, int, int]], names: Sequence[str]) -> str:
+    """One row per version and period (draft.draft_facts orders them): its rows, those
+    that count, and their share; "" when no version is logged."""
+    shown = [[version, period, f"{total:,}", f"{hits:,}", _rate(hits, total)] for version, period, total, hits in rows]
+    return _markdown_table(["Version", "Period", *names], shown) if shown else ""
+
+
+def _cache_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
+    counts, periods, span = facts["counts"], facts["periods"], version_span(facts["span"])
+    usually = f" (usually {_rate(*counts['before'])})" if counts["before"][1] else ""
+    title = (f"New prompts miss the prompt cache {_rate(*counts['during'])} of the time"
+             + (f" on Claude Code {span}" if span else "") + usually)
+    beyond = (f"~{approx(facts['cost'])} tokens were written to the cache again" if facts["cost"] > 0
+              else "no tokens were written to the cache again")
+    sections = [
+        "### What happened\n\n"
+        f"{_lead(facts['incident'], periods)}, {counts['during'][0]:,} of {counts['during'][1]:,} main-thread turns "
+        f"that open with a new prompt ({_rate(*counts['during'])}) missed the prompt cache"
+        f"{_compared(counts, periods)}. ccdrift estimates {beyond} beyond the usual miss rate.",
+        "### Before, during and after\n\n" + BASELINE_NOTE
+        + _markdown_table(
+            ["", "Days", "New-prompt turns", "Misses", "Miss rate", "Cache read ratio"],
+            [[f"{name.capitalize()} ({_day_span(periods[name])})", len(periods[name]), f"{counts[name][1]:,}",
+              f"{counts[name][0]:,}", _rate(*counts[name]),
+              "-" if facts["ratios"][name] is None else f"{facts['ratios'][name]:.3f}"]
+             for name in periods if periods[name]]),
+    ]
+    versions = _version_table(facts["versions"], ["Turns", "Misses", "Miss rate"])
+    if versions:
+        sections.append("### By Claude Code version\n\n" + versions)
+    missed = facts["missed"]
+    if missed:
+        read, wrote = missed["read"], missed["wrote"]
+        turns_text = f"{missed['turns']:,} missed turn{'' if missed['turns'] == 1 else 's'}"
+        sections.append(
+            "### What a missed turn looks like\n\n"
+            f"The {turns_text} during read a median {read[0]:,} tokens from the cache (middle half "
+            f"{read[1]:,}–{read[2]:,}) and wrote a median {wrote[0]:,} (middle half {wrote[1]:,}–{wrote[2]:,}), "
+            "so each wrote most of its input to the cache again.")
+    reasons = facts["reasons"]
+    if reasons:
+        rows = [[reason_name(reason).capitalize(), *(f"{count:,} ({_rate(count, total)})" for count, total in cells)]
+                for reason, cells in reasons["rows"]]
+        sections.append(
+            "### Why the cache missed\n\n"
+            "Claude Code records a reason on a response whose prompt did not match what it had cached. "
+            "ccdrift counts them and does not judge them: no alert of its own turns on these numbers.\n\n"
+            + _markdown_table(["Reason", *(name.capitalize() for name in reasons["shown"])], rows))
+    if facts["pauses"]:
+        rows = [[PAUSE_NAMES[bound], f"{turns:,}", f"{misses:,}", _rate(misses, turns)]
+                for bound, turns, misses in facts["pauses"]]
+        sections.append("### Pause before the prompt\n\nHow long the turn waited between the previous response and "
+                        "the prompt that opened it.\n\n"
+                        + _markdown_table(["Pause", "Turns", "Misses", "Miss rate"], rows))
+    loop_parts = [f"{misses:,} of {total:,} ({_rate(misses, total)}) {name}" for name, misses, total in facts["loops"]]
+    if loop_parts:
+        joined = loop_parts[0] if len(loop_parts) == 1 else f"{', '.join(loop_parts[:-1])} and {loop_parts[-1]}"
+        sections.append(f"### Tool-loop turns\n\nTurns inside the tool loop on the main thread missed {joined}.")
+    return title, sections
+
+
+def _haiku_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
+    counts, periods, span = facts["counts"], facts["periods"], version_span(facts["span"])
+    usually = f" (usually {_rate(*counts['before'])})" if counts["before"][1] else ""
+    title = (f"Haiku answers {_rate(*counts['during'])} of main-thread responses"
+             + (f" on Claude Code {span}" if span else "") + usually)
+    extra = f"~{approx(facts['cost'])} extra Haiku responses" if facts["cost"] > 0 else "no extra Haiku responses"
+    sections = [
+        "### What happened\n\n"
+        f"{_lead(facts['incident'], periods)}, Haiku answered {counts['during'][0]:,} of {counts['during'][1]:,} "
+        f"main-thread responses ({_rate(*counts['during'])}){_compared(counts, periods)}: {extra} by ccdrift's "
+        "estimate.",
+        "### Before, during and after\n\n" + BASELINE_NOTE
+        + _markdown_table(
+            ["", "Days", "Responses", "Haiku responses", "Haiku share"],
+            [[f"{name.capitalize()} ({_day_span(periods[name])})", len(periods[name]), f"{counts[name][1]:,}",
+              f"{counts[name][0]:,}", _rate(counts[name][0], counts[name][1])]
+             for name in periods if periods[name]]),
+    ]
+    versions = _version_table(facts["versions"], ["Responses", "Haiku responses", "Haiku share"])
+    if versions:
+        sections.append("### By Claude Code version\n\n" + versions)
+    return title, sections
+
+
+def _draft_environment(env: Mapping[str, Any]) -> str:
+    entrypoints = env["entrypoints"]
+    entry = f" (entrypoint{'s' if len(entrypoints) > 1 else ''} {', '.join(entrypoints)})" if entrypoints else ""
+    lines = [f"- Claude Code: {', '.join(env['versions'])}{entry}" if env["versions"]
+             else f"- Claude Code: version not logged{entry}"]
+    if env["models"]:
+        lines.append("- Models during: " + ", ".join(f"{model} ({share:.2%} of responses)"
+                                                     for model, share in env["models"]))
+    settings = []
+    for column, name, suffix in DRAFT_SETTINGS:
+        top = env["settings"][column]
+        settings.append(f"{name} {top[0]} on {top[1]:.2%} of responses{suffix}" if top else f"{name} not logged")
+    lines += [f"- Main thread: {', '.join(settings)}", f"- OS: {env['os']}",
+              f"- Measured with ccdrift {env['ccdrift']} from local session transcripts (aggregates only)"]
+    return "### Environment\n\n" + "\n".join(lines)
+
+
+def _draft_method(method: Mapping[str, Any]) -> str:
+    cache = method["metric"] == "cache_ratio"
+    rule = (f"an incident opens when {method['bins']} of {method['window']} days in a row fall "
+            f"{'below z = −' if cache else 'above z = +'}{method['cutoff']:.1f} and closes once "
+            f"{method['recovery']} pooled days are back inside the cutoff on {method['recovery']} days in a row, "
+            f"or after {PERSISTENT_DAYS} days, when it takes the change as the new normal.")
+    if cache:
+        counted = ("It counts main-thread turns that open with a new prompt within an hour of the previous response, "
+                   "outside Agent SDK sessions and not right after a compaction. A turn misses the cache when it "
+                   "reads less than half of its input from it.")
+    else:
+        counted = ("It counts main-thread responses outside Agent SDK sessions and the share answered by a Haiku "
+                   "model.")
+    return ("### How this was measured\n\nccdrift reads Claude Code's local session transcripts. " + counted
+            + " A day is a UTC day, and only complete ones are judged. Each day is compared with the median of up "
+            f"to {method['baseline']} days before it, in units of their spread, which never falls below the noise "
+            "a day of that many turns shows anyway; those days skip the days of other incidents, except ones "
+            "dismissed or taken as the new normal. Then "
+            + rule)
+
+
+def draft_text(facts: Mapping[str, Any]) -> str:
+    """The draft issue from draft.draft_facts: a title line, a blank line and its sections."""
+    title, sections = (_cache_draft if facts["metric"] == "cache_ratio" else _haiku_draft)(facts)
+    if facts["notes"]:
+        sections.append("### Release notes that may be related\n\n"
+                        + "\n".join(f"- {version}: {text}" for version, text in facts["notes"]))
+    sections += [_draft_environment(facts["environment"]), _draft_method(facts["method"])]
+    return "\n\n".join([title, *sections]) + "\n"

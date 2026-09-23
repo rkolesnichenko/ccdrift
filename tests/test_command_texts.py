@@ -1,4 +1,5 @@
-"""What `ccdrift` commands, `ccdrift status`, `report` and `cost` say is worded in texts.py, not where it is printed."""
+"""What ccdrift prints, the schedule it installs and the issue drafts it writes are worded in texts.py, not
+where they are printed."""
 
 import ast
 import string
@@ -48,11 +49,13 @@ def linked_tree(module: str) -> ast.AST:
     return tree
 
 
-@pytest.mark.parametrize("module", ["cli.py", "status.py", "report.py", "spend.py"])
+@pytest.mark.parametrize("module", ["cli.py", "status.py", "report.py", "spend.py", "schedule.py", "draft.py"])
 def test_every_line_a_command_uses_exists_and_gets_exactly_its_slots(module):
     # A line is looked up by name and filled by keyword, so a misspelt name or slot would
     # fail only when that line is printed, which some error paths rarely are.
-    tables = {name: getattr(texts, name) for name in ("STATUS_LINES", "COMMAND_LINES", "REPORT_LINES", "COST_LINES")}
+    tables = {name: getattr(texts, name)
+              for name in ("STATUS_LINES", "COMMAND_LINES", "REPORT_LINES", "COST_LINES", "SCHEDULE_LINES",
+                           "DRAFT_LINES")}
     used = 0
     for node in ast.walk(linked_tree(module)):
         if not (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id in tables):
@@ -68,14 +71,20 @@ def test_every_line_a_command_uses_exists_and_gets_exactly_its_slots(module):
 
 
 @pytest.mark.parametrize("module", ["status.py", "report.py", "spend.py", "settings.py", "sessions.py", "hooks.py",
-                                    "failures.py"])
+                                    "failures.py", "schedule.py", "draft.py"])
 def test_modules_that_print_through_texts_write_no_words_of_their_own(module):
     # report and cost build their output into lists before printing it, so what they say
     # can't be told from the calls that print it: here no string but a docstring has words.
+    # schedule.py's module constants are the exception: the crontab marker, the unit files
+    # and what launchctl and crontab print are the schedulers' formats, not ccdrift's words.
     tree = ast.parse((SRC / module).read_text())
-    docstrings = {id(node.body[0].value) for node in ast.walk(tree)
-                  if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)) and node.body
-                  and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant)}
-    words = [text for node in ast.walk(tree) if id(node) not in docstrings for text in sentences(node)
+    allowed = {id(node.body[0].value) for node in ast.walk(tree)
+               if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)) and node.body
+               and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant)}
+    if module == "schedule.py":
+        allowed |= {id(part) for node in tree.body if isinstance(node, ast.Assign)
+                    and all(isinstance(target, ast.Name) and target.id.isupper() for target in node.targets)
+                    for part in ast.walk(node.value)}
+    words = [text for node in ast.walk(tree) if id(node) not in allowed for text in sentences(node)
              if isinstance(node, ast.Constant)]
     assert words == []
