@@ -222,8 +222,13 @@ def spend_json(turns: pd.DataFrame, dimensions: Sequence[str], prices: dict[str,
         "tokens": total_tokens(turns),
         "dollars": priced_total(turns, prices),
         # Scoped to the models the window spent on, and carrying what each price rests on,
-        # so a `dollars` of null can be read against the fit rather than guessed at.
-        "priced_models": [{"model": model, "residual": fitted[model].residual, "rows": fitted[model].rows}
+        # so a `dollars` of null can be read against the fit rather than guessed at. The
+        # cache-read ratio is part of that evidence since models stopped sharing one:
+        # claude-opus-5-5 reads at 0.05x its input rate where the models before it read at
+        # 0.1x. A model whose records carry no input at all is refused as rank-deficient, so
+        # the input rate divided by here is one the fit actually measured.
+        "priced_models": [{"model": model, "residual": fitted[model].residual, "rows": fitted[model].rows,
+                           "cache_read_ratio": round(fitted[model].cache_read_rate / fitted[model].input_rate, 3)}
                           for model in sorted(fitted)],
         "unpriced_models": [{"model": model, "share": share} for model, share in unpriced_models(turns, prices)],
         "dimensions": {d: [{"bucket": row.bucket, "responses": int(row.responses),

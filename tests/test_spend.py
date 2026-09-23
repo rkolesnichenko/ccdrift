@@ -585,12 +585,29 @@ def test_the_json_carries_each_prices_fit_quality_and_names_what_it_could_not_pr
     # Four cost records a model, reproducing their costs exactly: the evidence behind
     # every dollar figure in the same document as the figures.
     assert payload["priced_models"] == [{"model": "claude-haiku-4-5", "residual": pytest.approx(0, abs=1e-9),
-                                         "rows": 4},
+                                         "rows": 4, "cache_read_ratio": 0.1},
                                         {"model": "claude-opus-5", "residual": pytest.approx(0, abs=1e-9),
-                                         "rows": 4}]
+                                         "rows": 4, "cache_read_ratio": 0.1}]
     assert payload["unpriced_models"] == [{"model": "claude-fable-5-1", "share": pytest.approx(0.2083, abs=1e-4)}]
     subagent = next(row for row in payload["dimensions"]["thread"] if row["bucket"] == "subagent")
     assert subagent["dollars"] is None and subagent["unpriced"] == ["claude-fable-5-1"]
+
+
+def test_the_json_says_what_share_of_its_input_rate_each_model_charges_for_a_cache_read(tmp_path, capsys):
+    # The fact 0.13.0 exists for, where a reader can see it: models stopped sharing one
+    # cache-read ratio, and the fit found each one's from Claude Code's own records.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    two_cache_ratios_corpus(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, as_json=True, today=TODAY)
+    payload = json.loads(capsys.readouterr().out)
+    ratios = {row["model"]: row["cache_read_ratio"] for row in payload["priced_models"]}
+    assert ratios == {"claude-opus-5": 0.1, "claude-opus-5-5": 0.05}
+    assert payload["dollars"] == pytest.approx(3.00005 + 2.20004)
+    # The ratio is evidence about a price, not a figure of spend, so the terminal view
+    # that reports spend does not carry it.
+    run_spend(tmp_path / "logs", state, today=TODAY)
+    assert "ratio" not in capsys.readouterr().out
 
 
 def test_the_json_prices_only_the_models_the_window_actually_ran(tmp_path):
