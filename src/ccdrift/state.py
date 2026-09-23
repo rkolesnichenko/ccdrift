@@ -18,6 +18,8 @@ try:
 except ImportError:  # Windows, where ccdrift sets up no schedule
     fcntl = None  # type: ignore[assignment]
 
+from ccdrift.texts import STATE_LINES
+
 STATE_VERSION = 2
 # The session-start rule a state was written by: 2 judges each project against itself.
 CONTEXT_RULE = 2
@@ -77,15 +79,15 @@ def load_state(path: Path) -> dict[str, Any]:
         return new_state()
     state = json.loads(path.read_text())
     if not isinstance(state, dict):
-        raise ValueError(f"{path} doesn't hold a JSON object")
+        raise ValueError(STATE_LINES["not_object"].format(path=path))
     # Written before 0.8.0, so the check re-judges its session-start changes once. A
     # fresh state gets the current rule from new_state() below.
     state.setdefault("context_rule", 1)
     version = state.get("version", 1)
     if isinstance(version, bool) or not isinstance(version, int):
-        raise ValueError(f"{path} has an unknown state version: {version!r}")
+        raise ValueError(STATE_LINES["unknown_version"].format(path=path, version=version))
     if version > STATE_VERSION:
-        raise ValueError(f"{path} was written by a newer ccdrift (state version {version}); upgrade ccdrift")
+        raise ValueError(STATE_LINES["newer"].format(path=path, version=version))
     for key, empty in new_state().items():
         state.setdefault(key, empty)
     state["version"] = STATE_VERSION
@@ -123,7 +125,7 @@ def state_lock(path: Path) -> Iterator[None]:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                print(f"Waiting for another ccdrift command to finish with {path}...", file=sys.stderr, flush=True)
+                print(STATE_LINES["waiting"].format(path=path), file=sys.stderr, flush=True)
                 fcntl.flock(handle, fcntl.LOCK_EX)
         yield
 

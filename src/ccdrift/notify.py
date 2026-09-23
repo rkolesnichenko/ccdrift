@@ -9,6 +9,13 @@ import subprocess
 import sys
 from typing import Callable, Mapping, Optional
 
+from ccdrift.texts import NOTIFY_LINES
+
+# The AppleScript that shows a notification on macOS; osascript reads it, so it is a
+# format rather than ccdrift's wording. Both values go in as JSON strings, which AppleScript
+# reads as string literals.
+APPLESCRIPT = "display notification {message} with title {title}"
+
 
 def notify(title: str, message: str, platform: str = sys.platform,
            run: Callable[..., object] = subprocess.run,
@@ -17,8 +24,8 @@ def notify(title: str, message: str, platform: str = sys.platform,
     is installed, otherwise nothing. Failures are ignored, since every alert also
     goes to the log."""
     if platform == "darwin" and which("osascript"):
-        script = (f"display notification {json.dumps(message, ensure_ascii=False)} "
-                  f"with title {json.dumps(title, ensure_ascii=False)}")
+        script = APPLESCRIPT.format(message=json.dumps(message, ensure_ascii=False),
+                                    title=json.dumps(title, ensure_ascii=False))
         argv = ["osascript", "-e", script]
     elif platform.startswith("linux") and which("notify-send"):
         argv = ["notify-send", title, message]
@@ -45,10 +52,11 @@ def run_exec(command: str, kind: str, title: str, message: str,
         result = run(command, shell=True, env=env, capture_output=True, text=True, encoding="utf-8",
                      errors="replace", timeout=EXEC_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        return f"timed out after {EXEC_TIMEOUT_SECONDS} s"
+        return NOTIFY_LINES["timed_out"].format(seconds=EXEC_TIMEOUT_SECONDS)
     except OSError as exc:
         return str(exc)
     if result.returncode != 0:
         first = (result.stderr or "").strip().splitlines()
-        return f"exit {result.returncode}" + (f": {first[0]}" if first else "")
+        return NOTIFY_LINES["exit"].format(code=result.returncode) + (NOTIFY_LINES["stderr"].format(line=first[0])
+                                                                      if first else "")
     return None
