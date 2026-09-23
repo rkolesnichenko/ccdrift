@@ -67,7 +67,8 @@ def test_every_line_a_command_uses_exists_and_gets_exactly_its_slots(module):
     assert used
 
 
-@pytest.mark.parametrize("module", ["status.py", "report.py", "spend.py"])
+@pytest.mark.parametrize("module", ["status.py", "report.py", "spend.py", "settings.py", "sessions.py", "hooks.py",
+                                    "failures.py"])
 def test_modules_that_print_through_texts_write_no_words_of_their_own(module):
     # report and cost build their output into lists before printing it, so what they say
     # can't be told from the calls that print it: here no string but a docstring has words.

@@ -10,7 +10,7 @@ from typing import Any, Sequence
 
 import pandas as pd
 
-from ccdrift.texts import SETTING_NAMES, change_line
+from ccdrift.texts import NOT_LOGGED, change_line
 
 ALERT_SETTINGS = ("cache_tier", "effort")
 REPORT_SETTINGS = ("cache_tier", "effort", "speed", "service_tier")
@@ -78,7 +78,7 @@ def settings_summary(turns: pd.DataFrame, days: Sequence[str]) -> list[dict[str,
         changes = []
         for setting in REPORT_SETTINGS:
             column = group[setting] if setting in group else pd.Series(None, index=group.index, dtype=object)
-            values = column.dropna() if setting == "cache_tier" else column.fillna("not logged")
+            values = column.dropna() if setting == "cache_tier" else column.fillna(NOT_LOGGED)
             shares[setting] = {str(v): round(float(s), 3) for v, s in values.value_counts(normalize=True).items()}
             by_day = values.groupby(group.loc[values.index, "day"].astype(str))
             common = by_day.agg(lambda s: s.value_counts().idxmax())
@@ -90,22 +90,6 @@ def settings_summary(turns: pd.DataFrame, days: Sequence[str]) -> list[dict[str,
     return summary
 
 
-def settings_lines(summary: list[dict[str, Any]]) -> list[str]:
-    """The report's settings section, starting with a blank line; empty without models."""
-    if not summary:
-        return []
-    lines = ["", "Settings on the CLI main thread over these days (share of responses):"]
-    for model in summary:
-        parts = [f"{SETTING_NAMES[s]} " + ", ".join(f"{v} {share:.0%}" for v, share in values.items())
-                 for s, values in model["shares"].items() if values]
-        lines.append(f"  {model['model']}: {'; '.join(parts)}")
-        lines += [f"    {c['day']}: {SETTING_NAMES[c['setting']]} {c['from']} -> {c['to']}" for c in model["changes"]]
-    return lines
-
-
-CALLER_PICKED = "general-purpose"  # its model is whatever the caller asks for
-
-
 def subagent_summary(sub_turns: pd.DataFrame, days: Sequence[str]) -> list[dict[str, Any]]:
     """Each agent type's model shares over the subagent turns of `days`."""
     window = sub_turns[sub_turns["day"].astype(str).isin(list(days))] if not sub_turns.empty else sub_turns
@@ -114,14 +98,3 @@ def subagent_summary(sub_turns: pd.DataFrame, days: Sequence[str]) -> list[dict[
         summary.append({"agent_type": str(agent), "responses": len(group),
                         "models": {str(m): round(float(s), 3) for m, s in group["model"].value_counts(normalize=True).items()}})
     return summary
-
-
-def subagent_lines(summary: list[dict[str, Any]]) -> list[str]:
-    """The report's subagent section, starting with a blank line; empty without subagents."""
-    if not summary:
-        return []
-    lines = ["", "Subagent models over these days (share of responses):"]
-    for agent in summary:
-        label = agent["agent_type"] + (" (model picked by the caller)" if agent["agent_type"] == CALLER_PICKED else "")
-        lines.append(f"  {label}: " + ", ".join(f"{model} {share:.0%}" for model, share in agent["models"].items()))
-    return lines

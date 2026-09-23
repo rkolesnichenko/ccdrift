@@ -13,8 +13,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 import pandas as pd
 
-from ccdrift.settings import settings_lines
-from ccdrift.texts import INCIDENT_METRICS, SHORT_NAMES, incident_line, misses, number
+from ccdrift.texts import INCIDENT_METRICS, SHORT_NAMES, incident_line, misses, number, settings_lines
 
 WIDTH = 720          # the drawing area of a chart, in SVG user units
 HEIGHT = 160         # the metric line's height

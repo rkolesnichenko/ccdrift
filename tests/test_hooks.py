@@ -2,10 +2,10 @@
 
 from datetime import date
 
-from ccdrift.hooks import hook_days, hook_failures, hooks_lines, hooks_summary, judged_hook_runs
+from ccdrift.hooks import hook_days, hook_failures, hooks_summary, judged_hook_runs
 from ccdrift.logs import parse_all
 from ccdrift.state import new_state
-from ccdrift.texts import hook_failure_message
+from ccdrift.texts import hook_failure_message, hooks_lines
 from tests.helpers import DAY, at, hook_days_logs, stop_hook_summary, write
 
 

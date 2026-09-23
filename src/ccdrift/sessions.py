@@ -12,7 +12,7 @@ from typing import Any, Optional, Sequence
 import pandas as pd
 
 from ccdrift.logs import outside_sdk
-from ccdrift.texts import approx, project_path
+from ccdrift.texts import project_path
 
 WINDOW = 3          # the latest sessions judged together
 BASELINE = 10       # sessions before them, at most
@@ -170,9 +170,6 @@ def first_of_each(changes: Sequence[ContextChange], recorded: Sequence[dict] = (
 RECENT_DAYS = 14
 
 
-PROJECTS_IN_REPORT = 5
-
-
 def project_summary(starts: pd.DataFrame, days: Sequence[str]) -> list[dict[str, Any]]:
     """Each project's typical session start over `days`: the median tokens and how many
     sessions it had, largest first. `ccdrift report` prints it, so it names the folders."""
@@ -183,18 +180,6 @@ def project_summary(starts: pd.DataFrame, days: Sequence[str]) -> list[dict[str,
              "median_tokens": float(group["prompt_tokens"].median())}
             for project, group in window.groupby(window["project"].astype(str), sort=False)]
     return sorted(rows, key=lambda row: -row["median_tokens"])
-
-
-def project_lines(summary: list[dict[str, Any]]) -> list[str]:
-    """The report's session-starts-by-project line, starting with a blank line; empty
-    when no project had a session over the days shown."""
-    if not summary:
-        return []
-    shown = [f"{row['path']} ~{approx(row['median_tokens'])} ({row['sessions']} session"
-             f"{'' if row['sessions'] == 1 else 's'})" for row in summary[:PROJECTS_IN_REPORT]]
-    rest = len(summary) - PROJECTS_IN_REPORT
-    return ["", "Session starts by project over these days: " + ", ".join(shown)
-            + (f" and {rest} more" if rest > 0 else "")]
 
 
 def found_changes(judged: pd.DataFrame) -> list[ContextChange]:

@@ -6,7 +6,7 @@ import pandas as pd
 
 from ccdrift.detector import DetectorConfig
 from ccdrift.page import KEY, blocks, chart, escape, points, render, section, table, top, z_strip
-from ccdrift.settings import settings_lines
+from ccdrift.texts import settings_lines
 
 DAYS = ["2026-09-01", "2026-09-02", "2026-09-03"]
 

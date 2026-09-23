@@ -26,6 +26,7 @@ PERSISTENT_DAYS = 30
 # What a tool-loop warning of each stream (see ccdrift.loops) says is happening.
 LOOP_NAMES = {"main": "tool-loop cache misses rising", "subagent": "subagent cache misses rising"}
 
+NOT_LOGGED = "not logged"  # a setting's value on responses that carry none
 SETTING_NAMES = {"cache_tier": "cache tier", "effort": "effort", "speed": "speed", "service_tier": "service tier"}
 TIER_NAMES = {"1h": "1-hour", "5m": "5-minute"}
 
@@ -675,3 +676,69 @@ ABSENT_NAMES = {"agent": "no agent", "skill": "no skill", "plugin": "no plugin",
                 "model": "unknown model", "branch": "no branch"}
 THREAD_NAMES = {True: "subagent", False: "main thread"}
 DETACHED_NAME = "detached HEAD"  # the branch bucket for gitBranch "HEAD": nothing checked out
+
+
+# ---------------------------------------------------------------------------
+# The report's sections from the rules: settings, subagents, projects, hooks, failures
+# ---------------------------------------------------------------------------
+
+def settings_lines(summary: list[dict[str, Any]]) -> list[str]:
+    """The report's settings section, starting with a blank line; empty without models."""
+    if not summary:
+        return []
+    lines = ["", "Settings on the CLI main thread over these days (share of responses):"]
+    for model in summary:
+        parts = [f"{SETTING_NAMES[s]} " + ", ".join(f"{v} {share:.0%}" for v, share in values.items())
+                 for s, values in model["shares"].items() if values]
+        lines.append(f"  {model['model']}: {'; '.join(parts)}")
+        lines += [f"    {c['day']}: {SETTING_NAMES[c['setting']]} {c['from']} -> {c['to']}" for c in model["changes"]]
+    return lines
+
+
+CALLER_PICKED = "general-purpose"  # its model is whatever the caller asks for
+
+
+def subagent_lines(summary: list[dict[str, Any]]) -> list[str]:
+    """The report's subagent section, starting with a blank line; empty without subagents."""
+    if not summary:
+        return []
+    lines = ["", "Subagent models over these days (share of responses):"]
+    for agent in summary:
+        label = agent["agent_type"] + (" (model picked by the caller)" if agent["agent_type"] == CALLER_PICKED else "")
+        lines.append(f"  {label}: " + ", ".join(f"{model} {share:.0%}" for model, share in agent["models"].items()))
+    return lines
+
+
+PROJECTS_IN_REPORT = 5
+
+
+def project_lines(summary: list[dict[str, Any]]) -> list[str]:
+    """The report's session-starts-by-project line, starting with a blank line; empty
+    when no project had a session over the days shown."""
+    if not summary:
+        return []
+    shown = [f"{row['path']} ~{approx(row['median_tokens'])} ({row['sessions']} session"
+             f"{'' if row['sessions'] == 1 else 's'})" for row in summary[:PROJECTS_IN_REPORT]]
+    rest = len(summary) - PROJECTS_IN_REPORT
+    return ["", "Session starts by project over these days: " + ", ".join(shown)
+            + (f" and {rest} more" if rest > 0 else "")]
+
+
+def hooks_lines(summary: Optional[dict[str, Any]]) -> list[str]:
+    """The report's hooks line, starting with a blank line; empty without runs."""
+    if summary is None:
+        return []
+    days = summary["error_days"]
+    errors = "no errors" if days == 0 else f"errors on {days} day{'s' if days != 1 else ''}"
+    median = "" if summary["median_duration_ms"] is None else f", median {summary['median_duration_ms'] / 1000:.1f} s"
+    return ["", f"Hooks over these days: {summary['runs']:,} stop-hook runs, {errors}{median}"]
+
+
+def failure_lines(summary: Optional[dict[str, Any]]) -> list[str]:
+    """The report's failures line, starting with a blank line; empty without failures."""
+    if summary is None:
+        return []
+    parts = [kinds_text(summary["kinds"])] if summary["kinds"] else []
+    if summary["cut"]:
+        parts.append(f"{summary['cut']} response{'' if summary['cut'] == 1 else 's'} cut short")
+    return ["", "Failures over these days: " + ", ".join(parts)]
