@@ -606,9 +606,11 @@ def test_the_json_says_what_share_of_its_input_rate_each_model_charges_for_a_cac
     assert ratios == {"claude-opus-5": 0.1, "claude-opus-5-5": 0.05}
     assert payload["dollars"] == pytest.approx(3.00005 + 2.20004)
     # The ratio is evidence about a price, not a figure of spend, so the terminal view
-    # that reports spend does not carry it.
+    # that reports spend does not carry it. Neither ratio's digits occur anywhere else in
+    # this output, so any rendering of either, "0.05x" as much as "ratio", shows up here.
     run_spend(tmp_path / "logs", state, today=TODAY)
-    assert "ratio" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert not [shown for shown in ("ratio", "0.05", "0.1") if shown in out]
 
 
 def test_the_json_prices_only_the_models_the_window_actually_ran(tmp_path):
@@ -619,6 +621,17 @@ def test_the_json_prices_only_the_models_the_window_actually_ran(tmp_path):
     prices = {**OPUS, "claude-sonnet-5": price(2e-6, 10e-6, rows=12)}
     payload = json.loads(spend_json(turns, ["model"], prices, ["2026-09-01"]))
     assert [row["model"] for row in payload["priced_models"]] == ["claude-opus-5"]
+
+
+def test_the_json_names_no_cache_read_ratio_for_a_price_with_no_input_rate(tmp_path):
+    # The ratio divides by the input rate. A fit returns exactly zero only by an exact
+    # cancellation, but a price built with one can still reach the JSON, and there is no ratio
+    # to report: null, rather than a ZeroDivisionError that takes the whole document down.
+    turns = corpus(tmp_path)
+    prices = {"claude-opus-5": Price(input_rate=0.0, cache_read_rate=0.5e-6, output_rate=25e-6,
+                                     web_search_rate=0.0, residual=0.0, rows=9)}
+    payload = json.loads(spend_json(turns, ["model"], prices, ["2026-09-01"]))
+    assert [(row["model"], row["cache_read_ratio"]) for row in payload["priced_models"]] == [("claude-opus-5", None)]
 
 
 def test_a_branch_bucket_counts_the_project_folders_it_drew_on(tmp_path):

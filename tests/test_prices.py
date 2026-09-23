@@ -97,8 +97,8 @@ def test_a_model_whose_costs_do_not_add_up_is_not_priced():
 def test_a_fit_that_wants_a_negative_price_is_refused():
     # The real failure this guard exists for: on the owner's corpus a free fit returned
     # -$11.58 per Mtok of input for claude-opus-5. Costs generated at a negative input rate
-    # stay positive, because output outweighs it on every record, so this refusal is the
-    # negative-rate guard's and not the one on a total that is not positive.
+    # stay positive, because cache reads and output together outweigh it on every record, so
+    # this refusal is the negative-rate guard's and not the one on a total that is not positive.
     rows = priced(RECORDS[:4], rate_in=-1e-6, read_ratio=-0.5)
     assert all(row["cost_usd"] > 0 for row in rows)
     assert fit_prices(usage(rows)) == {}
@@ -141,19 +141,36 @@ def test_a_record_with_no_cost_drops_from_the_fit_rather_than_the_model():
     assert price.rows == 4 and round(price.input_rate * 1e6, 3) == 5.0
 
 
-def test_a_record_that_left_its_cache_read_count_out_leaves_the_model_unpriced_not_mispriced():
+def test_a_record_that_left_out_a_material_cache_read_count_leaves_the_model_unpriced_not_mispriced():
     # The parser reads a count Claude Code left out of a record as zero before it is stored
     # (logs._num). When the count was not really zero, the record's cost still includes what
     # it stood for, the fit cannot explain it, and the model is refused rather than priced on
     # reads it never saw. The rates the fit wants here are all positive, so this refusal is
-    # the residual bound's, at 2.25%.
+    # the residual bound's, at 2.25%. An omission too small to move the residual past the
+    # bound is priced, by design: that is the tolerance MAX_RESIDUAL exists to allow, and 2,500
+    # reads left out of the fifth record come to 0.58%.
     rows = priced(RECORDS)
     rows[0]["cache_read"] = 0                  # 9,000 reads left out, all of them in its cost
     assert fit_prices(usage(rows)) == {}
+    rows = priced(RECORDS)
+    rows[4]["cache_read"] = 0                  # 2,500 reads left out
+    assert fit_prices(usage(rows))["claude-opus-5"].residual == pytest.approx(0.0058, abs=5e-5)
 
 
 def test_a_fit_reports_how_far_off_it_was():
-    assert fit_prices(usage(priced(RECORDS)))["claude-opus-5"].residual <= MAX_RESIDUAL
+    # The residual cost --json reports beside every price. On exact data it is zero whatever
+    # the code does with it, so one record here costs half a percent more than its counts
+    # explain, and the reported figure must be the L1 residual of the rates actually returned,
+    # recomputed from them independently of the fit.
+    rows = priced(RECORDS)
+    rows[1]["cost_usd"] *= 1.005
+    records = usage(rows)
+    price = fit_prices(records)["claude-opus-5"]
+    charged = price.charge(records["input_tokens"], records["cache_creation"], records["cache_read"],
+                           records["output_tokens"])
+    missed = float((charged - records["cost_usd"]).abs().sum() / records["cost_usd"].sum())
+    assert 0 < price.residual <= MAX_RESIDUAL
+    assert price.residual == pytest.approx(missed)
 
 
 def test_a_cache_write_is_billed_at_its_ratio_and_a_cache_read_at_the_models_own_rate():

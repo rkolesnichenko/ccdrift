@@ -225,10 +225,12 @@ def spend_json(turns: pd.DataFrame, dimensions: Sequence[str], prices: dict[str,
         # so a `dollars` of null can be read against the fit rather than guessed at. The
         # cache-read ratio is part of that evidence since models stopped sharing one:
         # claude-opus-5-5 reads at 0.05x its input rate where the models before it read at
-        # 0.1x. A model whose records carry no input at all is refused as rank-deficient, so
-        # the input rate divided by here is one the fit actually measured.
+        # 0.1x. A model whose records carry no input at all is refused as rank-deficient; an
+        # input rate of exactly zero, which a fit reaches only by an exact cancellation and a
+        # price built by hand can carry, has no ratio, and says so rather than crashing.
         "priced_models": [{"model": model, "residual": fitted[model].residual, "rows": fitted[model].rows,
-                           "cache_read_ratio": round(fitted[model].cache_read_rate / fitted[model].input_rate, 3)}
+                           "cache_read_ratio": round(fitted[model].cache_read_rate / fitted[model].input_rate, 3)
+                           if fitted[model].input_rate > 0 else None}
                           for model in sorted(fitted)],
         "unpriced_models": [{"model": model, "share": share} for model, share in unpriced_models(turns, prices)],
         "dimensions": {d: [{"bucket": row.bucket, "responses": int(row.responses),
