@@ -7,7 +7,7 @@ lands faster than a large one. For anything bigger than a fix, open an issue fir
 
 ccdrift reads Claude Code transcripts, and yours hold your code and prompts. Never put real
 transcript content, paths, session ids or project names in an issue, a PR or a test fixture.
-`ccdrift peek` and `ccdrift report --json` print output that is safe to share.
+`ccdrift peek`, `ccdrift report --json` and `ccdrift cost --json` print output that is safe to share.
 
 ## Running the tests
 
@@ -49,15 +49,18 @@ There is no formatter, linter or type checker, on purpose. Please don't run one:
   to `SCHEMA`.
 - **`ccdrift status --short` stays import-light.** It runs on every status-line refresh and
   must not import pandas or numpy.
-- **`report --json` and `incident draft` emit aggregates only.** `peek` shows text, ids and
-  paths only as their length.
+- **`report --json`, `cost --json` and `incident draft` emit aggregates only.** `peek` shows
+  text, ids and paths only as their length, and a content block as its type and the size of
+  the rest.
 - **`report --html` stays self-contained**: no scripts, no network fetches, everything escaped.
 - **Output is deterministic.** Sort every frame with `kind="stable"` before any positional or
   first/last logic, and seed lab sweeps explicitly.
 - **A new alert kind** needs its own key in `new_state()` in state.py and a suppression rule.
 - **Thresholds are measured, not chosen.** Changing a shipped cutoff means re-running the
-  matching sweep in `lab/` and recording the new number in docs/findings.md. The gate tests in
-  `lab/test_*.py` check that the shipped setting still passes. See lab/README.md.
+  matching sweep in `lab/` and recording the new number in docs/findings.md. Only the sweep,
+  run by hand on real logs, says whether the shipped setting still passes: the gate tests in
+  `lab/test_*.py` exercise each gate's logic on synthetic inputs and stay green either way.
+  See lab/README.md.
 
 ## Pull requests
 
@@ -66,5 +69,6 @@ PRs are squash-merged, so the PR title becomes the commit subject: write it the 
 history reads, as a sentence saying what the change does.
 
 If you use Claude Code, the checked-in `.claude/settings.json` wires two hooks that warn
-(never block) on an em dash, on a heavy import on the status line path, and on a logs.py
-change without a `PARSER_VERSION` bump. They need `jq`.
+(never block) on an em dash, on a heavy import on the status line path, on a copy of the
+sdist's paths that has fallen behind `only-include`, and on a logs.py change without a
+`PARSER_VERSION` bump. They need `jq`.
