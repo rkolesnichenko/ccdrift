@@ -108,6 +108,11 @@ def history_path(state_path: Path) -> Path:
 
 
 def _unusable(path: Path, exc: Exception) -> HistoryError:
+    # SQLite's words for a store another connection held past the wait: nothing is wrong
+    # with it, and moving it aside would drop the rows of transcripts already deleted.
+    if isinstance(exc, sqlite3.OperationalError) and str(exc).endswith("is locked"):
+        return HistoryError(f"Can't use the history store {path}: {exc}. Another ccdrift command is using it; "
+                            "try again once it has finished.")
     return HistoryError(f"Can't use the history store {path}: {exc}. Move it aside to rebuild it "
                         "from the transcripts still on disk.")
 
