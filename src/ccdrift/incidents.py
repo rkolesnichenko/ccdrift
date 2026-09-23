@@ -21,8 +21,8 @@ from ccdrift.detector import DetectorConfig, baseline_bins, bin_metrics, detect,
 from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import first_days_by_version, judged_turns
 from ccdrift.state import load_state
-from ccdrift.texts import (ALERT_TITLES, INCIDENT_METRICS, MOVES, PERSISTENT_DAYS, SHORT_NAMES, approx,
-                           incident_line, incident_message)
+from ccdrift.texts import (ALERT_TITLES, COMMAND_LINES, INCIDENT_LINES, INCIDENT_METRICS, MOVES, PERSISTENT_DAYS,
+                           SHORT_NAMES, approx, incident_line, incident_message)
 
 # A first run stays quiet about flags from weeks ago but covers a week or so
 # without a run.
@@ -167,7 +167,7 @@ def versions_text(turns: pd.DataFrame, days: Sequence[str]) -> list[str]:
         return []
     first_seen = first_days_by_version(turns)
     shares = on_days.value_counts(normalize=True)
-    return [f"{version} (since {str(first_seen[version])[5:]})"
+    return [INCIDENT_LINES["version_since"].format(version=version, since=str(first_seen[version])[5:])
             for version, share in shares.items() if share >= 0.2][:3]
 
 
@@ -232,7 +232,7 @@ def parse_days(text: str) -> tuple[str, str]:
     """START..END as ISO dates; raises ValueError."""
     start, sep, end = text.partition("..")
     if not sep:
-        raise ValueError(f"expected START..END, e.g. 2026-08-16..2026-09-04, not {text!r}")
+        raise ValueError(INCIDENT_LINES["bad_days"].format(text=text))
     return date.fromisoformat(start).isoformat(), date.fromisoformat(end).isoformat()
 
 
@@ -244,13 +244,13 @@ def add_incident(incidents: list[dict], metric: str, start: str, end: str, today
     """Record a past incident by hand, e.g. one from before ccdrift ran, so its days
     stay out of the baseline. Raises ValueError when the days don't fit."""
     if end < start:
-        raise ValueError(f"{end} is before {start}")
+        raise ValueError(INCIDENT_LINES["end_before_start"].format(end=end, start=start))
     if end >= today.isoformat():
-        raise ValueError(f"{end} isn't over yet in UTC; the last complete day is {_yesterday(today)}")
+        raise ValueError(INCIDENT_LINES["not_over"].format(end=end, yesterday=_yesterday(today)))
     for other in incidents:
         if (other["metric"] == metric and other["status"] != "dismissed"
                 and other["start"] <= end and start <= (other["end"] or OPEN_END)):
-            raise ValueError(f"it overlaps the {SHORT_NAMES[metric]} incident from {other['start']}")
+            raise ValueError(INCIDENT_LINES["overlaps"].format(name=SHORT_NAMES[metric], start=other["start"]))
     incident = {"metric": metric, "start": start, "end": end, "status": "recovered", "source": "user",
                 "closed_by": "user", "recovered_from": None, "opened_on": today.isoformat(),
                 "closed_on": today.isoformat(), "versions": [], "cost": 0}
@@ -262,7 +262,7 @@ def close_incident(incidents: list[dict], metric: str, today: date) -> dict:
     """End the open incident as of the last complete day; its days stay out of the baseline."""
     incident = open_incident(incidents, metric)
     if incident is None:
-        raise ValueError(f"no {SHORT_NAMES[metric]} incident is open")
+        raise ValueError(INCIDENT_LINES["none_open"].format(name=SHORT_NAMES[metric]))
     incident.update(status="recovered", closed_by="user", end=max(incident["start"], _yesterday(today)),
                     closed_on=today.isoformat())
     return incident
@@ -275,7 +275,7 @@ def dismiss_incident(incidents: list[dict], metric: str, start: str, today: date
     matching = [i for i in incidents if i["metric"] == metric and i["start"] == start]
     incident = next((i for i in matching if i["status"] != "dismissed"), matching[0] if matching else None)
     if incident is None:
-        raise ValueError(f"no {SHORT_NAMES[metric]} incident starts on {start}")
+        raise ValueError(INCIDENT_LINES["none_starts"].format(name=SHORT_NAMES[metric], start=start))
     incident.update(status="dismissed", closed_by="user",
                     end=incident["end"] or max(incident["start"], _yesterday(today)),
                     closed_on=incident["closed_on"] or today.isoformat())
@@ -288,10 +288,10 @@ def run_list(source: Path, state_path: Path, today: Optional[date] = None,
     try:
         incidents = load_state(state_path)["incidents"]
     except (OSError, ValueError) as exc:
-        print(f"Can't read the state file {state_path}: {exc}", file=sys.stderr)
+        print(COMMAND_LINES["state_unreadable"].format(path=state_path, error=exc), file=sys.stderr)
         return 1
     if not incidents:
-        print("No incidents recorded.")
+        print(INCIDENT_LINES["none_recorded"])
         return 0
     try:
         df = load_history(source, state_path, claim=False).responses
@@ -300,7 +300,7 @@ def run_list(source: Path, state_path: Path, today: Optional[date] = None,
         return 1
     turns = df if df.empty else judged_turns(df, today or datetime.now(timezone.utc).date())
     cfg = cfg or DetectorConfig()
-    print("Incidents, newest first:")
+    print(INCIDENT_LINES["list"])
     for incident in sorted(incidents, key=lambda i: i["start"], reverse=True):
         print(f"  {incident_line(incident, incident_cost(turns, incident, incidents, cfg))}")
     return 0
