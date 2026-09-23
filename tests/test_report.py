@@ -1,6 +1,8 @@
 """ccdrift report: recent daily metrics, their z-scores and flags."""
 
 import json
+import os
+import stat
 from datetime import date
 
 import pytest
@@ -367,6 +369,23 @@ def test_report_html_says_when_it_cannot_write_the_file(tmp_path, capsys):
     assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4),
                       html_path=tmp_path / "missing" / "report.html") == 1
     assert "Can't write" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_report_html_writes_a_page_only_its_owner_can_read(tmp_path, existing):
+    # The page names project folders, as the terminal report does, and says it isn't shareable.
+    main_thread_days(tmp_path / "logs" / "-Users-me-app", [{}] * 3)
+    page = tmp_path / "report.html"
+    if existing:
+        page.write_text("")
+        page.chmod(0o644)
+    umask = os.umask(0o022)
+    try:
+        assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4), html_path=page) == 0
+    finally:
+        os.umask(umask)
+    assert stat.S_IMODE(page.stat().st_mode) == 0o600
+    assert "Users/me/app" in page.read_text()
 
 
 def test_the_html_flag_takes_the_day_view_only_and_not_with_json(tmp_path, capsys):

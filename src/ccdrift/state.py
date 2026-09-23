@@ -11,7 +11,7 @@ import tempfile
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional, TextIO
 
 try:
     import fcntl
@@ -38,6 +38,21 @@ def make_private(path: Path) -> None:
     mode = stat.S_IMODE(path.stat().st_mode)
     if mode & 0o077:
         path.chmod(mode & 0o700)
+
+
+def make_stream_private(stream: TextIO) -> None:
+    """Take everyone's access but its owner's off the file `stream` writes to, when it
+    is a regular file: the check's log, which launchd, systemd and cron recreate with
+    the umask's permissions once it has been deleted. A terminal, a pipe or a stream with
+    no file behind it is left alone, and so is a file this can't change: the check runs
+    on either way."""
+    try:
+        fd = stream.fileno()
+        mode = os.fstat(fd).st_mode
+        if stat.S_ISREG(mode) and stat.S_IMODE(mode) & 0o077:
+            os.fchmod(fd, stat.S_IMODE(mode) & 0o700)
+    except (OSError, ValueError, AttributeError):  # AttributeError: no os.fchmod on Windows before 3.13
+        pass
 
 
 def new_state() -> dict[str, Any]:

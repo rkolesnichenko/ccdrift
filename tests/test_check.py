@@ -2,6 +2,7 @@
 cache metric."""
 
 import os
+import stat
 import subprocess
 import sys
 from datetime import date, datetime, time, timedelta, timezone
@@ -81,6 +82,19 @@ def test_check_alerts_when_it_cannot_run(tmp_path, sent):
     (tmp_path / "logs").mkdir()
     assert check_logs(tmp_path) != 0
     assert sent == ["ccdrift check failed"]
+
+
+def test_the_check_takes_everyone_but_its_owner_off_the_file_its_output_goes_to(tmp_path, monkeypatch):
+    # launchd, systemd and cron recreate a deleted log with the umask's permissions, and
+    # the log holds alert text and error messages that name folders.
+    busy_days(tmp_path / "logs", days=3, per_day=60)
+    log = tmp_path / "check.log"
+    with open(log, "a") as out:
+        log.chmod(0o644)
+        monkeypatch.setattr(sys, "stdout", out)
+        run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4))
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+    assert "ccdrift" in log.read_text()
 
 
 def test_cache_metric_alert_points_to_ccdrift_peek(tmp_path, sent, capsys):
