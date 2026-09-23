@@ -16,7 +16,7 @@ import pandas as pd
 
 from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import no_transcripts_message, outside_sdk
-from ccdrift.prices import Price, billed_tokens, fit_prices
+from ccdrift.prices import Price, fit_prices
 from ccdrift.sessions import SOURCE_PROJECT, project_of
 from ccdrift.texts import DIMENSION_NAMES, approx, project_path, spend_line, unpriced_line
 
@@ -112,6 +112,10 @@ def branch_projects(turns: pd.DataFrame) -> dict[str, int]:
     return {str(name): int(count) for name, count in frame.groupby("branch")["project"].nunique().items()}
 
 
+# The counts Price.charge takes, in its order.
+CHARGED_COUNTS = ("input_tokens", "cache_creation", "cache_read", "output_tokens")
+
+
 def response_dollars(turns: pd.DataFrame, prices: dict[str, Price]) -> pd.Series:
     """What each response cost, NaN where its model has no price, so a bucket holding one
     unpriced response reports no dollars rather than a total that quietly omits it."""
@@ -131,10 +135,7 @@ def response_dollars(turns: pd.DataFrame, prices: dict[str, Price]) -> pd.Series
         rows = models == model
         if not rows.any():
             continue
-        out.loc[rows] = (billed_tokens(turns.loc[rows, "input_tokens"].fillna(0),
-                                       turns.loc[rows, "cache_creation"].fillna(0),
-                                       turns.loc[rows, "cache_read"].fillna(0)) * price.input_rate
-                         + turns.loc[rows, "output_tokens"].fillna(0) * price.output_rate)
+        out.loc[rows] = price.charge(*(turns.loc[rows, name].fillna(0) for name in CHARGED_COUNTS))
     return out
 
 
@@ -221,8 +222,13 @@ def spend_json(turns: pd.DataFrame, dimensions: Sequence[str], prices: dict[str,
         "tokens": total_tokens(turns),
         "dollars": priced_total(turns, prices),
         # Scoped to the models the window spent on, and carrying what each price rests on,
-        # so a `dollars` of null can be read against the fit rather than guessed at.
-        "priced_models": [{"model": model, "residual": fitted[model].residual, "rows": fitted[model].rows}
+        # so a `dollars` of null can be read against the fit rather than guessed at. The
+        # cache-read ratio is part of that evidence since models stopped sharing one:
+        # claude-opus-5-5 reads at 0.05x its input rate where the models before it read at
+        # 0.1x. A model whose records carry no input at all is refused as rank-deficient, so
+        # the input rate divided by here is one the fit actually measured.
+        "priced_models": [{"model": model, "residual": fitted[model].residual, "rows": fitted[model].rows,
+                           "cache_read_ratio": round(fitted[model].cache_read_rate / fitted[model].input_rate, 3)}
                           for model in sorted(fitted)],
         "unpriced_models": [{"model": model, "share": share} for model, share in unpriced_models(turns, prices)],
         "dimensions": {d: [{"bucket": row.bucket, "responses": int(row.responses),

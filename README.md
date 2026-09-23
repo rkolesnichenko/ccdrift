@@ -245,8 +245,9 @@ models with no price whenever anything in the window has one.
 `ccdrift cost --json` withholds project and branch, exactly as `report --json`
 already withholds project folders, and lists them under a `withheld` key rather than
 dropping them without saying so. It carries the evidence behind the money as well: the
-residual and record count of each fitted price under `priced_models`, and what it
-could not price, with that model's share of the window, under `unpriced_models`.
+residual, record count and cache-read ratio of each fitted price under
+`priced_models`, and what it could not price, with that model's share of the window,
+under `unpriced_models`.
 
 Transcripts are read from `$CLAUDE_CONFIG_DIR/projects` when that variable is set,
 otherwise from `~/.claude/projects`. The state file, history and log live in
