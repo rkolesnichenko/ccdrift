@@ -17,7 +17,7 @@ import pandas as pd
 from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import no_transcripts_message, outside_sdk
 from ccdrift.prices import Price, fit_prices
-from ccdrift.sessions import SOURCE_PROJECT, project_of
+from ccdrift.sessions import project_of
 from ccdrift.texts import DIMENSION_NAMES, approx, project_path, spend_line, unpriced_line
 
 DIMENSIONS = ("thread", "agent", "skill", "plugin", "mcp", "model", "project", "branch")
@@ -81,15 +81,7 @@ def buckets(turns: pd.DataFrame, dimension: str) -> pd.Series:
     if dimension == "project":
         # Read back the way report.py's project_lines does, so the same folder reads
         # the same in both commands rather than as its raw, dash-encoded form here.
-        files = turns["source_file"].astype(str)
-        # Pointing --source at one project's own folder leaves every transcript directly
-        # under it, so project_of would make a project of each session and name it with
-        # that session's id, dashes read back as slashes. Nothing in ccdrift prints a
-        # session id. This is sessions.session_starts' `loose` guard: with no project
-        # folder anywhere in the source, the source itself is the one project.
-        if not files.str.contains("/").any():
-            return pd.Series(project_path(SOURCE_PROJECT), index=turns.index, dtype="object")
-        return files.map(project_of).map(project_path)
+        return turns["source_file"].astype(str).map(project_of).map(project_path)
     column, absent = DIMENSION_COLUMNS[dimension]
     values = turns[column] if column in turns else pd.Series(None, index=turns.index, dtype="object")
     named = values.where(values.notna() & (values.astype(str) != ""), absent).astype(str)
