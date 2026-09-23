@@ -10,15 +10,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ccdrift.state import load_state
-from ccdrift.texts import (LOOP_NAMES, change_line, clock_text, context_change_line, cut_short_line,
-                           early_warning_line, failure_line, field_gap_line, hook_failure_line, incident_line,
-                           loop_warning_line, new_field_line)
+from ccdrift.texts import (COMMAND_LINES, LIVE_NAMES, LOOP_NAMES, STATUS_LINES, change_line, clock_text,
+                           context_change_line, cut_short_line, early_warning_line, failure_line, field_gap_line,
+                           hook_failure_line, incident_line, loop_warning_line, new_field_line)
 
 STALE_DAYS = 3
 HOOK_DAYS = 3
 RECENT_DAYS = 30
 RISING_HOURS = 24
-LIVE_NAMES = {"cache_ratio": "cache ratio down", "haiku_fraction": "Haiku share up"}
 
 
 def _when(stamp: str) -> datetime:
@@ -35,52 +34,54 @@ def short_status(state_path: Path, now: datetime) -> str:
         state = load_state(state_path)
         last = state.get("last_run")
         if last is None:
-            return "ccdrift: no check yet"
+            return STATUS_LINES["no_check"]
         if not last["ok"]:
-            return f"ccdrift: check failed {_when(last['started']).strftime('%m-%d %H:%M')}"
+            return STATUS_LINES["failed"].format(at=_when(last["started"]))
         since_ok = now - _when(state["last_ok"])
         if since_ok > timedelta(days=STALE_DAYS):
-            return f"ccdrift: no check for {since_ok.days} days"
-        live = [f"{LIVE_NAMES[i['metric']]} since {i['start'][5:]}"
+            return STATUS_LINES["stale"].format(days=since_ok.days)
+        live = [STATUS_LINES["live"].format(name=LIVE_NAMES[i["metric"]], since=i["start"][5:])
                 for i in state["incidents"] if i["status"] == "open"]
         if live:
-            return f"ccdrift: {'; '.join(live)}"
+            return STATUS_LINES["incidents"].format(incidents="; ".join(live))
         recent = (now.date() - timedelta(days=HOOK_DAYS)).isoformat()
         failing = [f for f in state.get("hook_failures", []) if f["reported_on"] >= recent]
         if failing:
-            return f"ccdrift: hooks failing since {failing[-1]['since'][5:]}"
+            return STATUS_LINES["hooks"].format(since=failing[-1]["since"][5:])
         rising = [w for w in state.get("early_warnings", [])
                   if now - _when(w["at"]) < timedelta(hours=RISING_HOURS)]
         if rising:
-            return f"ccdrift: cache misses rising since {clock_text(rising[-1]['since'], now)}"
+            return STATUS_LINES["rising"].format(since=clock_text(rising[-1]["since"], now))
         for stream in ("main", "subagent"):
             loops = [w for w in state.get("loop_warnings", [])
                      if w["stream"] == stream and now - _when(w["at"]) < timedelta(hours=RISING_HOURS)]
             if loops:
-                return f"ccdrift: {LOOP_NAMES[stream]} since {clock_text(loops[-1]['since'], now)}"
+                return STATUS_LINES["loop"].format(name=LOOP_NAMES[stream], since=clock_text(loops[-1]["since"], now))
         return ""
     except Exception:  # a status line must never show a traceback, whatever the state holds
-        return "ccdrift: can't read state"
+        return STATUS_LINES["unreadable"]
 
 
 def _section(title: str, items: list[str]) -> list[str]:
-    return [f"{title}: none"] if not items else [f"{title}:"] + [f"  {item}" for item in items]
+    if not items:
+        return [STATUS_LINES["empty_section"].format(title=title)]
+    return [STATUS_LINES["section"].format(title=title)] + [f"  {item}" for item in items]
 
 
 def status_report(state: dict[str, Any], now: datetime) -> str:
     last = state.get("last_run")
     if last is None:
-        return "The check hasn't run yet. `ccdrift schedule install` sets it up.\n"
-    outcome = "ok" if last["ok"] else f"failed: {last['error']}"
-    lines = [f"Last check: {_when(last['started']).strftime('%Y-%m-%d %H:%M')}, {outcome}"]
+        return STATUS_LINES["not_run"]
+    outcome = STATUS_LINES["ok"] if last["ok"] else STATUS_LINES["outcome_failed"].format(error=last["error"])
+    lines = [STATUS_LINES["last"].format(at=_when(last["started"]), outcome=outcome)]
     if not last["ok"] and state.get("last_ok"):
-        lines.append(f"Last successful check: {_when(state['last_ok']).strftime('%Y-%m-%d %H:%M')}")
+        lines.append(STATUS_LINES["last_ok"].format(at=_when(state["last_ok"])))
     since = (now.date() - timedelta(days=RECENT_DAYS)).isoformat()
     incidents = state["incidents"]
-    lines += _section("Open incidents", [incident_line(i) for i in incidents if i["status"] == "open"])
-    lines += _section(f"Closed in the last {RECENT_DAYS} days",
+    lines += _section(STATUS_LINES["open"], [incident_line(i) for i in incidents if i["status"] == "open"])
+    lines += _section(STATUS_LINES["closed"].format(days=RECENT_DAYS),
                       [incident_line(i) for i in incidents if i["status"] != "open" and (i["closed_on"] or "") >= since])
-    lines += _section(f"Setting changes in the last {RECENT_DAYS} days",
+    lines += _section(STATUS_LINES["settings"].format(days=RECENT_DAYS),
                       [change_line(c) for c in state["settings"] if c["reported_on"] >= since])
     other = ([context_change_line(c) for c in state.get("context_changes", []) if c["reported_on"] >= since]
              + [hook_failure_line(f) for f in state.get("hook_failures", []) if f["reported_on"] >= since]
@@ -90,7 +91,7 @@ def status_report(state: dict[str, Any], now: datetime) -> str:
              + [loop_warning_line(w) for w in state.get("loop_warnings", []) if w["reported_on"] >= since]
              + [failure_line(f) for f in state.get("failed_requests", []) if f["reported_on"] >= since]
              + [cut_short_line(c) for c in state.get("cut_short", []) if c["reported_on"] >= since])
-    lines += _section(f"Other changes in the last {RECENT_DAYS} days", other)
+    lines += _section(STATUS_LINES["other"].format(days=RECENT_DAYS), other)
     return "\n".join(lines) + "\n"
 
 
@@ -104,7 +105,7 @@ def run_status(state_path: Path, short: bool = False, now: Optional[datetime] = 
     try:
         state = load_state(state_path)
     except (OSError, ValueError) as exc:
-        print(f"Can't read the state file {state_path}: {exc}", file=sys.stderr)
+        print(COMMAND_LINES["state_unreadable"].format(path=state_path, error=exc), file=sys.stderr)
         return 1
     print(status_report(state, now), end="")
     return 0

@@ -11,7 +11,7 @@ from typing import Optional
 
 from ccdrift import __version__
 from ccdrift.state import ccdrift_home
-from ccdrift.texts import DIMENSION_NAMES, METRIC_ARGS
+from ccdrift.texts import COMMAND_LINES, DIMENSION_NAMES, METRIC_ARGS
 
 
 def choose_backend():
@@ -167,19 +167,18 @@ def _schedule(args: argparse.Namespace) -> int:
         return 2
     backend = choose_backend()
     if backend is None:
-        print("ccdrift can't set up a scheduled job on this system. Run this command every hour, or once a day, "
-              "with your system's scheduler:", file=sys.stderr)
+        print(COMMAND_LINES["no_scheduler"], file=sys.stderr)
         print("  " + " ".join(shlex.quote(arg) for arg in job.argv()), file=sys.stderr)
         return 2
     if args.action == "install":
         try:
             install_job(job, backend)
         except ScheduleError as exc:
-            print(f"Nothing installed: {exc}", file=sys.stderr)
+            print(COMMAND_LINES["not_installed"].format(error=exc), file=sys.stderr)
             return 1
-        print(f"Installed a {backend.name} job: `ccdrift check` runs {job.when()}.")
-        print(f"Log: {job.log}")
-        print("A first run has started. Check `ccdrift schedule status` in a minute.")
+        print(COMMAND_LINES["installed"].format(backend=backend.name, when=job.when()))
+        print(COMMAND_LINES["log"].format(log=job.log))
+        print(COMMAND_LINES["first_run"])
         for note in backend.install_notes(job):
             print(note)
         return 0
@@ -187,14 +186,14 @@ def _schedule(args: argparse.Namespace) -> int:
         try:
             removed = backend.remove()
         except ScheduleError as exc:
-            print(f"Nothing removed: {exc}", file=sys.stderr)
+            print(COMMAND_LINES["not_removed"].format(error=exc), file=sys.stderr)
             return 1
-        print("Removed the ccdrift job." if removed else "No ccdrift job was installed.")
+        print(COMMAND_LINES["removed" if removed else "nothing_to_remove"])
         return 0
     try:
         status = backend.status()
     except ScheduleError as exc:
-        print(f"Couldn't read the schedule: {exc}", file=sys.stderr)
+        print(COMMAND_LINES["schedule_unreadable"].format(error=exc), file=sys.stderr)
         return 1
     print("\n".join(status))
     return 0
@@ -214,7 +213,7 @@ def _incident(args: argparse.Namespace) -> int:
         with state_lock(state_path):
             return _change_incident(args, state_path)
     except OSError as exc:
-        print(f"Can't change the state file {state_path}: {exc}", file=sys.stderr)
+        print(COMMAND_LINES["state_unchangeable"].format(path=state_path, error=exc), file=sys.stderr)
         return 1
 
 
@@ -224,7 +223,7 @@ def _change_incident(args: argparse.Namespace, state_path: Path) -> int:
     try:
         state = load_state(state_path)
     except (OSError, ValueError) as exc:
-        print(f"Can't read the state file {state_path}: {exc}", file=sys.stderr)
+        print(COMMAND_LINES["state_unreadable"].format(path=state_path, error=exc), file=sys.stderr)
         return 1
     today = datetime.now(timezone.utc).date()
     metric = METRIC_ARGS[args.metric]
@@ -236,13 +235,12 @@ def _change_incident(args: argparse.Namespace, state_path: Path) -> int:
         else:
             incident = dismiss_incident(state["incidents"], metric, date.fromisoformat(args.start).isoformat(), today)
     except ValueError as exc:
-        print(f"Nothing changed: {exc}", file=sys.stderr)
+        print(COMMAND_LINES["unchanged"].format(error=exc), file=sys.stderr)
         return 2
     save_state(state_path, state)
     if args.action == "add":
         # Its cost comes from the history, which only `incident list` and the check read.
-        print(f"Added {args.metric} {incident['start']}..{incident['end']}. "
-              "`ccdrift incident list` shows what it cost.")
+        print(COMMAND_LINES["added"].format(metric=args.metric, start=incident["start"], end=incident["end"]))
     else:
         print(incident_line(incident))
     return 0
@@ -261,7 +259,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.command == "report":
         from ccdrift.report import run_report
         if args.html is not None and args.by == "version":
-            args._parser.error("--html draws the day view; drop --by version")
+            args._parser.error(COMMAND_LINES["html_by_version"])
         return run_report(_source(args), _state(args), days=args.days, by=args.by, as_json=args.json,
                           html_path=None if args.html is None else args.html.expanduser())
     if args.command == "cost":
