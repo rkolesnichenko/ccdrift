@@ -51,6 +51,13 @@ def test_the_changelog_is_found_from_one_projects_folder_too(tmp_path):
     assert changelog_path(tmp_path / "cfg" / "projects" / "-Users-me-app") == tmp_path / "cfg" / "cache" / "changelog.md"
 
 
+def test_the_changelog_is_not_looked_for_above_the_config_folder(tmp_path):
+    # Above ~/.claude is the home folder, where cache/changelog.md is some other program's.
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "cache" / "changelog.md").write_text(CHANGELOG)
+    assert changelog_path(tmp_path / "cfg" / "projects") == tmp_path / "cfg" / "cache" / "changelog.md"
+
+
 def test_release_notes_keep_lines_on_the_topic_in_version_order(tmp_path):
     (tmp_path / "changelog.md").write_text(CHANGELOG)
     notes = load_changelog(tmp_path / "changelog.md")

@@ -30,8 +30,8 @@ from ccdrift.notify import notify, run_exec
 from ccdrift.replay import REPLAY_SOURCE, first_run, history_message, replay_incidents
 from ccdrift.sessions import context_alerts, context_message, rejudged, session_starts
 from ccdrift.settings import change_message, setting_changes
-from ccdrift.state import (CONTEXT_RULE, ccdrift_home, load_state, make_stream_private, record_run, save_state,
-                           state_lock)
+from ccdrift.state import (CONTEXT_RULE, LOG_FILE, ccdrift_home, load_state, make_stream_private, record_run,
+                           save_state, state_lock)
 from ccdrift.texts import LOOP_NAMES, approx
 
 # kind, title, message, and lines for the log only
@@ -283,7 +283,7 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
     run went, so `ccdrift status` can tell a broken check from a quiet week, and
     stays locked in between (see state.state_lock). A state file that can't be read
     is left as it is. Without `digest`, no weekly summary."""
-    make_stream_private(sys.stdout)
+    make_stream_private(sys.stdout, only=state_path.with_name(LOG_FILE))
     started = now or datetime.now().astimezone()
     stamp = started.strftime("%Y-%m-%d %H:%M")
     notice = state_path.with_name(state_path.name + ".last-failure-notice")

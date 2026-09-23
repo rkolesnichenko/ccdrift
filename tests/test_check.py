@@ -97,6 +97,17 @@ def test_the_check_takes_everyone_but_its_owner_off_the_file_its_output_goes_to(
     assert "ccdrift" in log.read_text()
 
 
+def test_the_check_leaves_a_file_of_the_users_own_its_output_is_sent_to_as_it_is(tmp_path, monkeypatch):
+    # `ccdrift check >> ~/logs/all.log` is the user's file, shared or not as they chose.
+    busy_days(tmp_path / "logs", days=3, per_day=60)
+    log = tmp_path / "all.log"
+    with open(log, "a") as out:
+        log.chmod(0o644)
+        monkeypatch.setattr(sys, "stdout", out)
+        run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4))
+    assert stat.S_IMODE(log.stat().st_mode) == 0o644
+
+
 def test_cache_metric_alert_points_to_ccdrift_peek(tmp_path, sent, capsys):
     # The alert suggested --schema-peek, the lab harness's option, which the
     # installed command doesn't have.

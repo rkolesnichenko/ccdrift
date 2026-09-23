@@ -23,7 +23,7 @@ from ccdrift.logs import judged_subagent_turns, judged_turns, no_transcripts_mes
 from ccdrift.loops import COUNT_COLUMNS, loop_counts
 from ccdrift.sessions import MIN_SESSIONS, project_lines, project_summary, session_starts
 from ccdrift.settings import settings_lines, settings_summary, subagent_lines, subagent_summary
-from ccdrift.state import load_state, make_private
+from ccdrift.state import load_state, make_stream_private
 from ccdrift.texts import (INCIDENT_METRICS, SHORT_NAMES, approx, incident_line, miss_reason_line,
                            misses as _misses, number as _number, version_key)
 
@@ -323,8 +323,11 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
                       today=today, source=source,
                       incident_days={metric: _incident_days(entries, shown, metric) for metric in INCIDENT_METRICS})
         try:
-            make_private(html_path)  # the page names project folders
-            html_path.write_text(page, encoding="utf-8")
+            # The page names project folders. Made private through the open file, so a folder
+            # given by mistake fails to open before its own permissions are touched.
+            with open(html_path, "w", encoding="utf-8") as out:
+                make_stream_private(out)
+                out.write(page)
         except OSError as exc:
             print(f"Can't write {html_path}: {exc}", file=sys.stderr)
             return 1

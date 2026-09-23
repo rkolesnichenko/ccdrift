@@ -388,6 +388,17 @@ def test_report_html_writes_a_page_only_its_owner_can_read(tmp_path, existing):
     assert "Users/me/app" in page.read_text()
 
 
+def test_report_html_given_a_folder_leaves_its_permissions_alone(tmp_path, capsys):
+    # `--html ~` is one slip away from `--html ~/report.html`.
+    main_thread_days(tmp_path / "logs" / "-Users-me-app", [{}] * 3)
+    folder = tmp_path / "site"
+    folder.mkdir()
+    folder.chmod(0o755)
+    assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4), html_path=folder) == 1
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o755
+    assert "Can't write" in capsys.readouterr().err
+
+
 def test_report_html_writes_to_a_path_under_the_home_folder_given_with_a_tilde(tmp_path, monkeypatch):
     # A quoted ~, or --html=~/..., reaches ccdrift without the shell expanding it.
     main_thread_days(tmp_path / "logs" / "-Users-me-app", [{}] * 3)

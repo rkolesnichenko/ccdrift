@@ -252,9 +252,9 @@ models with no price whenever anything in the window has one.
 
 Each model is priced from its own cost records: an input, output and cache-read rate,
 and a web-search rate when it searched, with cache writes fixed at 1.25 times input. A
-fit that doesn't reproduce its records to within 1% is refused, and so is a model with
-fewer than four records, five if it searched, or whose cache reads rest on fewer than
-two.
+fit whose error summed over its records is over 1% of their total cost is refused, and
+so is a model with fewer than four records, five if it searched, or whose cache reads
+rest on fewer than two.
 
 `ccdrift cost --json` withholds project and branch, exactly as `report --json`
 already withholds project folders, and lists them under a `withheld` key rather than
