@@ -44,6 +44,13 @@ def test_the_changelog_sits_in_the_config_folder_next_to_the_transcripts(tmp_pat
     assert changelog_path(tmp_path / "cfg" / "projects") == tmp_path / "cfg" / "cache" / "changelog.md"
 
 
+def test_the_changelog_is_found_from_one_projects_folder_too(tmp_path):
+    # --source pointed at one project's own folder sits a level deeper in the config folder.
+    (tmp_path / "cfg" / "cache").mkdir(parents=True)
+    (tmp_path / "cfg" / "cache" / "changelog.md").write_text(CHANGELOG)
+    assert changelog_path(tmp_path / "cfg" / "projects" / "-Users-me-app") == tmp_path / "cfg" / "cache" / "changelog.md"
+
+
 def test_release_notes_keep_lines_on_the_topic_in_version_order(tmp_path):
     (tmp_path / "changelog.md").write_text(CHANGELOG)
     notes = load_changelog(tmp_path / "changelog.md")

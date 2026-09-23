@@ -43,8 +43,12 @@ NOTE_CHARS = 160
 
 
 def changelog_path(source: Path) -> Path:
-    """The changelog in the Claude Code config folder that holds `source`."""
-    return source.expanduser().parent / "cache" / "changelog.md"
+    """The changelog in the Claude Code config folder that holds `source`: the folder
+    above it for the transcripts folder, or the one above that for one project's own
+    folder. Only those two, so a changelog of something else further up isn't read."""
+    source = source.expanduser()
+    found = [folder / "cache" / "changelog.md" for folder in (source.parent, source.parent.parent)]
+    return next((path for path in found if path.is_file()), found[0])
 
 
 def load_changelog(path: Path) -> dict[str, list[str]]:
