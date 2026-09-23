@@ -151,7 +151,9 @@ def version_key(version: str) -> tuple:
     """Sorts 2.1.99 before 2.1.233, and "unknown" last."""
     if version == "unknown":
         return (1,)
-    return (0, *((0, int(part), "") if part.isdigit() else (1, 0, part) for part in re.split(r"[.+-]", version)))
+    # isascii: str.isdigit also passes "²", which int() refuses.
+    return (0, *((0, int(part), "") if part.isascii() and part.isdigit() else (1, 0, part)
+                 for part in re.split(r"[.+-]", version)))
 
 
 # What each kind of failed request is called after a count: "7 overloaded".

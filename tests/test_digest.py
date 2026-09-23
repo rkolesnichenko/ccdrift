@@ -10,6 +10,7 @@ from ccdrift.state import new_state
 
 EEST = timezone(timedelta(hours=3))
 MONDAY = datetime(2026, 9, 21, 9, 30, tzinfo=EEST)  # ISO week 2026-W39
+SYDNEY = timezone(timedelta(hours=10))
 
 
 @pytest.mark.parametrize("now, digest_week, runs, expected", [
@@ -18,6 +19,9 @@ MONDAY = datetime(2026, 9, 21, 9, 30, tzinfo=EEST)  # ISO week 2026-W39
     (MONDAY, "2026-W39", ["2026-09-18"], None),                             # already sent this week
     (MONDAY, None, ["2026-09-21"], None),                                   # no run before this week
     (MONDAY + timedelta(days=2), "2026-W38", ["2026-09-19"], date(2026, 9, 14)),  # Monday was missed
+    # The week is summed by UTC day, and at 09:30 in Sydney Sunday has half an hour left in UTC.
+    (MONDAY.replace(tzinfo=SYDNEY), None, ["2026-09-18"], None),
+    (MONDAY.replace(hour=10, minute=0, tzinfo=SYDNEY), None, ["2026-09-18"], date(2026, 9, 14)),
 ])
 def test_the_digest_is_due_on_the_first_run_after_monday_9_of_a_week(now, digest_week, runs, expected):
     state = {**new_state(), "runs": runs, **({"digest_week": digest_week} if digest_week else {})}

@@ -18,7 +18,7 @@ from typing import Callable, Mapping, Optional
 
 from ccdrift.logs import CONTROL_CHARS, default_source
 from ccdrift.notify import notify as send_notification
-from ccdrift.state import ccdrift_home, make_private
+from ccdrift.state import LOG_FILE, ccdrift_home, make_private
 
 LAUNCHD_LABEL = "io.github.rkolesnichenko.ccdrift"
 SYSTEMD_UNIT = "ccdrift-check"
@@ -109,7 +109,7 @@ def make_job(at: Optional[str], notify: bool, source: Optional[str] = None, exec
         source_path = None
     home = ccdrift_home(environ).absolute()
     state = home / "check-state.json" if environ.get("CCDRIFT_HOME") else None
-    return Job(python=python, hour=hour, minute=minute, notify=notify, log=home / "check.log",
+    return Job(python=python, hour=hour, minute=minute, notify=notify, log=home / LOG_FILE,
                source=source_path, state=state, exec_command=exec_command, no_digest=no_digest)
 
 

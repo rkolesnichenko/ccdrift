@@ -155,7 +155,7 @@ def test_status_lists_a_new_field_under_other_changes():
 
 def test_status_before_the_first_check_says_how_to_set_it_up(tmp_path, capsys):
     assert run_status(tmp_path / "state.json", now=NOW) == 0
-    assert capsys.readouterr().out == "The daily check hasn't run yet. `ccdrift schedule install` sets it up.\n"
+    assert capsys.readouterr().out == "The check hasn't run yet. `ccdrift schedule install` sets it up.\n"
 
 
 def test_status_shows_a_failing_check_and_when_it_last_worked(tmp_path, capsys):

@@ -1,6 +1,8 @@
 """ccdrift report: recent daily metrics, their z-scores and flags."""
 
 import json
+import os
+import stat
 from datetime import date
 
 import pytest
@@ -201,6 +203,11 @@ def test_versions_sort_by_their_numbers():
         ["2.0.300", "2.1.99", "2.1.233", "unknown"]
 
 
+def test_a_version_part_python_calls_a_digit_but_cant_read_as_a_number_sorts_as_text():
+    # "²" passes str.isdigit and fails int(); a version comes from the transcript as written.
+    assert sorted(["2.1.²", "2.1.9"], key=version_key) == ["2.1.9", "2.1.²"]
+
+
 def test_report_json_holds_aggregates_without_paths_or_session_ids(tmp_path, capsys):
     main_thread_days(tmp_path / "logs", [{}] * 3)
     assert run_report(tmp_path / "logs", tmp_path / "state.json", as_json=True, today=date(2026, 9, 4)) == 0
@@ -362,6 +369,43 @@ def test_report_html_says_when_it_cannot_write_the_file(tmp_path, capsys):
     assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4),
                       html_path=tmp_path / "missing" / "report.html") == 1
     assert "Can't write" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_report_html_writes_a_page_only_its_owner_can_read(tmp_path, existing):
+    # The page names project folders, as the terminal report does, and says it isn't shareable.
+    main_thread_days(tmp_path / "logs" / "-Users-me-app", [{}] * 3)
+    page = tmp_path / "report.html"
+    if existing:
+        page.write_text("")
+        page.chmod(0o644)
+    umask = os.umask(0o022)
+    try:
+        assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4), html_path=page) == 0
+    finally:
+        os.umask(umask)
+    assert stat.S_IMODE(page.stat().st_mode) == 0o600
+    assert "Users/me/app" in page.read_text()
+
+
+def test_report_html_given_a_folder_leaves_its_permissions_alone(tmp_path, capsys):
+    # `--html ~` is one slip away from `--html ~/report.html`.
+    main_thread_days(tmp_path / "logs" / "-Users-me-app", [{}] * 3)
+    folder = tmp_path / "site"
+    folder.mkdir()
+    folder.chmod(0o755)
+    assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4), html_path=folder) == 1
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o755
+    assert "Can't write" in capsys.readouterr().err
+
+
+def test_report_html_writes_to_a_path_under_the_home_folder_given_with_a_tilde(tmp_path, monkeypatch):
+    # A quoted ~, or --html=~/..., reaches ccdrift without the shell expanding it.
+    main_thread_days(tmp_path / "logs" / "-Users-me-app", [{}] * 3)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert main(["report", "--html", "~/report.html", "--source", str(tmp_path / "logs"),
+                 "--state", str(tmp_path / "state.json")]) == 0
+    assert (tmp_path / "report.html").exists()
 
 
 def test_the_html_flag_takes_the_day_view_only_and_not_with_json(tmp_path, capsys):

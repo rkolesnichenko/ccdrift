@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from ccdrift.logs import parse_source
-from ccdrift.sessions import (ContextChange, MIN_BASELINE, WINDOW, context_alerts, context_changes_in,
+from ccdrift.sessions import (SOURCE_PROJECT, ContextChange, MIN_BASELINE, WINDOW, context_alerts, context_changes_in,
                               context_message, first_of_each, found_changes, project_lines, project_of,
                               project_summary, ratio_starts, rejudged, session_starts)
 from ccdrift.texts import context_change_line, project_path
@@ -149,7 +149,14 @@ def starts_in(tmp_path):
 def test_a_transcripts_project_is_its_folder_read_back_as_a_path(folder, path):
     assert project_of(f"{folder}/abc.jsonl") == folder
     assert project_path(folder) == path
-    assert project_of("loose.jsonl") == "loose.jsonl"
+
+
+def test_a_transcript_directly_in_the_source_and_a_sessions_subagents_belong_to_the_source_itself():
+    # Pointed at one project's own folder, a session's subagents sit in a folder named by
+    # its session id, and ccdrift prints no session ids anywhere.
+    assert project_of("0199c3d0-1111.jsonl") == SOURCE_PROJECT
+    assert project_of("0199c3d0-1111/subagents/agent-a1.jsonl") == SOURCE_PROJECT
+    assert project_of("-Users-me-app/0199c3d0-1111/subagents/agent-a1.jsonl") == "-Users-me-app"
 
 
 def test_a_session_is_judged_against_its_own_projects_earlier_level(tmp_path):

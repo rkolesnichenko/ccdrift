@@ -34,7 +34,9 @@ SCHEMA_VERSION = 6
 # 7: each response's cache-miss reason, and the census of the keys its record carries.
 # 8: where each response's work came from, the branch it ran on, and the per-model
 #    usage and cost of each cost-state record.
-PARSER_VERSION = 8
+# 9: an error status past MAX_COUNT reads as missing, and a line nested past the JSON
+#    decoder's limit counts as bad JSON.
+PARSER_VERSION = 9
 
 TEXT_COLUMNS = ("model", "stop_reason", "miss_reason") + ATTRIBUTION_FIELDS + SETTING_FIELDS
 FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction", "opens_transcript")
@@ -106,6 +108,11 @@ def history_path(state_path: Path) -> Path:
 
 
 def _unusable(path: Path, exc: Exception) -> HistoryError:
+    # SQLite's words for a store another connection held past the wait: nothing is wrong
+    # with it, and moving it aside would drop the rows of transcripts already deleted.
+    if isinstance(exc, sqlite3.OperationalError) and str(exc).endswith("is locked"):
+        return HistoryError(f"Can't use the history store {path}: {exc}. Another ccdrift command is using it; "
+                            "try again once it has finished.")
     return HistoryError(f"Can't use the history store {path}: {exc}. Move it aside to rebuild it "
                         "from the transcripts still on disk.")
 

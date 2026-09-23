@@ -11,7 +11,7 @@ import tempfile
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional, TextIO
 
 try:
     import fcntl
@@ -21,6 +21,9 @@ except ImportError:  # Windows, where ccdrift sets up no schedule
 STATE_VERSION = 2
 # The session-start rule a state was written by: 2 judges each project against itself.
 CONTEXT_RULE = 2
+
+
+LOG_FILE = "check.log"  # the scheduled check's log, beside its state file
 
 
 def ccdrift_home(environ: Mapping[str, str] = os.environ) -> Path:
@@ -38,6 +41,25 @@ def make_private(path: Path) -> None:
     mode = stat.S_IMODE(path.stat().st_mode)
     if mode & 0o077:
         path.chmod(mode & 0o700)
+
+
+def make_stream_private(stream: TextIO, only: Optional[Path] = None) -> None:
+    """Take everyone's access but its owner's off the file `stream` writes to, when it
+    is a regular file and, given `only`, that file: the check's log, which launchd,
+    systemd and cron recreate with the umask's permissions once it has been deleted,
+    and not a file of the user's own that they sent the output to. A terminal, a pipe or
+    a stream with no file behind it is left alone, and so is a file this can't change:
+    the check runs on either way."""
+    try:
+        fd = stream.fileno()
+        info = os.fstat(fd)
+        mode = info.st_mode
+        if only is not None and not os.path.samestat(info, os.stat(only)):
+            return
+        if stat.S_ISREG(mode) and stat.S_IMODE(mode) & 0o077:
+            os.fchmod(fd, stat.S_IMODE(mode) & 0o700)
+    except (OSError, ValueError, AttributeError):  # AttributeError: no os.fchmod on Windows before 3.13
+        pass
 
 
 def new_state() -> dict[str, Any]:
@@ -72,12 +94,17 @@ def load_state(path: Path) -> dict[str, Any]:
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
     """Write the state through a temporary file of its own, so a reader never sees
-    half of it and two writers never write to the same one."""
+    half of it and two writers never write to the same one. The file is synced before
+    it replaces the last one: a rename can land before the data it points at, and after
+    a power cut the state would read back empty. (On macOS fsync leaves the drive's own
+    cache unflushed, so this narrows that window rather than closing it.)"""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as handle:
             handle.write(json.dumps(state, indent=1) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)

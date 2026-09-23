@@ -307,8 +307,13 @@ def banner_kind(content: Any) -> str:
 
 
 def _status(value: Any) -> Optional[int]:
-    """An HTTP status as an integer; None when Claude Code logged none."""
-    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    """An HTTP status as an integer; None when Claude Code logged none, or a number no
+    status can be: NaN, Infinity or one past MAX_COUNT, which JSON parsing accepts and
+    SQLite can't store. Comparing first keeps an integer too large for a float from
+    being converted to one."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value) if abs(value) <= MAX_COUNT else None
 
 
 def _cost(value: Any) -> Optional[float]:
@@ -346,7 +351,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
             parsed.lines += 1
             try:
                 obj = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, RecursionError):  # RecursionError: nested past the decoder's limit
                 parsed.bad_json += 1
                 continue
             if not isinstance(obj, dict):
@@ -823,12 +828,29 @@ PEEK_SHOWN = frozenset({"type", "role", "model", "version", "entrypoint", "effor
 
 
 def _peek_value(value: Any, key: Optional[str] = None) -> Any:
-    """`value` with every string not under a PEEK_SHOWN key replaced by its length."""
+    """`value` with every string not under a PEEK_SHOWN key replaced by its length. The
+    blocks of a `content` list keep their type and show the rest by size alone: a tool
+    call's input is whatever the conversation put there, keys included, even under a
+    name shown as logged elsewhere, such as an MCP tool's "type" or "model"."""
     if isinstance(value, dict):
         return {k: _peek_value(v, k) for k, v in value.items()}
+    if isinstance(value, list) and key == "content":
+        return [{k: v if k == "type" else _peek_size(v) for k, v in block.items()} if isinstance(block, dict)
+                else _peek_size(block) for block in value]
     if isinstance(value, list):
         return [_peek_value(v) for v in value]
     if isinstance(value, str) and key not in PEEK_SHOWN:
+        return f"<{len(value)} chars>"
+    return value
+
+
+def _peek_size(value: Any) -> Any:
+    """Text, an object or a list as its size; a number, boolean or null as logged."""
+    if isinstance(value, dict):
+        return f"<{len(value)} keys>"
+    if isinstance(value, list):
+        return f"<{len(value)} items>"
+    if isinstance(value, str):
         return f"<{len(value)} chars>"
     return value
 
@@ -846,16 +868,22 @@ def peek(source: Path) -> bool:
                         continue
                     try:
                         obj = json.loads(line)
-                    except json.JSONDecodeError:
+                    except (json.JSONDecodeError, RecursionError):  # as in parse_file
                         continue
-                    if isinstance(obj, dict) and is_assistant(obj):
-                        # The transcript's path names the project folder, so it isn't shown.
-                        print("# first assistant line, text shown as its length")
-                        print(json.dumps(_peek_value(obj), indent=2)[:4000])
-                        print("\n# resolved fields:")
-                        for logical in CANDIDATES:
-                            print(f"  {logical:16s} -> {_peek_value(field_get(obj, logical), logical)!r}"[:120])
-                        return True
+                    if not (isinstance(obj, dict) and is_assistant(obj)):
+                        continue
+                    try:
+                        shown = json.dumps(_peek_value(obj), indent=2)[:4000]
+                        resolved = [f"  {logical:16s} -> {_peek_value(field_get(obj, logical), logical)!r}"[:120]
+                                    for logical in CANDIDATES]
+                    except RecursionError:  # decoded, but nested deeper than a walk over it can go
+                        continue
+                    # The transcript's path names the project folder, so it isn't shown.
+                    print("# first assistant line, text shown as its length")
+                    print(shown)
+                    print("\n# resolved fields:")
+                    print("\n".join(resolved))
+                    return True
         except OSError:
             continue
     print(no_transcripts_message(source), file=sys.stderr)

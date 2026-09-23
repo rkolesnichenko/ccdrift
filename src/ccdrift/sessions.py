@@ -28,14 +28,19 @@ START_COLUMNS = ["source_file", "project", "timestamp", "day", "version", "promp
 RATIO_COLUMNS = [*START_COLUMNS, "level", "ratio"]
 
 
-SOURCE_PROJECT = ""   # the name every session gets when the source holds no project folder
+SOURCE_PROJECT = ""   # the project of a transcript in no project folder: the source folder itself
 
 
 def project_of(source_file: str) -> str:
     """The project folder a transcript belongs to: the first segment of its path under
-    the transcripts folder. A transcript lying directly in it is its own project."""
-    head, sep, _ = str(source_file).partition("/")
-    return head if sep else str(source_file)
+    the transcripts folder, `<project>/<session>.jsonl` or
+    `<project>/<session>/subagents/<agent>.jsonl`. With --source pointed at one project's
+    own folder, a transcript lies directly in the source or in a session's subagents
+    folder, and its first segment would be a session id, which ccdrift never prints; a
+    project of each session would also leave none with the sessions to be judged. It
+    belongs to the source folder instead, which is SOURCE_PROJECT."""
+    parts = str(source_file).split("/")
+    return SOURCE_PROJECT if len(parts) == 1 or parts[1] == "subagents" else parts[0]
 
 
 def session_starts(responses: pd.DataFrame) -> pd.DataFrame:
@@ -53,14 +58,9 @@ def session_starts(responses: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=START_COLUMNS)
     first = main.sort_values("timestamp", kind="stable").groupby("source_file", sort=False).head(1)
     files = first["source_file"].astype(str)
-    # Pointing --source at one project's own folder leaves every transcript directly under
-    # it, so project_of would make each session a project of its own and none would ever
-    # have the sessions to be judged: a watch that reports nothing and says nothing. With
-    # no project folder anywhere in the source, the source itself is the one project.
-    loose = not files.str.contains("/").any()
     starts = pd.DataFrame({
         "source_file": files,
-        "project": pd.Series(SOURCE_PROJECT, index=files.index) if loose else files.map(project_of),
+        "project": files.map(project_of),
         "timestamp": first["timestamp"],
         "day": first["day"].astype(str),
         "version": first["version"] if "version" in first else None,

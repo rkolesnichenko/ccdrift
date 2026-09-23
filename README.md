@@ -104,13 +104,14 @@ set this in `~/.claude/settings.json`:
 | **ccdrift: subagent cache misses rising** | The same, for turns inside subagents. | Nothing yet. `ccdrift report` shows subagent misses per day; the weekly summary shows whether it lasts. |
 | **ccdrift: setting changed** | The cache tier or effort level a model usually gets on the main thread changed, 2 days in a row. | If you didn't change it, Claude Code's default did. |
 | **ccdrift: session start changed** | Sessions start with at least 25% more or less context than the 10 before them, on 3 in a row. Each session is measured against its own project's recent level, so moving between projects is not a change; the alert then counts the projects ccdrift could compare, those with at least 3 sessions each side of the change, and says whether every one of them moved (Claude Code, or your global config when no new version arrived) or only some did (those projects' CLAUDE.md, MCP servers or skills; when a Claude Code version new to those sessions arrived as well, it names that too rather than choosing between them). | `ccdrift report` names each project's typical session start; `ccdrift report --by version` compares versions. |
+| **ccdrift: a recorded session-start change was dropped** | Once, after an upgrade that changed how session starts are judged: a change recorded under the old rule isn't one under the new. It goes to the log only, never a notification. | Nothing. |
 | **ccdrift: hooks failing** | Stop hooks failed on at least half their runs on 2 active days in a row, after 2 quiet weeks. | Run your hooks by hand; a Claude Code update may have changed their input. |
 | **ccdrift: requests failing** | A day had at least 5 failed requests (API errors Claude Code showed, or requests it retried), at least twice the busiest of the judged days in the 2 weeks before, with at least 5 such days to compare with. Banners blaming your Mac for going to sleep are counted in `ccdrift report` but never alert. | Usually the API or your connection, not your setup. `ccdrift report` shows the days; check status.claude.com. |
 | **ccdrift: responses cut short** | At least 5 responses stopped at the token limit (or were refused) on a day, on at least 0.5% of that day's main-thread responses and 3 times the worst share of the judged days before, a clean fortnight counting as 0.1%. The comparison leaves out the days of the same run, so a regression that starts on a quiet day is still reported. | A Claude Code update may have changed the output limit. `ccdrift report --by version` compares versions. |
 | **ccdrift: Claude Code stopped logging a field** | A new Claude Code version logs a field ccdrift reads on under 10% of responses. | `ccdrift peek` shows what it reads. Please open an issue. |
 | **ccdrift: Claude Code logs a field ccdrift doesn't read** | A Claude Code version first seen in the last 2 weeks carries a field on 90% or more of its responses that under 10% of the responses in the 2 weeks before it carried. It goes to the log, the weekly summary and `ccdrift status`, never a notification: a field arriving breaks nothing. | Nothing. Please open an issue if ccdrift should read it. |
-| **ccdrift can't compute the cache metric** | 3 busy days had no usable cache values. Claude Code's log format has most likely changed. | `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it, with text, ids and paths shown only as their length. Please open an issue with what it prints. |
-| **ccdrift: weekly summary** | Monday's one-line summary of the week before. | Nothing. `--no-digest` turns it off. |
+| **ccdrift can't compute the cache metric** | 3 busy days had no usable cache values. Claude Code's log format has most likely changed. | `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it, with text, ids and paths shown only as their length, and each content block as its type and the size of the rest. Please open an issue with what it prints. |
+| **ccdrift: weekly summary** | A one-line summary of the week before, from the first run after Monday 09:00 once that week's Sunday has also ended in UTC, since days are counted in UTC. | Nothing. `--no-digest` turns it off. |
 | **ccdrift check failed** | The check itself stopped with an error. | `~/.ccdrift/check.log` has the details. |
 
 Each alert is sent once, except responses cut short: a run that deepens to 3 times the
@@ -128,7 +129,8 @@ lasts for weeks is still judged against the days before it began. Against a roll
 baseline, the August regression looked normal again within 8 days, while 5–10% of
 prompt turns kept missing the cache.
 
-The first check replays the history it reads, its last 90 days, day by day and records
+The first check replays the history it reads, its last 90 days, or its last 60 days of
+use when those reach further back, day by day and records
 the incidents it would have followed, with the days it would have opened and closed
 them on, then sends one alert about them, but only when it found any. `ccdrift replay`
 runs the same replay on any install, over all of the history, not just the last 90
@@ -152,8 +154,9 @@ ccdrift replay                                      the incidents the check woul
 ## Status line
 
 `ccdrift status --short` prints one line when something needs attention, and nothing
-otherwise: a failing check, no check for 3 days, an open incident, failing hooks, cache
-misses rising, or tool-loop cache misses rising.
+otherwise: no check yet, a failing check, no check for 3 days, an open incident, failing
+hooks, cache misses rising, or tool-loop cache misses rising on the main thread or in
+subagents. A state file it can't read shows as `ccdrift: can't read state`.
 
 ```console
 $ ccdrift status --short
@@ -163,7 +166,8 @@ ccdrift: cache ratio down since 08-18
 It reads only the state file and always exits 0, so it's cheap and safe to call from
 the command your Claude Code status line runs. `ccdrift status` shows the last run,
 open and recent incidents, setting changes, and other changes: session start, hooks,
-fields and early warnings.
+fields that stopped or started being logged, early warnings, tool-loop warnings, failed
+requests and responses cut short.
 
 ## Alerts elsewhere
 
@@ -201,7 +205,11 @@ ccdrift peek [--source DIR]                                            the field
 ccdrift schedule install [--at HH:MM] [--no-notify] [--exec CMD] [--no-digest] [--source DIR]
 ccdrift schedule remove
 ccdrift schedule status
+ccdrift --version
 ```
+
+`report` covers the last 21 days by default, and every version with `--by version`;
+`cost` covers the last 30 days with responses.
 
 `report --by version` also shows each version's median session start size once it has
 3 or more sessions, where automatic compaction started, up to 2 release note lines
@@ -242,6 +250,12 @@ one is merely unhelpful. A bucket that withholds names the model that made it, i
 every section and not only the by-model one, and a line under the header names the
 models with no price whenever anything in the window has one.
 
+Each model is priced from its own cost records: an input, output and cache-read rate,
+and a web-search rate when it searched, with cache writes fixed at 1.25 times input. A
+fit whose error summed over its records is over 1% of their total cost is refused, and
+so is a model with fewer than four records, five if it searched, or whose cache reads
+rest on fewer than two.
+
 `ccdrift cost --json` withholds project and branch, exactly as `report --json`
 already withholds project folders, and lists them under a `withheld` key rather than
 dropping them without saying so. It carries the evidence behind the money as well: the
@@ -250,8 +264,9 @@ residual, record count and cache-read ratio of each fitted price under
 under `unpriced_models`.
 
 Transcripts are read from `$CLAUDE_CONFIG_DIR/projects` when that variable is set,
-otherwise from `~/.claude/projects`. The state file, history and log live in
-`$CCDRIFT_HOME`, otherwise in `~/.ccdrift`. Schedulers don't see your shell's
+otherwise from `~/.claude/projects`. With `--source` pointed at one project's own
+folder, that folder is read as a single project. The state file, history and log live in
+`$CCDRIFT_HOME`, otherwise in `~/.ccdrift`, readable by you alone. Schedulers don't see your shell's
 variables, so a schedule installed while either one is set keeps its value. Install
 the schedule again after moving or reinstalling ccdrift.
 
@@ -266,8 +281,9 @@ CLI (Agent SDK sessions are your own scripts and are left out) and computes:
 
 It counts failed requests the same way, on the main thread and in subagents alike (a
 request a subagent made is one Claude Code made), and the responses that stop at the
-token limit or refuse. Those are far too rare for a usual rate (13 failures in the six
-weeks this was built on), so each day is judged against the days before it instead.
+token limit or refuse. Those are far too rare for a usual rate (9 failed requests that
+count, 4 sleep banners and 2 responses cut short in the six weeks this was built on), so
+each day is judged against the days before it instead.
 
 Each day is compared with the 14 days before it, leaving out the days of open and
 recovered incidents, using their median and spread, with the spread floored at
@@ -314,6 +330,7 @@ draft`, and no rule turns on them.
 
 - systemd user timers run only while you're logged in, unless lingering is on:
   `loginctl enable-linger $USER`.
+- The timer's units go in `$XDG_CONFIG_HOME/systemd/user`, otherwise in `~/.config/systemd/user`.
 - The timer appends to the log with `StandardOutput=append:`, which needs systemd 240 or newer.
 - A timer catches up on a run missed while the machine was off; cron doesn't.
 - Notifications use `notify-send`. They usually appear from a systemd timer but not

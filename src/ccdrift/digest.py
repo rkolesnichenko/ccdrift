@@ -3,7 +3,7 @@ week before, so a quiet week reads as checked rather than as a check that stoppe
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 
 import pandas as pd
@@ -21,10 +21,14 @@ def digest_week(now: datetime) -> str:
 
 def digest_due(state: dict[str, Any], now: datetime) -> Optional[date]:
     """The Monday starting the week to sum up, when the digest is due: at or after
-    Monday DIGEST_HOUR:00 local of this ISO week, not sent this week, and some earlier
-    run happened before this Monday."""
+    Monday DIGEST_HOUR:00 local of this ISO week and once that week's Sunday has ended
+    in UTC, not sent this week, and some earlier run happened before this Monday. The
+    week is summed by UTC day, and east of UTC+9 Monday 09:00 falls on Sunday there,
+    which the check still counts as in progress."""
     monday = now.date() - timedelta(days=now.weekday())
     if now < datetime.combine(monday, time(DIGEST_HOUR), tzinfo=now.tzinfo):
+        return None
+    if now.astimezone(timezone.utc).date() < monday:
         return None
     if state.get("digest_week") == digest_week(now):
         return None

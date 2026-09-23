@@ -228,6 +228,24 @@ def test_a_source_holding_no_project_folder_is_one_project_and_not_one_per_sessi
     assert "0199c3d0" not in "".join(rows["bucket"])
 
 
+def test_a_session_whose_subagents_have_a_folder_of_their_own_is_still_not_a_project(tmp_path):
+    # Claude Code keeps a session's subagent transcripts in a folder named by its session id.
+    sid = "0199c3d0-1111-2222-3333-444455556666"
+    write(tmp_path / "p" / f"{sid}.jsonl", [line("m1", text(40), ts=at(0), entrypoint="cli", sid=sid)])
+    write(tmp_path / "p" / sid / "subagents" / "agent-a1.jsonl",
+          [line("m2", text(40), ts=at(60), entrypoint="cli", sid=sid, sidechain=True)])
+    rows = spend_rows(spend_turns(parse_source(tmp_path / "p"), TODAY), "project", {})
+    assert rows["bucket"].tolist() == ["the source folder"]
+
+
+def test_a_transcript_beside_project_folders_counts_under_the_source_folder(tmp_path):
+    sid = "0199c3d0-1111-2222-3333-444455556666"
+    write(tmp_path / "logs" / f"{sid}.jsonl", [line("m1", text(40), ts=at(0), entrypoint="cli", sid=sid)])
+    write(tmp_path / "logs" / "-proj-a" / "s2.jsonl", [line("m2", text(40), ts=at(60), entrypoint="cli", sid="s2")])
+    rows = spend_rows(spend_turns(parse_source(tmp_path / "logs"), TODAY), "project", {})
+    assert sorted(rows["bucket"]) == ["/proj/a", "the source folder"]
+
+
 def test_a_repository_with_no_branch_checked_out_is_kept_out_of_the_branch_names(tmp_path, capsys):
     # "HEAD" is what git answers with nothing checked out, so it is not a branch name and
     # must not sort among them. It stays apart from "no branch", which means the field is

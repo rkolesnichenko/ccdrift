@@ -370,6 +370,24 @@ def test_a_store_whose_rows_cant_be_read_says_how_to_rebuild_it(tmp_path):
         load_turns(tmp_path / "logs", tmp_path / "state.json")
 
 
+def test_a_store_another_command_is_writing_says_to_wait_not_to_move_it_aside(tmp_path, monkeypatch):
+    # Moving it aside drops every row of a transcript Claude Code has already deleted.
+    transcripts(tmp_path / "logs")
+    load_turns(tmp_path / "logs", tmp_path / "state.json")
+    writer = sqlite3.connect(tmp_path / "history.sqlite")
+    writer.execute("BEGIN EXCLUSIVE")
+    connect = sqlite3.connect
+    monkeypatch.setattr(sqlite3, "connect", lambda path, timeout: connect(path, timeout=0.05))
+    try:
+        with pytest.raises(HistoryError) as raised:
+            load_turns(tmp_path / "logs", tmp_path / "state.json")
+    finally:
+        writer.rollback()
+        writer.close()
+    assert "is locked" in str(raised.value) and "Move it aside" not in str(raised.value)
+    assert "Another ccdrift command is using it" in str(raised.value)
+
+
 def test_a_store_with_a_schema_version_that_isnt_a_number_is_unusable(tmp_path):
     History(tmp_path / "history.sqlite").close()
     db = sqlite3.connect(tmp_path / "history.sqlite")
