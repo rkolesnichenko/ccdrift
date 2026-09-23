@@ -16,7 +16,7 @@ import pandas as pd
 
 from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import no_transcripts_message, outside_sdk
-from ccdrift.prices import Price, billed_tokens, fit_prices
+from ccdrift.prices import Price, fit_prices
 from ccdrift.sessions import SOURCE_PROJECT, project_of
 from ccdrift.texts import DIMENSION_NAMES, approx, project_path, spend_line, unpriced_line
 
@@ -112,6 +112,10 @@ def branch_projects(turns: pd.DataFrame) -> dict[str, int]:
     return {str(name): int(count) for name, count in frame.groupby("branch")["project"].nunique().items()}
 
 
+# The counts Price.charge takes, in its order.
+CHARGED_COUNTS = ("input_tokens", "cache_creation", "cache_read", "output_tokens")
+
+
 def response_dollars(turns: pd.DataFrame, prices: dict[str, Price]) -> pd.Series:
     """What each response cost, NaN where its model has no price, so a bucket holding one
     unpriced response reports no dollars rather than a total that quietly omits it."""
@@ -131,10 +135,7 @@ def response_dollars(turns: pd.DataFrame, prices: dict[str, Price]) -> pd.Series
         rows = models == model
         if not rows.any():
             continue
-        out.loc[rows] = (billed_tokens(turns.loc[rows, "input_tokens"].fillna(0),
-                                       turns.loc[rows, "cache_creation"].fillna(0),
-                                       turns.loc[rows, "cache_read"].fillna(0)) * price.input_rate
-                         + turns.loc[rows, "output_tokens"].fillna(0) * price.output_rate)
+        out.loc[rows] = price.charge(*(turns.loc[rows, name].fillna(0) for name in CHARGED_COUNTS))
     return out
 
 

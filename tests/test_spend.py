@@ -90,8 +90,8 @@ def cost_record(ts, start, counts):
 
 def money_corpus(tmp_path, unpriced_out=None):
     """Two responses whose dollars are known exactly, beside the cost records the price
-    fit has to recover RATES from: four of them, one more than the two free parameters,
-    with counts that keep the two columns independent. `unpriced_out` adds a subagent
+    fit has to recover RATES from: four of them, one more than the three free parameters,
+    with counts that keep the three columns independent. `unpriced_out` adds a subagent
     response on a model no cost record mentions, so the fit refuses it.
 
     claude-opus-5 on the main thread: 10 input + 1,000,000 output = $25.00005.
@@ -114,6 +114,37 @@ def money_corpus(tmp_path, unpriced_out=None):
           responses + [cost_record(at(600 * i), i + 1, one) for i, one in enumerate(counts)])
 
 
+# Two models reading the cache at different shares of their input rate, as the models Claude
+# Code shipped by 2.1.280 do: claude-opus-5 at $5/$25 per Mtok reading at 0.1x, and
+# claude-opus-5-5 at $4/$20 reading at 0.05x, the rates Claude Code published for it.
+CACHE_RATIOS = {"claude-opus-5": (5e-6, 25e-6, 0.1), "claude-opus-5-5": (4e-6, 20e-6, 0.05)}
+
+
+def two_cache_ratios_corpus(tmp_path):
+    """One main-thread response per model, each reading a million tokens from the cache,
+    beside four cost records per model priced at CACHE_RATIOS. A fit sharing one read ratio
+    between them could price at most one of the two.
+
+    claude-opus-5:   10 input + 1,000,000 read at $0.50/Mtok + 100,000 output = $3.00005.
+    claude-opus-5-5: 10 input + 1,000,000 read at $0.20/Mtok + 100,000 output = $2.20004."""
+    responses = [line("m1", text(40), ts=at(0), entrypoint="cli", out=100_000, cache_read=1_000_000),
+                 line("m2", text(40), ts=at(60), entrypoint="cli", out=100_000, cache_read=1_000_000,
+                      model="claude-opus-5-5")]
+    counts = [{"input": 1_000, "output": 50, "cache_creation": 200, "cache_read": 9_000},
+              {"input": 3_000, "output": 700, "cache_creation": 10, "cache_read": 100},
+              {"input": 50, "output": 5_000, "cache_creation": 900, "cache_read": 40},
+              {"input": 7_000, "output": 20, "cache_creation": 5, "cache_read": 60_000}]
+    records = []
+    for i, one in enumerate(counts):
+        usage = {}
+        for model, (rate_in, rate_out, read_ratio) in CACHE_RATIOS.items():
+            cost = ((one["input"] + 1.25 * one["cache_creation"]) * rate_in
+                    + one["cache_read"] * rate_in * read_ratio + one["output"] * rate_out)
+            usage[model] = {**one, "costUSD": cost}
+        records.append(cost_state(at(600 * i), usage, start=i + 1))
+    write(tmp_path / "proj-a" / "s1.jsonl", responses + records)
+
+
 def five_small_models(tmp_path):
     """One model carrying 98.5% of the window and five carrying 0.3% each: not one of the
     five is material on its own, 1.5% of the window between them."""
@@ -124,10 +155,17 @@ def five_small_models(tmp_path):
     return spend_turns(parse_source(tmp_path / "p"), TODAY)
 
 
-OPUS = {"claude-opus-5": Price(5e-6, 25e-6, 0.0, 0.0, 9)}
+def price(rate_in, rate_out, read_ratio=0.1, rows=9):
+    """A price as fit_prices builds one, reading the cache at `read_ratio` of its input
+    rate: 0.1x, the share every model before claude-opus-5-5 charged."""
+    return Price(input_rate=rate_in, cache_read_rate=rate_in * read_ratio, output_rate=rate_out,
+                 web_search_rate=0.0, residual=0.0, rows=rows)
+
+
+OPUS = {"claude-opus-5": price(5e-6, 25e-6)}
 # Both the models money_corpus records costs for, at the rates RATES states, so a bucket
 # holding a1 alongside an unpriced response has a dollar figure to be priced from.
-OPUS_AND_HAIKU = {**OPUS, "claude-haiku-4-5": Price(1e-6, 5e-6, 0.0, 0.0, 9)}
+OPUS_AND_HAIKU = {**OPUS, "claude-haiku-4-5": price(1e-6, 5e-6)}
 
 
 def test_every_dimension_has_a_heading_and_every_heading_a_dimension():
@@ -256,12 +294,12 @@ def test_a_bucket_blanks_when_its_unpriced_models_are_material_to_that_bucket(tm
     # The subagent bucket holds both claude-opus-5 (a1) and claude-haiku-4-5 (a2), half
     # its tokens each, so pricing only the former must leave the whole bucket unpriced.
     # Half is not a rounding error; the bucket below, where the unpriced share is, is.
-    opus_only = {"claude-opus-5": Price(5e-6, 25e-6, 0.0, 0.0, 9)}
+    opus_only = {"claude-opus-5": price(5e-6, 25e-6)}
     rows = spend_rows(turns, "thread", opus_only)
     assert pd.notna(rows.loc[rows["bucket"] == "main thread", "dollars"].iloc[0])
     assert pd.isna(rows.loc[rows["bucket"] == "subagent", "dollars"].iloc[0])
 
-    both_priced = {**opus_only, "claude-haiku-4-5": Price(1e-6, 5e-6, 0.0, 0.0, 9)}
+    both_priced = {**opus_only, "claude-haiku-4-5": price(1e-6, 5e-6)}
     assert spend_rows(turns, "thread", both_priced)["dollars"].notna().all()
     assert spend_rows(turns, "thread", {})["dollars"].isna().all()
 
@@ -327,7 +365,7 @@ def test_the_total_is_withheld_when_a_material_model_is_unpriced_and_present_whe
     haiku = by_model.loc[by_model["bucket"] == "claude-haiku-4-5", "share"].iloc[0]
     assert haiku >= MATERIAL_SHARE                            # a quarter of the window, not a rounding error
     assert priced_total(turns, OPUS) is None
-    both = {**OPUS, "claude-haiku-4-5": Price(1e-6, 5e-6, 0.0, 0.0, 9)}
+    both = {**OPUS, "claude-haiku-4-5": price(1e-6, 5e-6)}
     # 3 opus responses of 10 input and 100 output, one haiku response of the same.
     assert priced_total(turns, both) == pytest.approx(3 * (10 * 5e-6 + 100 * 25e-6) + (10 * 1e-6 + 100 * 5e-6))
 
@@ -395,6 +433,20 @@ def test_the_dollars_printed_are_the_ones_claude_codes_own_cost_records_imply(tm
     assert payload["dollars"] == pytest.approx(25.00005 + 11.00001)
     dollars = {row["bucket"]: row["dollars"] for row in payload["dimensions"]["model"]}
     assert dollars == {"claude-opus-5": pytest.approx(25.00005), "claude-haiku-4-5": pytest.approx(11.00001)}
+
+
+def test_two_models_reading_the_cache_at_different_ratios_are_each_charged_at_their_own(tmp_path, capsys):
+    # The defect 0.13.0 exists for. 0.12.1 fixed every model's cache reads at 0.1x its input
+    # rate, so claude-opus-5-5's records never fit, it went unpriced, and at half of this
+    # window's tokens it withheld the total. Each model's reads are now billed at its own.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    two_cache_ratios_corpus(tmp_path / "logs")
+    run_spend(tmp_path / "logs", state, today=TODAY)
+    out = capsys.readouterr().out
+    assert "$5.20" in out.splitlines()[0]                      # 3.00005 + 2.20004
+    assert "$3.00" in bucket_line(out, "claude-opus-5") and "$2.20" in bucket_line(out, "claude-opus-5-5")
+    assert "no price" not in out
 
 
 def test_a_rounding_error_model_no_longer_blanks_the_bucket_it_landed_in(tmp_path, capsys):
@@ -546,7 +598,7 @@ def test_the_json_prices_only_the_models_the_window_actually_ran(tmp_path):
     # claude-sonnet-5 was fitted from a cost record of some older session. Listing it as
     # priced beside a dollars of null would say a price was found for spend that is there,
     # when the model is simply absent from the window.
-    prices = {**OPUS, "claude-sonnet-5": Price(2e-6, 10e-6, 0.0, 0.0, 12)}
+    prices = {**OPUS, "claude-sonnet-5": price(2e-6, 10e-6, rows=12)}
     payload = json.loads(spend_json(turns, ["model"], prices, ["2026-09-01"]))
     assert [row["model"] for row in payload["priced_models"]] == ["claude-opus-5"]
 
