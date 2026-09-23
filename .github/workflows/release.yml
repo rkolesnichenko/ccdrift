@@ -32,24 +32,42 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      uv: ${{ steps.uv.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # uv and the build backend come from uv.lock's `release` group, so neither moves
+      # until a Dependabot PR moves it, held back a week like every other pin here.
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: false
+          version-file: uv.lock
+
+      - name: Note the uv version for publish
+        id: uv
+        run: echo "version=$(uv --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
+
+      # hatchling and what it needs, at the versions and hashes the lock holds. With
+      # --require-hashes a build backend release nobody has looked at can't reach the wheel.
+      - name: Build constraints from the lock
+        run: uv export --frozen --only-group release --no-emit-project --format requirements-txt
+          --output-file "$RUNNER_TEMP/build-constraints.txt"
 
       - name: Build
-        run: uv build
+        run: uv build --build-constraint "$RUNNER_TEMP/build-constraints.txt" --require-hashes
 
       # Installs each distribution on its own and runs the command it ships, so a release
       # can't go out missing a module, missing its entry point, or carrying a version the
       # tag doesn't name.
+      # The sdist is built again here, with the same hatchling; this build is thrown away.
       - name: Both distributions install and report the tag's version
+        env:
+          UV_BUILD_CONSTRAINT: ${{ runner.temp }}/build-constraints.txt
         run: |
           tag="${GITHUB_REF_NAME#v}"
           for dist in dist/*.whl dist/*.tar.gz; do
@@ -76,10 +94,12 @@ jobs:
     permissions:
       id-token: write
     steps:
+      # There is no checkout here to read uv.lock from, so the build job passes its version on.
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: false
+          version: ${{ needs.build.outputs.uv }}
 
       - name: Download distributions artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

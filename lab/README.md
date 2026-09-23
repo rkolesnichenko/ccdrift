@@ -28,8 +28,10 @@ uv run --group lab python lab/harness.py --sweep effort --thinking logged --inci
 # Turn latency: day-to-day spread and the smallest slowdown caught
 uv run --group lab python -m lab.latency --incident 2026-08-16..2026-09-04
 
-# G2: session-start size per version, and whether its alerts would be sound
+# G2: session-start size per version, and whether its alerts would be sound;
+# --sweep-spread measures where MAX_SPREAD belongs instead, reading no logs
 uv run --group lab python -m lab.session_start
+uv run --group lab python -m lab.session_start --sweep-spread
 
 # G3: an early warning on cache misses: false alarms, time to catch, the real regression
 uv run --group lab python -m lab.early_warning --incident 2026-08-16..2026-09-04
@@ -40,8 +42,9 @@ uv run --group lab python -m lab.loop_cache --incident 2026-08-16..2026-09-04
 # G7: do built-in subagents keep one model?
 uv run --group lab python -m lab.subagent_models
 
-# G10 and G11: do the failure rules stay quiet on a real history and catch a planted
-# burst, a single bad day for G10, a three-day run of them for G11?
+# G10, G11 and G13: do the failure rules stay quiet on a real history and catch a planted
+# burst, a single bad day for G10, a three-day run of them for G11, and a cut-short run
+# that deepens, reported again, for G13? G13 has no test in lab/test_*.py.
 uv run --group lab python -m lab.failures
 
 # G12: does judging each project against itself stop a move between projects from
@@ -50,4 +53,5 @@ uv run --group lab python -m lab.context
 ```
 
 `--help` lists every option, including `--main-thread-only`, `--since`, `--until` and
-the detector settings.
+the detector settings, and for `lab.failures` and `lab.context`, `--today`, before which
+the days read count as complete (default: today).

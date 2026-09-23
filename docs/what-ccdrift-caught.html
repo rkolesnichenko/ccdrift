@@ -611,7 +611,7 @@ footer {
     tip.querySelector(".tip-date").textContent = fmtLong.format(utc(r.d)) + (r.f ? " · flagged" : "");
     tip.querySelector('[data-k="r"]').textContent = r.r.toFixed(3);
     tip.querySelector('[data-k="n"]').textContent = String(r.n);
-    tip.querySelector('[data-k="z"]').textContent = r.z == null ? "—" : signed(r.z);
+    tip.querySelector('[data-k="z"]').textContent = r.z == null ? "–" : signed(r.z);
     tip.querySelector('[data-k="zl"]').textContent = r.z == null ? "no score yet" : (r.z <= -3 ? "z-score, past the cutoff" : "z-score");
     tip.hidden = false;
     const tw = tip.offsetWidth;
@@ -721,7 +721,7 @@ footer {
   const tbody = document.getElementById("daily-rows");
   DAILY.forEach(r => {
     const tr = document.createElement("tr");
-    const cells = [fmtShort.format(utc(r.d)), r.r.toFixed(3), String(r.n), r.z == null ? "—" : signed(r.z), r.f ? "flagged" : ""];
+    const cells = [fmtShort.format(utc(r.d)), r.r.toFixed(3), String(r.n), r.z == null ? "–" : signed(r.z), r.f ? "flagged" : ""];
     cells.forEach((value, j) => {
       const cell = document.createElement(j ? "td" : "th");
       if (j === 0) cell.scope = "row"; else if (j < 4) cell.className = "num";
