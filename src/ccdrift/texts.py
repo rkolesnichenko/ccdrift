@@ -984,3 +984,35 @@ def draft_text(facts: Mapping[str, Any]) -> str:
                         + "\n".join(f"- {version}: {text}" for version, text in facts["notes"]))
     sections += [_draft_environment(facts["environment"]), _draft_method(facts["method"])]
     return "\n\n".join([title, *sections]) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# ccdrift incident and ccdrift replay
+# ---------------------------------------------------------------------------
+
+INCIDENT_LINES = {"version_since": "{version} (since {since})",
+                  "bad_days": "expected START..END, e.g. 2026-08-16..2026-09-04, not {text!r}",
+                  "end_before_start": "{end} is before {start}",
+                  "not_over": "{end} isn't over yet in UTC; the last complete day is {yesterday}",
+                  "overlaps": "it overlaps the {name} incident from {start}",
+                  "none_open": "no {name} incident is open",
+                  "none_starts": "no {name} incident starts on {start}",
+                  "none_recorded": "No incidents recorded.",
+                  "list": "Incidents, newest first:"}
+
+REPLAY_LINES = {"recorded": "recorded",
+                "dismissed": "dismissed",
+                "overlap": "{label}: {incidents}",
+                "overlap_item": "{name} {start}..{end}",
+                "now": "now",
+                "persistent": "not recorded: after {days} days the check takes the new level as normal, "
+                              "so its days need no record",
+                "open": "not recorded: `ccdrift incident add {name} {start}..{end}` records its days so far",
+                "closed": "not recorded: `ccdrift incident add {name} {start}..{end}` records it",
+                "nothing": "Nothing to replay: no complete UTC day with main-thread activity yet.",
+                "header": "Replaying the check day by day from {first} to {today} (UTC) on an empty state, "
+                          "incidents only.",
+                "quiet": "Nothing is recorded and no alert is sent.",
+                "event": "{day}  {title}: {message}",
+                "none": "No incidents: the check would have sent no incident alert over these days.",
+                "found": "Incidents the replay found:"}
