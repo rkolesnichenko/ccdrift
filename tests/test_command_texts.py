@@ -51,14 +51,15 @@ def linked_tree(module: str) -> ast.AST:
 
 
 @pytest.mark.parametrize("module", ["cli.py", "status.py", "report.py", "spend.py", "schedule.py", "draft.py",
-                                    "incidents.py", "replay.py", "page.py", "state.py", "notify.py"])
+                                    "incidents.py", "replay.py", "page.py", "state.py", "notify.py", "check.py",
+                                    "logs.py"])
 def test_every_line_a_command_uses_exists_and_gets_exactly_its_slots(module):
     # A line is looked up by name and filled by keyword, so a misspelt name or slot would
     # fail only when that line is printed, which some error paths rarely are.
     tables = {name: getattr(texts, name)
               for name in ("STATUS_LINES", "COMMAND_LINES", "REPORT_LINES", "COST_LINES", "SCHEDULE_LINES",
                            "DRAFT_LINES", "INCIDENT_LINES", "REPLAY_LINES", "PAGE_LINES", "STATE_LINES",
-                           "NOTIFY_LINES")}
+                           "NOTIFY_LINES", "CHECK_LINES", "LOG_LINES")}
     used = 0
     for node in ast.walk(linked_tree(module)):
         if not (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id in tables):
@@ -75,19 +76,20 @@ def test_every_line_a_command_uses_exists_and_gets_exactly_its_slots(module):
 
 @pytest.mark.parametrize("module", ["status.py", "report.py", "spend.py", "settings.py", "sessions.py", "hooks.py",
                                     "failures.py", "schedule.py", "draft.py", "incidents.py", "replay.py", "page.py",
-                                    "state.py", "notify.py"])
+                                    "state.py", "notify.py", "check.py", "logs.py"])
 def test_modules_that_print_through_texts_write_no_words_of_their_own(module):
     # report and cost build their output into lists before printing it, so what they say
     # can't be told from the calls that print it: here no string but a docstring has words.
-    # Module constants in schedule.py, page.py and notify.py are the exception: the crontab
-    # marker, the unit files and what launchctl and crontab print, the page's CSS and the
-    # AppleScript a notification runs are formats other programs read, not ccdrift's words.
+    # Module constants in schedule.py, page.py, notify.py and logs.py are the exception: the
+    # crontab marker, the unit files and what launchctl and crontab print, the page's CSS, the
+    # AppleScript a notification runs and the banners Claude Code writes are formats other
+    # programs read or write, not ccdrift's words.
     # So is markup in page.py: a piece of an f-string that is only tags once they are cut out.
     tree = ast.parse((SRC / module).read_text())
     allowed = {id(node.body[0].value) for node in ast.walk(tree)
                if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)) and node.body
                and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant)}
-    if module in ("schedule.py", "page.py", "notify.py"):
+    if module in ("schedule.py", "page.py", "notify.py", "logs.py"):
         allowed |= {id(part) for node in tree.body if isinstance(node, ast.Assign)
                     and all(isinstance(target, ast.Name) and target.id.isupper() for target in node.targets)
                     for part in ast.walk(node.value)}

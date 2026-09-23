@@ -19,15 +19,15 @@ from ccdrift.history import HistoryError, load_history
 from ccdrift.failures import failure_counts, failure_summary, judged_failures
 from ccdrift.hooks import hooks_summary, judged_hook_runs
 from ccdrift.incidents import exclusions, incident_cost
-from ccdrift.logs import judged_subagent_turns, judged_turns, no_transcripts_message, outside_sdk
+from ccdrift.logs import judged_subagent_turns, judged_turns, outside_sdk
 from ccdrift.loops import COUNT_COLUMNS, loop_counts
 from ccdrift.sessions import MIN_SESSIONS, project_summary, session_starts
 from ccdrift.settings import settings_summary, subagent_summary
 from ccdrift.state import load_state, make_stream_private
 from ccdrift.texts import (COMMAND_LINES, DAY_TABLE, INCIDENT_METRICS, REPORT_LINES, SHORT_NAMES, VERSION_TABLE,
                            failure_lines, hooks_lines, incident_line, miss_reason_line, misses as _misses,
-                           number as _number, project_lines, settings_lines, size_text, subagent_lines, table_header,
-                           table_row, version_key)
+                           no_transcripts_message, number as _number, project_lines, settings_lines, size_text,
+                           subagent_lines, table_header, table_row, version_key)
 
 COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", *COUNT_COLUMNS, "flagged"]
 VERSION_COLUMNS = ["version", "first_day", "last_day", "responses", "prompt_turns", "cache_ratio",
