@@ -307,8 +307,13 @@ def banner_kind(content: Any) -> str:
 
 
 def _status(value: Any) -> Optional[int]:
-    """An HTTP status as an integer; None when Claude Code logged none."""
-    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    """An HTTP status as an integer; None when Claude Code logged none, or a number no
+    status can be: NaN, Infinity or one past MAX_COUNT, which JSON parsing accepts and
+    SQLite can't store. Comparing first keeps an integer too large for a float from
+    being converted to one."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value) if abs(value) <= MAX_COUNT else None
 
 
 def _cost(value: Any) -> Optional[float]:

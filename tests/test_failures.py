@@ -32,6 +32,15 @@ def test_an_error_banner_is_kept_as_its_kind_and_status_without_its_text(tmp_pat
     assert not any("API Error" in str(value) for value in row.values)
 
 
+@pytest.mark.parametrize("status", [float("inf"), float("nan"), 1e300, 2**70, 10**400])
+def test_an_error_status_no_http_status_can_be_reads_as_none(tmp_path, status):
+    # JSON parsing accepts Infinity, NaN and integers of any size; SQLite stores none of them.
+    banner = api_error(at(0), kind="overloaded", version="2.1.226")
+    banner["apiErrorStatus"] = status
+    failures = parsed_failures(tmp_path, [banner])
+    assert pd.isna(failures.iloc[0]["status"])
+
+
 def test_a_retry_record_counts_and_the_no_response_stub_doesnt(tmp_path):
     failures = parsed_failures(tmp_path, [retry_record(at(0), version="2.1.226"), no_response_stub(at(60))])
     assert list(failures["kind"]) == ["retry"]

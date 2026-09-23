@@ -201,6 +201,11 @@ def test_versions_sort_by_their_numbers():
         ["2.0.300", "2.1.99", "2.1.233", "unknown"]
 
 
+def test_a_version_part_python_calls_a_digit_but_cant_read_as_a_number_sorts_as_text():
+    # "²" passes str.isdigit and fails int(); a version comes from the transcript as written.
+    assert sorted(["2.1.²", "2.1.9"], key=version_key) == ["2.1.9", "2.1.²"]
+
+
 def test_report_json_holds_aggregates_without_paths_or_session_ids(tmp_path, capsys):
     main_thread_days(tmp_path / "logs", [{}] * 3)
     assert run_report(tmp_path / "logs", tmp_path / "state.json", as_json=True, today=date(2026, 9, 4)) == 0

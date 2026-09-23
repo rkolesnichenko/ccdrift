@@ -34,7 +34,9 @@ SCHEMA_VERSION = 6
 # 7: each response's cache-miss reason, and the census of the keys its record carries.
 # 8: where each response's work came from, the branch it ran on, and the per-model
 #    usage and cost of each cost-state record.
-PARSER_VERSION = 8
+# 9: an error status past MAX_COUNT reads as missing, and a line nested past the JSON
+#    decoder's limit counts as bad JSON.
+PARSER_VERSION = 9
 
 TEXT_COLUMNS = ("model", "stop_reason", "miss_reason") + ATTRIBUTION_FIELDS + SETTING_FIELDS
 FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction", "opens_transcript")
