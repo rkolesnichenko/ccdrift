@@ -1,3 +1,3 @@
 """ccdrift: a daily check for silent changes in Claude Code, read from local session logs."""
 
-__version__ = "0.12.1"
+__version__ = "0.13.0"
