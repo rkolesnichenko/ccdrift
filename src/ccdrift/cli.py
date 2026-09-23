@@ -27,7 +27,7 @@ def _add_source(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_state(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--state", help="the daily check's state file "
+    parser.add_argument("--state", help="the check's state file "
                         "(default: check-state.json in $CCDRIFT_HOME, otherwise in ~/.ccdrift)")
 
 
@@ -60,8 +60,9 @@ def _day(text: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ccdrift",
-        description="A check for silent changes in Claude Code's prompt caching, Haiku use, settings, context "
-                    "and hooks, read from your local session logs.")
+        description="A check for silent changes in Claude Code's prompt caching, Haiku use, settings, context, "
+                    "hooks, failed requests and logged fields, with where the tokens went, read from your local "
+                    "session logs.")
     parser.add_argument("--version", action="version", version=f"ccdrift {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
@@ -106,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="one line when something needs attention, nothing otherwise (for a status line)")
     _add_state(status)
 
-    incident = commands.add_parser("incident", help="list incidents, or add, close or dismiss one")
+    incident = commands.add_parser("incident", help="list incidents, add, close or dismiss one, or draft an issue about one")
     incident_actions = incident.add_subparsers(dest="action", required=True, metavar="ACTION")
     list_action = incident_actions.add_parser("list", help="every incident, newest first, with what it cost")
     _add_source(list_action)

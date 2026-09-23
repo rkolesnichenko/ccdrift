@@ -70,7 +70,7 @@ def _section(title: str, items: list[str]) -> list[str]:
 def status_report(state: dict[str, Any], now: datetime) -> str:
     last = state.get("last_run")
     if last is None:
-        return "The daily check hasn't run yet. `ccdrift schedule install` sets it up.\n"
+        return "The check hasn't run yet. `ccdrift schedule install` sets it up.\n"
     outcome = "ok" if last["ok"] else f"failed: {last['error']}"
     lines = [f"Last check: {_when(last['started']).strftime('%Y-%m-%d %H:%M')}, {outcome}"]
     if not last["ok"] and state.get("last_ok"):
