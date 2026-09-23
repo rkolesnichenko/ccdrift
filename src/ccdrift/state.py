@@ -87,12 +87,16 @@ def load_state(path: Path) -> dict[str, Any]:
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
     """Write the state through a temporary file of its own, so a reader never sees
-    half of it and two writers never write to the same one."""
+    half of it and two writers never write to the same one. The file reaches the disk
+    before it replaces the last one: a rename can land before the data it points at,
+    and after a power cut the state would read back empty."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as handle:
             handle.write(json.dumps(state, indent=1) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)

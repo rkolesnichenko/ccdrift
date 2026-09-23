@@ -95,3 +95,24 @@ def test_successful_runs_keep_their_local_dates_the_newest_14():
         record_run(state, started + timedelta(days=day, minutes=10), None)
     record_run(state, started + timedelta(days=16), "RuntimeError: no transcripts")
     assert state["runs"] == [f"2026-09-{day:02d}" for day in range(3, 17)]
+
+
+def test_the_state_reaches_the_disk_before_it_replaces_the_last_one(tmp_path, monkeypatch):
+    # A rename can reach the disk before the data it points at: after a power cut the
+    # state would read back empty, and load_state refuses it on every run from then on.
+    calls = []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def fsync(fd):
+        calls.append("fsync" if os.fstat(fd).st_size > 0 else "fsync of nothing written yet")
+        real_fsync(fd)
+
+    def replace(src, dst):
+        calls.append("replace")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "replace", replace)
+    save_state(tmp_path / "state.json", new_state())
+    assert calls[-2:] == ["fsync", "replace"]
+    assert load_state(tmp_path / "state.json") == new_state()
