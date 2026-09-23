@@ -40,6 +40,9 @@ ccdrift = "ccdrift.cli:main"
 [dependency-groups]
 dev = ["pytest"]
 lab = ["matplotlib"]
+# The release build's own tools, pinned by uv.lock so Dependabot moves them: the uv release.yml
+# installs, and the build backend with its hashes (see release.yml).
+release = ["uv", "hatchling>=1.27"]
 
 [tool.hatch.version]
 path = "src/ccdrift/__init__.py"
