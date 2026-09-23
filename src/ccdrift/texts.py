@@ -614,3 +614,64 @@ COMMAND_LINES = {"no_scheduler": "ccdrift can't set up a scheduled job on this s
                  "unchanged": "Nothing changed: {error}",
                  "added": "Added {metric} {start}..{end}. `ccdrift incident list` shows what it cost.",
                  "html_by_version": "--html draws the day view; drop --by version"}
+
+
+# ---------------------------------------------------------------------------
+# ccdrift report
+# ---------------------------------------------------------------------------
+
+REPORT_LINES = {"days": "Last {days} complete UTC days with main-thread activity.",
+                "rule": "Flagged once {bins} of any {window} days in a row pass the cutoff: "
+                        "z <= -{cache:.1f} for the cache ratio, z >= +{haiku:.1f} for Haiku share.",
+                "versions": "Complete UTC days with main-thread activity, by Claude Code version.",
+                "miss": "A miss is a new-prompt turn that reads less than half its input from the cache.",
+                "loop_miss": "A loop miss is a tool-loop turn that reads less than half of what the response "
+                             "before it had cached.",
+                "release_note": "    release notes: {text}",
+                "version_reasons": "    why the cache missed: {reasons}",
+                "reasons": "Why the cache missed, as Claude Code recorded it: {reasons}",
+                "incidents": "Incidents:",
+                "no_incidents": "Incidents: none yet",
+                "legacy_head": "Flags reported before ccdrift followed incidents:",
+                "legacy": "  {label} from {day}",
+                "page_by": "The page draws the day view; it has nothing to draw for by={by!r}.",
+                "page_and_json": "The page and JSON are one output each; ask for one of them.",
+                "unwritable": "Can't write {path}: {error}",
+                "wrote": "wrote {path}"}
+
+# Each table's columns: heading, then alignment and width.
+DAY_TABLE = (("day", "<10"), ("responses", ">9"), ("cache ratio", ">11"), ("z", ">5"), ("haiku share", ">11"),
+             ("z", ">5"), ("loop misses", ">11"), ("subagent misses", ">15"), ("flagged", ""))
+VERSION_TABLE = (("version", "<11"), ("first day", "<10"), ("last day", "<10"), ("responses", ">9"),
+                 ("prompt turns", ">12"), ("cache ratio", ">11"), ("misses", ">6"), ("loop misses", ">11"),
+                 ("subagent misses", ">15"), ("haiku share", ">11"), ("session start", ">13"), ("compacts at", ">11"))
+
+
+def table_row(columns: Sequence[tuple[str, str]], cells: Sequence[Any]) -> str:
+    """One line of a report table: each cell aligned to its column, two spaces apart."""
+    return "  ".join(format(cell, spec) for (_, spec), cell in zip(columns, cells)).rstrip()
+
+
+def table_header(columns: Sequence[tuple[str, str]]) -> str:
+    return table_row(columns, [heading for heading, _ in columns])
+
+
+def size_text(value: float) -> str:
+    """A token count as the version table prints it: "~130k", or "-" when there is none."""
+    return "-" if math.isnan(value) else approx(value)
+
+
+# ---------------------------------------------------------------------------
+# ccdrift cost
+# ---------------------------------------------------------------------------
+
+COST_LINES = {"window": "{days} complete UTC days, {tokens} tokens{money}.",
+              "money": ", ${total:,.2f}",
+              "every": "Every section below accounts for all of them; a response can appear in more than one section.",
+              "by": "By {name}"}
+
+# What a response is called in a dimension that doesn't name it, and the two threads.
+ABSENT_NAMES = {"agent": "no agent", "skill": "no skill", "plugin": "no plugin", "mcp": "no MCP server",
+                "model": "unknown model", "branch": "no branch"}
+THREAD_NAMES = {True: "subagent", False: "main thread"}
+DETACHED_NAME = "detached HEAD"  # the branch bucket for gitBranch "HEAD": nothing checked out

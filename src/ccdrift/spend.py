@@ -18,7 +18,8 @@ from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import no_transcripts_message, outside_sdk
 from ccdrift.prices import Price, fit_prices
 from ccdrift.sessions import project_of
-from ccdrift.texts import DIMENSION_NAMES, approx, project_path, spend_line, unpriced_line
+from ccdrift.texts import (ABSENT_NAMES, COST_LINES, DETACHED_NAME, DIMENSION_NAMES, THREAD_NAMES, approx,
+                           project_path, spend_line, unpriced_line)
 
 DIMENSIONS = ("thread", "agent", "skill", "plugin", "mcp", "model", "project", "branch")
 TOKEN_COLUMNS = ("input_tokens", "output_tokens", "cache_creation", "cache_read")
@@ -29,14 +30,14 @@ TOKEN_COLUMNS = ("input_tokens", "output_tokens", "cache_creation", "cache_read"
 # client.
 PRIVATE_DIMENSIONS = ("project", "branch")
 
-# The column each dimension groups by, and what a response the dimension does not name
-# is called. Every response falls in exactly one bucket, so a dimension's shares sum to 1.
-DIMENSION_COLUMNS = {"agent": ("agent_type", "no agent"), "skill": ("attribution_skill", "no skill"),
-                     "plugin": ("attribution_plugin", "no plugin"), "mcp": ("attribution_mcp", "no MCP server"),
-                     "model": ("model", "unknown model"), "branch": ("git_branch", "no branch")}
+# The column each dimension groups by. A response the dimension does not name falls in the
+# bucket texts.ABSENT_NAMES calls it, so every response is in exactly one bucket and a
+# dimension's shares sum to 1.
+DIMENSION_COLUMNS = {"agent": "agent_type", "skill": "attribution_skill", "plugin": "attribution_plugin",
+                     "mcp": "attribution_mcp", "model": "model", "branch": "git_branch"}
 
-# What Claude Code writes to gitBranch when no branch is checked out, and what ccdrift
-# calls it. `git rev-parse --abbrev-ref HEAD` answers "HEAD" in that state. Confirmed on
+# What Claude Code writes to gitBranch when no branch is checked out; ccdrift calls it
+# texts.DETACHED_NAME. `git rev-parse --abbrev-ref HEAD` answers "HEAD" in that state. Confirmed on
 # 2026-09-22 over the owner's own corpus rather than synthetically: gitBranch is live
 # per-line state and not a session constant, changing within one transcript and back
 # (tool-loop-cache -> HEAD -> tool-loop-cache), and the one session that detached its own
@@ -46,7 +47,6 @@ DIMENSION_COLUMNS = {"agent": ("agent_type", "no agent"), "skill": ("attribution
 # project folders, 1.5% of the window, while "no branch" was empty, since gitBranch is on
 # every response.
 DETACHED_VALUE = "HEAD"
-DETACHED = "detached HEAD"
 
 # The share of the window's tokens that, left unpriced, withholds the dollar total. This
 # is a display rule and not a detection cutoff: nothing judges or alerts on it, it decides
@@ -77,15 +77,15 @@ def total_tokens(turns: pd.DataFrame) -> float:
 def buckets(turns: pd.DataFrame, dimension: str) -> pd.Series:
     """Which bucket each response falls in for `dimension`, one each and never none."""
     if dimension == "thread":
-        return turns["is_sidechain"].astype(bool).map({True: "subagent", False: "main thread"})
+        return turns["is_sidechain"].astype(bool).map(THREAD_NAMES)
     if dimension == "project":
         # Read back the way report.py's project_lines does, so the same folder reads
         # the same in both commands rather than as its raw, dash-encoded form here.
         return turns["source_file"].astype(str).map(project_of).map(project_path)
-    column, absent = DIMENSION_COLUMNS[dimension]
+    column = DIMENSION_COLUMNS[dimension]
     values = turns[column] if column in turns else pd.Series(None, index=turns.index, dtype="object")
-    named = values.where(values.notna() & (values.astype(str) != ""), absent).astype(str)
-    return named.replace(DETACHED_VALUE, DETACHED) if dimension == "branch" else named
+    named = values.where(values.notna() & (values.astype(str) != ""), ABSENT_NAMES[dimension]).astype(str)
+    return named.replace(DETACHED_VALUE, DETACHED_NAME) if dimension == "branch" else named
 
 
 def branch_projects(turns: pd.DataFrame) -> dict[str, int]:
@@ -256,7 +256,7 @@ def spend_lines(turns: pd.DataFrame, dimension: str, prices: dict[str, Price]) -
     # Only the branch dimension: a project count beside `general-purpose` would say that
     # the reader works in more than one place, which is not what its row is about.
     pooled = branch_projects(turns) if dimension == "branch" else {}
-    lines = ["", f"By {DIMENSION_NAMES[dimension]}"]
+    lines = ["", COST_LINES["by"].format(name=DIMENSION_NAMES[dimension])]
     for row in rows.itertuples(index=False):
         dollars = None if pd.isna(row.dollars) else float(row.dollars)
         lines.append(spend_line(row.bucket, int(row.responses), float(row.tokens), float(row.share), dollars,
@@ -289,9 +289,9 @@ def run_spend(source: Path, state_path: Path, days: Optional[int] = None, by: Op
         print(spend_json(turns, dimensions if by else list(DIMENSIONS), prices, window), end="")
         return 0
     total = priced_total(turns, prices)
-    money = "" if total is None else f", {'$' + format(total, ',.2f')}"
-    lines = [f"{len(window)} complete UTC days, {approx(total_tokens(turns))} tokens{money}.",
-             "Every section below accounts for all of them; a response can appear in more than one section."]
+    money = "" if total is None else COST_LINES["money"].format(total=total)
+    lines = [COST_LINES["window"].format(days=len(window), tokens=approx(total_tokens(turns)), money=money),
+             COST_LINES["every"]]
     unpriced = unpriced_models(turns, prices)
     # Said once, at the top: which models have no price, and whether that was enough to
     # withhold the total. Missing money that says nothing reads as broken arithmetic.
