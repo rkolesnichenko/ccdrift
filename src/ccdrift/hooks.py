@@ -50,16 +50,6 @@ def hooks_summary(runs: pd.DataFrame, days: Sequence[str]) -> Optional[dict[str,
             "median_duration_ms": None if pd.isna(median) else float(median)}
 
 
-def hooks_lines(summary: Optional[dict[str, Any]]) -> list[str]:
-    """The report's hooks line, starting with a blank line; empty without runs."""
-    if summary is None:
-        return []
-    days = summary["error_days"]
-    errors = "no errors" if days == 0 else f"errors on {days} day{'s' if days != 1 else ''}"
-    median = "" if summary["median_duration_ms"] is None else f", median {summary['median_duration_ms'] / 1000:.1f} s"
-    return ["", f"Hooks over these days: {summary['runs']:,} stop-hook runs, {errors}{median}"]
-
-
 def hook_failures(runs: pd.DataFrame, state: dict[str, Any], today: date) -> list[dict[str, Any]]:
     """Stop hooks failing on at least FAILING of their runs two active days in a row,
     the first within the last RECENT_DAYS days, after at least MIN_BEFORE_DAYS active

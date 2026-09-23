@@ -13,7 +13,7 @@ import pandas as pd
 from ccdrift.logs import outside_sdk
 # BEFORE_DAYS, the window a day is judged against, lives in texts with before_text: the
 # status line names it too, and nothing that only prints should have to import pandas.
-from ccdrift.texts import BEFORE_DAYS, kinds_text
+from ccdrift.texts import BEFORE_DAYS
 
 # Every kind parse_file records, and those a rule counts: a banner blaming the user's
 # own Mac for going to sleep is no drift, so it is reported but never alerts.
@@ -257,16 +257,6 @@ def failure_summary(counts: pd.DataFrame, days: Sequence[str]) -> Optional[dict[
     if not kinds and not cut:
         return None
     return {"kinds": kinds, "cut": cut}
-
-
-def failure_lines(summary: Optional[dict[str, Any]]) -> list[str]:
-    """The report's failures line, starting with a blank line; empty without failures."""
-    if summary is None:
-        return []
-    parts = [kinds_text(summary["kinds"])] if summary["kinds"] else []
-    if summary["cut"]:
-        parts.append(f"{summary['cut']} response{'' if summary['cut'] == 1 else 's'} cut short")
-    return ["", "Failures over these days: " + ", ".join(parts)]
 
 
 def week_failures(counts: pd.DataFrame, days: Sequence[str]) -> tuple[int, int]:
