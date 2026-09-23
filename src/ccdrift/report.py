@@ -24,8 +24,9 @@ from ccdrift.loops import COUNT_COLUMNS, loop_counts
 from ccdrift.sessions import MIN_SESSIONS, project_lines, project_summary, session_starts
 from ccdrift.settings import settings_lines, settings_summary, subagent_lines, subagent_summary
 from ccdrift.state import load_state, make_stream_private
-from ccdrift.texts import (INCIDENT_METRICS, SHORT_NAMES, approx, incident_line, miss_reason_line,
-                           misses as _misses, number as _number, version_key)
+from ccdrift.texts import (COMMAND_LINES, DAY_TABLE, INCIDENT_METRICS, REPORT_LINES, SHORT_NAMES, VERSION_TABLE,
+                           incident_line, miss_reason_line, misses as _misses, number as _number, size_text,
+                           table_header, table_row, version_key)
 
 COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", *COUNT_COLUMNS, "flagged"]
 VERSION_COLUMNS = ["version", "first_day", "last_day", "responses", "prompt_turns", "cache_ratio",
@@ -95,7 +96,7 @@ def reason_lines(summary: Optional[dict[str, int]]) -> list[str]:
     Claude Code recorded none. ccdrift counts these and does not judge them."""
     if summary is None:
         return []
-    return ["", "Why the cache missed, as Claude Code recorded it: " + miss_reason_line(summary)]
+    return ["", REPORT_LINES["reasons"].format(reasons=miss_reason_line(summary))]
 
 
 def _median_for(table: Optional[pd.DataFrame], version: str, column: str, least: int = 1) -> float:
@@ -104,10 +105,6 @@ def _median_for(table: Optional[pd.DataFrame], version: str, column: str, least:
         return math.nan
     values = table.loc[table["version"].fillna("unknown").astype(str) == version, column].dropna()
     return float(values.median()) if len(values) >= least else math.nan
-
-
-def _size(value: float) -> str:
-    return "-" if math.isnan(value) else approx(value)
 
 
 def version_rows(turns: pd.DataFrame, changelog: Optional[dict] = None, starts: Optional[pd.DataFrame] = None,
@@ -151,12 +148,13 @@ def _tail(entries: Sequence[Entry], reported: dict, summary: list[dict], extra: 
     and whatever else the caller adds (hooks and subagents, on the day view)."""
     lines = [""]
     if entries:
-        lines += ["Incidents:"] + [f"  {incident_line(incident, cost)}" for incident, cost in entries]
+        lines += [REPORT_LINES["incidents"]] + [f"  {incident_line(incident, cost)}" for incident, cost in entries]
     else:
-        lines.append("Incidents: none yet")
-    legacy = [f"  {label} from {day}" for metric, label in INCIDENT_METRICS.items() for day in reported.get(metric, [])]
+        lines.append(REPORT_LINES["no_incidents"])
+    legacy = [REPORT_LINES["legacy"].format(label=label, day=day)
+              for metric, label in INCIDENT_METRICS.items() for day in reported.get(metric, [])]
     if legacy:
-        lines += ["", "Flags reported before ccdrift followed incidents:"] + legacy
+        lines += ["", REPORT_LINES["legacy_head"]] + legacy
     return lines + settings_lines(summary) + list(extra)
 
 
@@ -165,45 +163,33 @@ def format_report(rows: pd.DataFrame, entries: Sequence[Entry], reported: dict, 
     cache_cutoff, haiku_cutoff = _cutoffs(cfg or DetectorConfig())
     cfg = cfg or DetectorConfig()
     lines = [
-        f"Last {len(rows)} complete UTC days with main-thread activity.",
-        f"Flagged once {cfg.deviant_bins} of any {cfg.flag_window} days in a row pass the cutoff: "
-        f"z <= -{cache_cutoff:.1f} for the cache ratio, z >= +{haiku_cutoff:.1f} for Haiku share.",
+        REPORT_LINES["days"].format(days=len(rows)),
+        REPORT_LINES["rule"].format(bins=cfg.deviant_bins, window=cfg.flag_window, cache=cache_cutoff,
+                                    haiku=haiku_cutoff),
         "",
-        f"{'day':<10}  {'responses':>9}  {'cache ratio':>11}  {'z':>5}  {'haiku share':>11}  {'z':>5}  "
-        f"{'loop misses':>11}  {'subagent misses':>15}  flagged",
+        table_header(DAY_TABLE),
     ]
     for row in rows.itertuples(index=False):
-        lines.append(
-            f"{row.day:<10}  {int(row.responses):>9}  {_number(row.cache_ratio, '.3f'):>11}  "
-            f"{_number(row.cache_z, '+.1f'):>5}  {_number(row.haiku_share, '.3f'):>11}  "
-            f"{_number(row.haiku_z, '+.1f'):>5}  {_misses(row.loop_misses, row.loop_turns):>11}  "
-            f"{_misses(row.subagent_loop_misses, row.subagent_loop_turns):>15}  {row.flagged}".rstrip())
+        lines.append(table_row(DAY_TABLE, (
+            row.day, int(row.responses), _number(row.cache_ratio, ".3f"), _number(row.cache_z, "+.1f"),
+            _number(row.haiku_share, ".3f"), _number(row.haiku_z, "+.1f"), _misses(row.loop_misses, row.loop_turns),
+            _misses(row.subagent_loop_misses, row.subagent_loop_turns), row.flagged)))
     return "\n".join(lines + _tail(entries, reported, summary, extra)) + "\n"
 
 
 def format_version_report(rows: pd.DataFrame, entries: Sequence[Entry], reported: dict,
                           summary: list[dict]) -> str:
-    lines = [
-        "Complete UTC days with main-thread activity, by Claude Code version.",
-        "A miss is a new-prompt turn that reads less than half its input from the cache.",
-        "A loop miss is a tool-loop turn that reads less than half of what the response before it had cached.",
-        "",
-        f"{'version':<11}  {'first day':<10}  {'last day':<10}  {'responses':>9}  {'prompt turns':>12}  "
-        f"{'cache ratio':>11}  {'misses':>6}  {'loop misses':>11}  {'subagent misses':>15}  {'haiku share':>11}"
-        f"  {'session start':>13}  {'compacts at':>11}",
-    ]
+    lines = [REPORT_LINES["versions"], REPORT_LINES["miss"], REPORT_LINES["loop_miss"], "", table_header(VERSION_TABLE)]
     for row in rows.itertuples(index=False):
-        misses = "-" if math.isnan(row.miss_share) else f"{row.miss_share:.1%}"
-        lines.append(
-            f"{row.version:<11}  {row.first_day:<10}  {row.last_day:<10}  {int(row.responses):>9}  "
-            f"{int(row.prompt_turns):>12}  {_number(row.cache_ratio, '.3f'):>11}  {misses:>6}  "
-            f"{_misses(row.loop_misses, row.loop_turns, share=True):>11}  "
-            f"{_misses(row.subagent_loop_misses, row.subagent_loop_turns, share=True):>15}  "
-            f"{_number(row.haiku_share, '.3f'):>11}"
-            f"  {_size(row.session_start):>13}  {_size(row.compacts_at):>11}")
-        lines += [f"    release notes: {text}" for text in row.release_notes]
+        lines.append(table_row(VERSION_TABLE, (
+            row.version, row.first_day, row.last_day, int(row.responses), int(row.prompt_turns),
+            _number(row.cache_ratio, ".3f"), _number(row.miss_share, ".1%"),
+            _misses(row.loop_misses, row.loop_turns, share=True),
+            _misses(row.subagent_loop_misses, row.subagent_loop_turns, share=True), _number(row.haiku_share, ".3f"),
+            size_text(row.session_start), size_text(row.compacts_at))))
+        lines += [REPORT_LINES["release_note"].format(text=text) for text in row.release_notes]
         if row.miss_reasons:
-            lines.append(f"    why the cache missed: {miss_reason_line(row.miss_reasons)}")
+            lines.append(REPORT_LINES["version_reasons"].format(reasons=miss_reason_line(row.miss_reasons)))
     return "\n".join(lines + _tail(entries, reported, summary)) + "\n"
 
 
@@ -258,13 +244,13 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
                as_json: bool = False, today: Optional[date] = None,
                cfg: Optional[DetectorConfig] = None, html_path: Optional[Path] = None) -> int:
     if html_path is not None and by != "day":
-        raise ValueError(f"The page draws the day view; it has nothing to draw for by={by!r}.")
+        raise ValueError(REPORT_LINES["page_by"].format(by=by))
     if html_path is not None and as_json:
-        raise ValueError("The page and JSON are one output each; ask for one of them.")
+        raise ValueError(REPORT_LINES["page_and_json"])
     try:
         state = load_state(state_path)
     except (OSError, ValueError) as exc:
-        print(f"Can't read the state file {state_path}: {exc}", file=sys.stderr)
+        print(COMMAND_LINES["state_unreadable"].format(path=state_path, error=exc), file=sys.stderr)
         return 1
     try:
         tables = load_history(source, state_path, claim=False)
@@ -329,9 +315,9 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
                 make_stream_private(out)
                 out.write(page)
         except OSError as exc:
-            print(f"Can't write {html_path}: {exc}", file=sys.stderr)
+            print(REPORT_LINES["unwritable"].format(path=html_path, error=exc), file=sys.stderr)
             return 1
-        print(f"wrote {html_path}")
+        print(REPORT_LINES["wrote"].format(path=html_path))
         return 0
     if as_json:
         text = report_json(by, rows, entries, state["reported"], summary, cfg, extra_json)
