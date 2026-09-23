@@ -76,6 +76,18 @@ def test_peek_shows_text_ids_and_folders_only_as_their_length(tmp_path, capsys):
     assert "  version" + " " * 10 + "-> '2.1.260'" in out.splitlines()
 
 
+def test_peek_shows_a_content_block_by_its_type_and_the_size_of_the_rest(tmp_path, capsys):
+    # A tool call's input is whatever the conversation put there, keys included, even
+    # under a name peek shows as logged elsewhere, such as an MCP tool's "type" or "model".
+    block = {"type": "tool_use", "id": "toolu_1", "name": "mcp__crm__lookup",
+             "input": {"type": "acme payroll", "model": "/Users/someone/acme/plan.txt", "acme_ref": 7}}
+    write(tmp_path / "logs" / "s1.jsonl", [prompt(at(0)), line("m1", block, ts=at(0))])
+    assert main(["peek", "--source", str(tmp_path / "logs")]) == 0
+    out = capsys.readouterr().out
+    assert "acme" not in out
+    assert '"type": "tool_use"' in out and '"input": "<3 keys>"' in out
+
+
 def test_peek_does_not_fail_on_a_line_nested_too_deep_to_decode_or_show(tmp_path, capsys):
     # One line past the decoder's limit, and one it decodes but that is deeper than
     # the Python recursion limit a walk over it would need on 3.13.

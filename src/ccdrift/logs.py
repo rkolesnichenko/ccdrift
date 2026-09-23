@@ -823,12 +823,29 @@ PEEK_SHOWN = frozenset({"type", "role", "model", "version", "entrypoint", "effor
 
 
 def _peek_value(value: Any, key: Optional[str] = None) -> Any:
-    """`value` with every string not under a PEEK_SHOWN key replaced by its length."""
+    """`value` with every string not under a PEEK_SHOWN key replaced by its length. The
+    blocks of a `content` list keep their type and show the rest by size alone: a tool
+    call's input is whatever the conversation put there, keys included, even under a
+    name shown as logged elsewhere, such as an MCP tool's "type" or "model"."""
     if isinstance(value, dict):
         return {k: _peek_value(v, k) for k, v in value.items()}
+    if isinstance(value, list) and key == "content":
+        return [{k: v if k == "type" else _peek_size(v) for k, v in block.items()} if isinstance(block, dict)
+                else _peek_size(block) for block in value]
     if isinstance(value, list):
         return [_peek_value(v) for v in value]
     if isinstance(value, str) and key not in PEEK_SHOWN:
+        return f"<{len(value)} chars>"
+    return value
+
+
+def _peek_size(value: Any) -> Any:
+    """Text, an object or a list as its size; a number, boolean or null as logged."""
+    if isinstance(value, dict):
+        return f"<{len(value)} keys>"
+    if isinstance(value, list):
+        return f"<{len(value)} items>"
+    if isinstance(value, str):
         return f"<{len(value)} chars>"
     return value
 
