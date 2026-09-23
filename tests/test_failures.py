@@ -7,12 +7,12 @@ import pandas as pd
 import pytest
 
 from ccdrift.check import run_check
-from ccdrift.failures import (FAILURE_DAY_COLUMNS, _judged_days, cut_short, digest_part, failing_requests,
-                              failure_counts, failure_lines, failure_summary, judged_failures)
+from ccdrift.failures import (FAILURE_DAY_COLUMNS, _judged_days, cut_short, failing_requests, failure_counts,
+                              failure_lines, failure_summary, judged_failures, week_failures)
 from ccdrift.history import History, load_history
 from ccdrift.logs import judged_turns, parse_all, parse_source
 from ccdrift.state import load_state, new_state, save_state
-from ccdrift.texts import cut_short_line, cut_short_message, failure_line, requests_message
+from ccdrift.texts import cut_short_line, cut_short_message, failure_line, requests_message, week_failures_text
 from tests.helpers import DAY, api_error, at, failure_days, line, no_response_stub, prompt, retry_record, text, write
 
 
@@ -469,16 +469,16 @@ def test_the_report_line_and_the_weekly_part_say_what_the_days_held(tmp_path):
     days = ["2026-09-01", "2026-09-02"]
     assert failure_lines(failure_summary(counts, days)) == [
         "", "Failures over these days: 2 overloaded, 1 retried, 1 while the Mac slept, 1 response cut short"]
-    assert digest_part(counts, days) == "3 failed requests, 1 response cut short"
+    assert week_failures_text(*week_failures(counts, days)) == "3 failed requests, 1 response cut short"
     quiet = counts_of(tmp_path, [{}])
     assert failure_lines(failure_summary(quiet, ["2026-09-01"])) == []
-    assert digest_part(quiet, ["2026-09-01"]) == "no failed requests"
+    assert week_failures_text(*week_failures(quiet, ["2026-09-01"])) == "no failed requests"
     # The Mac sleeping mid-response is not Claude Code drift: the report names it, but
     # the weekly summary's failed-request count leaves it out.
     slept_only = counts_of(tmp_path, [{"slept": 3}])
     assert failure_lines(failure_summary(slept_only, ["2026-09-01"])) == [
         "", "Failures over these days: 3 while the Mac slept"]
-    assert digest_part(slept_only, ["2026-09-01"]) == "no failed requests"
+    assert week_failures_text(*week_failures(slept_only, ["2026-09-01"])) == "no failed requests"
 
 
 def test_the_check_alerts_on_a_day_of_failed_requests_and_records_it(tmp_path, capsys):
