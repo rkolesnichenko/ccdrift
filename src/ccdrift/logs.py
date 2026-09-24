@@ -835,6 +835,7 @@ def components_frame(rows) -> pd.DataFrame:
         df[col] = df[col].astype(object).where(df[col].notna(), None)
     return df.sort_values("source_file", kind="stable").reset_index(drop=True)
 
+
 def coverage_frame(rows) -> pd.DataFrame:
     """Hook coverage, one row per transcript, day, version, entrypoint, thread, hook event
     and tool, sorted so two runs over one history read the same."""
