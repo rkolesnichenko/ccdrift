@@ -69,7 +69,7 @@ def approx(value: float) -> str:
 
 def spend_line(bucket: str, responses: int, tokens: float, share: float, dollars: Optional[float],
                unpriced: Sequence[str] = (), projects: int = 1) -> str:
-    """"  general-purpose            52,078   19.6B   53.1%   $412.18". A bucket holding a
+    """"  general-purpose                       52,078      20B   53.1%       $412.18". A bucket holding a
     model ccdrift could not price shows "no price: claude-fable-5-1" where the money would
     be, since a column that simply goes blank reads as broken arithmetic. A bucket that is
     itself the model says "no price" alone: repeating its own name explains nothing. A

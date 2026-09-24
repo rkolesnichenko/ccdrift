@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 
 from ccdrift import __version__
-from ccdrift.check import ccdrift_home
 from ccdrift.cli import main
 from ccdrift.logs import default_source
+from ccdrift.state import ccdrift_home
 from tests.helpers import at, busy_days, decode_limit, deep_line, line, prompt, text, write
 
 

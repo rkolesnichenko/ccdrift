@@ -22,7 +22,7 @@ from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import first_days_by_version, judged_turns
 from ccdrift.state import load_state
 from ccdrift.texts import (ALERT_TITLES, COMMAND_LINES, INCIDENT_LINES, INCIDENT_METRICS, MOVES, PERSISTENT_DAYS,
-                           SHORT_NAMES, approx, incident_line, incident_message)
+                           SHORT_NAMES, incident_line, incident_message)
 
 # A first run stays quiet about flags from weeks ago but covers a week or so
 # without a run.

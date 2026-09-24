@@ -33,7 +33,9 @@ There is no formatter, linter or type checker, on purpose. Please don't run one:
   substantive module.
 - Wrap multi-name imports in parentheses, continuations aligned under the opening one.
 - No em dashes anywhere, in prose, comments or docstrings. Use hyphens or en dashes.
-- All user-visible wording lives in `src/ccdrift/texts.py`.
+- All user-visible wording lives in `src/ccdrift/texts.py`, except option help, which stays beside its
+  option in cli.py; text other programs read (the crontab marker, unit files, the page's CSS, the
+  AppleScript, Claude Code's banners) stays where it is. tests/test_command_texts.py enforces it.
 - A constant that came from a measurement carries a comment with that measurement.
 - Test names are full English sentences.
 - Build transcript fixtures with `tests.helpers.line()`, never hand-rolled JSON. It writes

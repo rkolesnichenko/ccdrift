@@ -29,7 +29,7 @@ from ccdrift.notify import notify, run_exec
 from ccdrift.replay import REPLAY_SOURCE, first_run, replay_incidents
 from ccdrift.sessions import context_alerts, rejudged, session_starts
 from ccdrift.settings import setting_changes
-from ccdrift.state import (CONTEXT_RULE, LOG_FILE, ccdrift_home, load_state, make_stream_private, record_run,
+from ccdrift.state import (CONTEXT_RULE, LOG_FILE, load_state, make_stream_private, record_run,
                            save_state, state_lock)
 from ccdrift.texts import (ALERT_TITLES, CHECK_LINES, blank_cache_message, change_message, context_dropped_message,
                            context_message, cut_short_message, early_message, gap_message, history_message,
