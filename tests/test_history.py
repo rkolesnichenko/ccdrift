@@ -443,7 +443,7 @@ def test_a_store_from_ccdrift_0_2_is_upgraded_in_place_and_keeps_its_rows(tmp_pa
     db.executescript(V1_SCHEMA)
     db.close()
     with History(tmp_path / "history.sqlite") as history:
-        assert history.meta["schema_version"] == "7"
+        assert history.meta["schema_version"] == "8"
         columns = {row[1] for row in history.db.execute("PRAGMA table_info(responses)")}
         tables = {row[0] for row in history.db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert "agent_type" in columns

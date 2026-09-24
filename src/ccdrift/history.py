@@ -20,13 +20,13 @@ import pandas as pd
 
 from ccdrift.logs import (ATTRIBUTION_FIELDS, COMPONENT_SETS, COMPONENT_SIZES, MAX_TIME, MIN_TIME, SDK_ENTRYPOINT_PREFIX,
                           SETTING_FIELDS, TOKEN_FIELDS, USAGE_COUNTS, ParsedFile, Tables, census_frame, compaction_frame,
-                          components_frame, duration_frame, failure_frame, frame, hook_frame, jsonl_files, parse_all,
-                          parse_file, usage_frame)
+                          components_frame, coverage_frame, coverage_rows, duration_frame, failure_frame, frame, hook_frame,
+                          jsonl_files, parse_all, parse_file, usage_frame)
 from ccdrift.state import make_private
 from ccdrift.texts import HISTORY_LINES
 
 HISTORY_FILE = "history.sqlite"
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 # Bump whenever parse_file's output changes, so every transcript still on disk is
 # read again. Rows of transcripts Claude Code already deleted keep their values.
 # 3: counts, times and ids out of range or of the wrong type read as missing.
@@ -42,7 +42,8 @@ SCHEMA_VERSION = 7
 # 10: what each session started with: the names and sizes of its skills, deferred tools,
 #     agent types, MCP instructions, CLAUDE.md files, system prompt, tool definitions and
 #     first message.
-PARSER_VERSION = 10
+# 11: hook coverage: for each tool call, whether a PreToolUse and a PostToolUse hook ran on it.
+PARSER_VERSION = 11
 
 TEXT_COLUMNS = ("model", "stop_reason", "miss_reason") + ATTRIBUTION_FIELDS + SETTING_FIELDS
 FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction", "opens_transcript")
@@ -106,6 +107,10 @@ CREATE TABLE IF NOT EXISTS components (
     file_id INTEGER PRIMARY KEY, skills TEXT, deferred TEXT, agents TEXT, mcp TEXT, tools TEXT,
     skills_chars INTEGER, deferred_chars INTEGER, agents_chars INTEGER, mcp_chars INTEGER, claude_md_files INTEGER,
     claude_md_chars INTEGER, system_chars INTEGER, tools_chars INTEGER, message_chars INTEGER);
+CREATE TABLE IF NOT EXISTS hook_coverage (
+    file_id INTEGER NOT NULL, day TEXT NOT NULL, version TEXT, entrypoint TEXT, is_sidechain INTEGER NOT NULL,
+    event TEXT NOT NULL, tool TEXT NOT NULL, calls INTEGER NOT NULL, hooked INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS hook_coverage_file ON hook_coverage (file_id);
 """
 
 
@@ -357,6 +362,8 @@ class History:
             self.db.execute("DELETE FROM field_census WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM field_days WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM components WHERE file_id = ?", (file_id,))
+            self.db.execute("DELETE FROM hook_coverage WHERE file_id = ?", (file_id,))
+            self.db.execute("DELETE FROM hook_coverage WHERE file_id = ?", (file_id,))
             self.db.executemany(_upsert("responses", RESPONSE_COLUMNS), [
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]),
                  *(row[c] for c in TEXT_COLUMNS), *(int(row[c]) for c in FLAG_COLUMNS),
@@ -396,6 +403,11 @@ class History:
                 f"VALUES ({', '.join('?' * (1 + len(COMPONENT_SETS) + len(COMPONENT_SIZES)))})",
                 (file_id, *(None if row[c] is None else json.dumps(row[c]) for c in COMPONENT_SETS),
                  *(_count(row[c]) for c in COMPONENT_SIZES)))
+            self.db.executemany(
+                "INSERT INTO hook_coverage (file_id, day, version, entrypoint, is_sidechain, event, tool, calls, hooked) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(file_id, row["day"], row["version"], row["entrypoint"], int(row["is_sidechain"]), row["event"],
+                  row["tool"], row["calls"], row["hooked"]) for row in coverage_rows(parsed, rel)])
             self.db.execute("UPDATE files SET last_ts = (SELECT MAX(ts) FROM responses WHERE file_id = ?) WHERE id = ?",
                             (file_id, file_id))
 
@@ -502,6 +514,37 @@ class History:
             rows[col] = [json.loads(value) if isinstance(value, str) else None for value in rows[col]]
         return components_frame(rows.to_dict("records"))
 
+    def hook_coverage(self, since: Optional[str] = None) -> pd.DataFrame:
+        """Every stored hook coverage row, or those of days from `since`, as parse_all's
+        `hook_coverage` table."""
+        query = ("SELECT f.path AS source_file, f.session_id, h.day, h.version, h.entrypoint, h.is_sidechain, h.event, "
+                 "h.tool, h.calls, h.hooked FROM hook_coverage h JOIN files f ON f.id = h.file_id")
+        params: tuple = ()
+        if since is not None:
+            query += " WHERE h.day >= ?"
+            params = (since,)
+        rows = pd.read_sql_query(query, self.db, params=params)
+        # pandas 3 reads NULL as NaN in a text column that holds values too; pandas 2 as None.
+        for col in ("version", "entrypoint"):
+            rows[col] = [value if isinstance(value, str) else None for value in rows[col]]
+        return coverage_frame(rows.to_dict("records"))
+
+
+    def hook_coverage(self, since: Optional[str] = None) -> pd.DataFrame:
+        """Every stored hook coverage row, or those of days from `since`, as parse_all's
+        `hook_coverage` table."""
+        query = ("SELECT f.path AS source_file, f.session_id, h.day, h.version, h.entrypoint, h.is_sidechain, h.event, "
+                 "h.tool, h.calls, h.hooked FROM hook_coverage h JOIN files f ON f.id = h.file_id")
+        params: tuple = ()
+        if since is not None:
+            query += " WHERE h.day >= ?"
+            params = (since,)
+        rows = pd.read_sql_query(query, self.db, params=params)
+        # pandas 3 reads NULL as NaN in a text column that holds values too; pandas 2 as None.
+        for col in ("version", "entrypoint"):
+            rows[col] = [value if isinstance(value, str) else None for value in rows[col]]
+        return coverage_frame(rows.to_dict("records"))
+
 
 def load_history(source: Path, state_path: Path, claim: bool, since: Optional[str] = None,
                  active_days: int = 0, active_responses: int = 0) -> Tables:
@@ -530,7 +573,7 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
                 since = None if active_start is None else min(since, active_start)
             return Tables(history.responses(since), history.durations(since), history.hook_runs(since),
                           history.compactions(since), history.failures(since), history.field_census(since),
-                          history.model_usage(since), history.components(since))
+                          history.model_usage(since), history.components(since), history.hook_coverage(since))
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc
     except pd.errors.DatabaseError as exc:

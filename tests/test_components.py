@@ -187,7 +187,7 @@ def test_a_store_from_before_components_gains_the_table_and_reads_every_transcri
     db.commit()
     db.close()
     with History(path) as history:
-        assert history.meta["schema_version"] == str(ccdrift.history.SCHEMA_VERSION) == "7"
+        assert history.meta["schema_version"] == str(ccdrift.history.SCHEMA_VERSION) == "8"
         assert history.update(tmp_path / "logs") == 1
         assert history.components()["skills"].tolist() == [["review"]]
 

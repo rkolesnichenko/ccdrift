@@ -264,6 +264,32 @@ def prompt_snapshot(*chars, tools=None):
     return rec
 
 
+def tool_use(tool_id, name):
+    """A tool call as one content block of a response."""
+    return {"type": "tool_use", "id": tool_id, "name": name, "input": {"command": PRIVATE_TEXT}}
+
+
+def hook_record(ts, event, tool_id, tool, kind="hook_success", sid="s1", version="2.1.261", sidechain=False):
+    """The attachment Claude Code writes when a hook of `event` ran on a tool call: a
+    success, a non-blocking error (exit code 1) or a blocking error. Its command, output
+    and content can name private paths."""
+    if kind == "hook_blocking_error":
+        record = {"type": kind, "hookEvent": event, "hookName": f"{event}:{tool}", "toolUseID": tool_id,
+                  "blockingError": {"blockingError": PRIVATE_TEXT, "command": f"{PRIVATE_PATH}/hook.sh"}}
+    else:
+        record = {"type": kind, "hookEvent": event, "hookName": f"{event}:{tool}", "toolUseID": tool_id,
+                  "command": f"{PRIVATE_PATH}/hook.sh", "stdout": PRIVATE_TEXT, "stderr": "",
+                  "exitCode": 0 if kind == "hook_success" else 1, "durationMs": 40}
+        if kind == "hook_success":
+            record["content"] = PRIVATE_TEXT
+    rec = {"type": "attachment", "timestamp": ts, "sessionId": sid, "isSidechain": sidechain, "entrypoint": "cli",
+           "version": version, "cwd": PRIVATE_PATH, "gitBranch": "main", "userType": "external",
+           "parentUuid": None, "uuid": f"hook-{sid}-{ts}-{event}-{tool_id}", "attachment": record}
+    if sidechain:
+        rec["agentId"] = "a1"
+    return rec
+
+
 def write(path, records):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(r) + "\n" for r in records))
