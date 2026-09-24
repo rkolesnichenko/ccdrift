@@ -50,8 +50,13 @@ uv run --group lab python -m lab.failures
 # G12: does judging each project against itself stop a move between projects from
 # reading as a change in how much context a session starts with?
 uv run --group lab python -m lab.context
+
+# G14: can what Claude Code logs about a session's start be put in tokens? Over CLI
+# starts, which the alert judges, or with --with-sdk over Agent SDK starts too
+uv run --group lab python -m lab.components
+uv run --group lab python -m lab.components --with-sdk
 ```
 
 `--help` lists every option, including `--main-thread-only`, `--since`, `--until` and
-the detector settings, and for `lab.failures` and `lab.context`, `--today`, before which
+the detector settings, and for `lab.failures`, `lab.context` and `lab.components`, `--today`, before which
 the days read count as complete (default: today).
