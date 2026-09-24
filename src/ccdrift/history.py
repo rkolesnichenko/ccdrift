@@ -488,6 +488,21 @@ class History:
         `model_usage` table."""
         return usage_frame(_decode(self._records("model_usage", USAGE_COLUMNS, since), ()))
 
+    def hook_coverage(self, since: Optional[str] = None) -> pd.DataFrame:
+        """Every stored hook coverage row, or those of days from `since`, as parse_all's
+        `hook_coverage` table."""
+        query = ("SELECT f.path AS source_file, f.session_id, h.day, h.version, h.entrypoint, h.is_sidechain, h.event, "
+                 "h.tool, h.calls, h.hooked FROM hook_coverage h JOIN files f ON f.id = h.file_id")
+        params: tuple = ()
+        if since is not None:
+            query += " WHERE h.day >= ?"
+            params = (since,)
+        rows = pd.read_sql_query(query, self.db, params=params)
+        # pandas 3 reads NULL as NaN in a text column that holds values too; pandas 2 as None.
+        for col in ("version", "entrypoint"):
+            rows[col] = [value if isinstance(value, str) else None for value in rows[col]]
+        return coverage_frame(rows.to_dict("records"))
+
     def field_census(self, since: Optional[str] = None) -> pd.DataFrame:
         """The census of the keys response records carry, summed over transcripts, or
         that of days from `since`, as parse_all's `field_census` table."""
@@ -512,21 +527,6 @@ class History:
         for col in COMPONENT_SETS:
             rows[col] = [json.loads(value) if isinstance(value, str) else None for value in rows[col]]
         return components_frame(rows.to_dict("records"))
-
-    def hook_coverage(self, since: Optional[str] = None) -> pd.DataFrame:
-        """Every stored hook coverage row, or those of days from `since`, as parse_all's
-        `hook_coverage` table."""
-        query = ("SELECT f.path AS source_file, f.session_id, h.day, h.version, h.entrypoint, h.is_sidechain, h.event, "
-                 "h.tool, h.calls, h.hooked FROM hook_coverage h JOIN files f ON f.id = h.file_id")
-        params: tuple = ()
-        if since is not None:
-            query += " WHERE h.day >= ?"
-            params = (since,)
-        rows = pd.read_sql_query(query, self.db, params=params)
-        # pandas 3 reads NULL as NaN in a text column that holds values too; pandas 2 as None.
-        for col in ("version", "entrypoint"):
-            rows[col] = [value if isinstance(value, str) else None for value in rows[col]]
-        return coverage_frame(rows.to_dict("records"))
 
 
 def load_history(source: Path, state_path: Path, claim: bool, since: Optional[str] = None,

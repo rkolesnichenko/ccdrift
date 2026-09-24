@@ -376,7 +376,6 @@ def read_hook(hooked: dict[str, set[str]], obj: dict) -> None:
         hooked[event].add(tool_id)
 
 
-
 @dataclass
 class ParsedFile:
     """One transcript's responses, turn durations, hook runs, compactions and per-model
@@ -825,17 +824,6 @@ def census_frame(census: Mapping[tuple[str, str, str], int],
     return df.sort_values(["day", "version", "path"], kind="stable").reset_index(drop=True)
 
 
-def components_frame(rows) -> pd.DataFrame:
-    """What each session started with, one row per transcript, sorted by its path. A size
-    Claude Code didn't log is NaN, not 0."""
-    df = pd.DataFrame(list(rows), columns=list(COMPONENT_COLUMNS))
-    for col in COMPONENT_SIZES:
-        df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
-    for col in COMPONENT_SETS:
-        df[col] = df[col].astype(object).where(df[col].notna(), None)
-    return df.sort_values("source_file", kind="stable").reset_index(drop=True)
-
-
 def coverage_frame(rows) -> pd.DataFrame:
     """Hook coverage, one row per transcript, day, version, entrypoint, thread, hook event
     and tool, sorted so two runs over one history read the same."""
@@ -852,6 +840,17 @@ def coverage_rows(parsed: ParsedFile, rel: str) -> list[dict]:
     return [{"source_file": rel, "session_id": session, "day": day, "version": version, "entrypoint": entrypoint,
              "is_sidechain": bool(sidechain), "event": event, "tool": tool, "calls": calls, "hooked": hooked}
             for (day, version, entrypoint, sidechain, event, tool), (calls, hooked) in parsed.hook_coverage.items()]
+
+
+def components_frame(rows) -> pd.DataFrame:
+    """What each session started with, one row per transcript, sorted by its path. A size
+    Claude Code didn't log is NaN, not 0."""
+    df = pd.DataFrame(list(rows), columns=list(COMPONENT_COLUMNS))
+    for col in COMPONENT_SIZES:
+        df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
+    for col in COMPONENT_SETS:
+        df[col] = df[col].astype(object).where(df[col].notna(), None)
+    return df.sort_values("source_file", kind="stable").reset_index(drop=True)
 
 
 @dataclass

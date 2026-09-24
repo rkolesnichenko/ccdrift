@@ -95,11 +95,3 @@ Which tool calls got a hook, read-only over every transcript on disk on 2026-09-
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
 
 Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).
-
-## Hook coverage, 2026-09-24
-
-Which tool calls got a hook, read-only over every transcript on disk on 2026-09-24 (2,307 files, 2026-08-06 to 2026-09-24).
-
-- **Hook records.** 127,647 `hook_success` records and 12 errors (6 non-blocking with exit code 1, 6 blocking). By event: PreToolUse 60,521, PostToolUse 59,881, UserPromptSubmit 3,768, Stop 3,293, SessionStart 184. Median run times are 19 to 48 ms, and 178 ms for SessionStart. One PreToolUse run lasted 75 hours, a wait for approval rather than hook work, so summed hook time says nothing.
-- **All or nothing per transcript.** Over transcripts with at least 5 tool calls, either every call got a PreToolUse hook record or none did, in 1,228 of 1,230. CLI main-thread sessions: 50 all and 2 partial, on every version from 2.1.223 to 2.1.281. Agent SDK sessions: 497 of 497 none, by their configuration. Pooled by day, Bash was hooked on 7% to 60% of calls in late August, because hooked and unhooked threads mix.
-- **Claude Code started hooking subagent tool calls at 2.1.261.** CLI subagents had no hook records in 481 transcripts on 2.1.226 to 2.1.247 (2026-08-15 to 2026-09-03), and a record on every call in 697 from 2.1.261 to 2.1.281 (2026-09-05 on). The main thread had them throughout, so the hooks were configured all along. Claude Code either started running them in subagents or started logging them there; the logs can't tell which, and no release note from 2.1.248 to 2.1.261 mentions it. This is the one real change the hook coverage alert has to find. Claude Code's 30-day cleanup is deleting the August transcripts behind it, so these counts are its record.
