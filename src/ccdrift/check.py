@@ -21,6 +21,7 @@ from ccdrift.early import early_warning
 from ccdrift.failures import cut_short, failing_requests, failure_counts, judged_failures
 from ccdrift.fields import field_gaps, new_fields
 from ccdrift.history import load_history
+from ccdrift.hookcover import hook_coverage_alerts
 from ccdrift.hooks import hook_failures, judged_hook_runs
 from ccdrift.incidents import (RECOVERY_BINS, describe, incident_cost, incident_versions, update_incidents,
                                versions_text)
@@ -34,8 +35,9 @@ from ccdrift.state import (CONTEXT_RULE, LOG_FILE, load_state, make_stream_priva
                            save_state, state_lock)
 from ccdrift.texts import (ALERT_TITLES, CHECK_LINES, blank_cache_message, change_message, component_lines,
                            context_dropped_message, context_message, cut_short_message, early_message, gap_message,
-                           history_message, hook_failure_message, loop_message, new_fields_message,
-                           no_transcripts_message, note_lines, requests_message, state_unreadable)
+                           history_message, hook_coverage_lines, hook_coverage_message, hook_failure_message,
+                           loop_message, new_fields_message, no_transcripts_message, note_lines, requests_message,
+                           state_unreadable)
 
 # kind, title, message, and lines for the log only
 Alert = tuple[str, str, str, list[str]]
@@ -222,6 +224,10 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     for failure in hook_failures(judged_hook_runs(tables.hook_runs, today), state, today):
         versions, notes = _change_notes(turns, changelog, failure, "hooks")
         alerts.append(("hooks", ALERT_TITLES["hooks"], hook_failure_message(failure, versions), notes))
+    for change in hook_coverage_alerts(tables.hook_coverage, state, today):
+        versions, notes = _change_notes(turns, changelog, change, "hooks")
+        alerts.append(("hook_coverage", ALERT_TITLES["hook_coverage"], hook_coverage_message(change, versions),
+                       hook_coverage_lines(change) + notes))
     counts = failure_counts(judged_failures(tables.failures, today), turns)
     for episode in failing_requests(counts, state, today):
         versions, notes = _change_notes(turns, changelog, episode, "errors")

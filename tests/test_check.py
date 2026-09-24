@@ -22,8 +22,8 @@ from ccdrift.sessions import context_found, session_starts
 from ccdrift.state import load_state, new_state, save_state
 from ccdrift.status import short_status, status_report
 from tests.helpers import (DAY, agent_listing, at, attachment, busy_days, damage_responses_table, deferred_tools,
-                           hook_days_logs, line, main_thread_days, nth_day, prompt, skill_listing, text, tool_loop_days,
-                           write)
+                           hook_days_logs, hook_record, line, main_thread_days, nth_day, prompt, skill_listing, text,
+                           tool_loop_days, tool_use, write)
 
 
 @pytest.fixture
@@ -495,6 +495,33 @@ def test_check_alerts_when_stop_hooks_start_failing(tmp_path, sent, capsys):
     assert ("ccdrift: hooks failing: Stop hooks failed on 10 of 10 runs on 2026-09-15 and 10 of 10 on 2026-09-16, "
             "on Claude Code 2.1.226 (since 09-01). Check your hooks; a Claude Code update may have changed their "
             "input.") in capsys.readouterr().out
+
+
+def test_check_alerts_when_hooks_stop_running_on_tool_calls_and_names_the_project_only_in_its_log(
+        tmp_path, sent, capsys):
+    # One main-thread session a day, each with three Bash calls and three calls to one MCP
+    # server. A PreToolUse hook ran on each of them for 10 days, then on none: nothing else
+    # changed.
+    for d in range(13):
+        sid, hooked = f"s{d}", d < 10
+        names = ("Bash", "Bash", "Bash", "mcp__tracker__get", "mcp__tracker__put", "mcp__tracker__list")
+        calls = [(f"t{d}-{k}", name) for k, name in enumerate(names)]
+        write(tmp_path / "logs" / "-Users-me-app" / f"session-{d}.jsonl", [
+            prompt(at(d * DAY), sid=sid),
+            *(line(f"m{d}-{k}", tool_use(tool_id, name), ts=at(d * DAY + k), sid=sid, version="2.1.261",
+                   entrypoint="cli") for k, (tool_id, name) in enumerate(calls)),
+            *(hook_record(at(d * DAY + 10 + k), "PreToolUse", tool_id, name, sid=sid)
+              for k, (tool_id, name) in enumerate(calls) if hooked)])
+    sent_to_exec = tmp_path / "exec.txt"
+    check_logs(tmp_path, today=date(2026, 9, 14), exec_command=f'echo "$CCDRIFT_MESSAGE" >> "{sent_to_exec}"')
+    out = capsys.readouterr().out
+    assert sent == ["ccdrift: hooks changed"]
+    message = sent_to_exec.read_text()
+    assert message.startswith("Hooks stopped running on Bash and an MCP server's tools in main-thread sessions from "
+                              "2026-09-11, on Claude Code 2.1.261 (since 09-01): none of the last 3 main-thread sessions")
+    assert message.rstrip("\n").endswith("your own hook settings are the likelier cause.")
+    assert "tracker" not in message and "me/app" not in message
+    assert "    projects: /Users/me/app" in out.splitlines() and "    tools: Bash, mcp__tracker" in out.splitlines()
 
 
 def test_check_alerts_when_sessions_start_with_much_less_context(tmp_path, sent, capsys):

@@ -7,6 +7,7 @@ import pandas as pd
 from ccdrift.hookcover import (HookSetting, hook_coverage_alerts, merged, stream_changes, transcript_states)
 from ccdrift.logs import COVERAGE_COLUMNS, coverage_frame
 from ccdrift.state import new_state
+from ccdrift.texts import hook_coverage_lines, hook_coverage_message
 from tests.helpers import nth_day
 
 EVEN = HookSetting(window=3, baseline=10, agree=0.8, min_calls=2)
@@ -168,3 +169,39 @@ def test_a_stream_joining_a_change_already_reported_is_recorded_without_a_second
     later = coverage(transcripts("-a", [False] * 10 + [True] * 5), transcripts("-b", [False] * 10 + [True] * 3, first_day=2))
     assert alerts_on(later, state, date(2026, 9, 16)) == []
     assert sorted(r["stream"].split("|")[0] for r in state["hook_changes"]) == ["-a", "-b"]
+
+
+STARTED = {"thread": "subagent", "direction": "started", "since": "2026-09-05", "until": "2026-09-07",
+           "days": ["2026-09-05", "2026-09-07"], "window": 3, "baseline": 10, "baseline_other": 10,
+           "new_version": True, "projects": ["-Users-me-app"], "events": ["PostToolUse", "PreToolUse"],
+           "tools": ["Bash", "Read", "mcp__tracker"]}
+
+
+def test_a_start_says_what_started_where_and_that_the_logs_cant_tell_running_from_logging():
+    assert hook_coverage_message(STARTED, ["2.1.261 (since 09-05)"]) == (
+        "Hooks started running on Bash, Read and an MCP server's tools in subagents from 2026-09-05, on Claude Code "
+        "2.1.261 (since 09-05): all of the last 3 subagents had PreToolUse and PostToolUse hooks on those calls, "
+        "where 10 of the 10 before had none, in 1 project. Claude Code may have started running them, or started "
+        "logging them. If you didn't change your hooks, check its release notes.")
+
+
+def test_a_stop_with_no_new_version_points_at_the_owners_own_settings():
+    stopped = {**STARTED, "thread": "main", "direction": "stopped", "new_version": False, "events": ["PreToolUse"],
+               "tools": ["Bash"], "projects": ["-Users-me-a", "-Users-me-b"], "baseline_other": 9}
+    assert hook_coverage_message(stopped, []) == (
+        "Hooks stopped running on Bash in main-thread sessions from 2026-09-05: none of the last 3 main-thread "
+        "sessions had a PreToolUse hook on those calls, where 9 of the 10 before did, in 2 projects. Claude Code "
+        "may have stopped running them, or stopped logging them. No Claude Code version arrived with it, so your "
+        "own hook settings are the likelier cause.")
+
+
+def test_many_tools_and_mcp_servers_are_counted_not_listed():
+    many = {**STARTED, "tools": ["Agent", "Bash", "Edit", "Read", "Write", "mcp__one", "mcp__two"]}
+    assert hook_coverage_message(many, []).startswith(
+        "Hooks started running on Agent, Bash, Edit, 2 more tools and 2 MCP servers' tools in subagents from")
+
+
+def test_the_message_names_no_mcp_server_or_project_and_the_log_lines_do():
+    message = hook_coverage_message(STARTED, [])
+    assert "tracker" not in message and "Users" not in message and "me-app" not in message
+    assert hook_coverage_lines(STARTED) == ["projects: /Users/me/app", "tools: Bash, Read, mcp__tracker"]

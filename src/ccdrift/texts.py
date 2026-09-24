@@ -310,7 +310,8 @@ ALERT_TITLES = {"flag": "ccdrift flag", "recovered": "ccdrift: back to normal",
                 "subagent_loop": f"ccdrift: {LOOP_NAMES['subagent']}", "setting": "ccdrift: setting changed",
                 "context": "ccdrift: session start changed",
                 "context_dropped": "ccdrift: a recorded session-start change was dropped",
-                "hooks": "ccdrift: hooks failing", "failed_requests": "ccdrift: requests failing",
+                "hooks": "ccdrift: hooks failing", "hook_coverage": "ccdrift: hooks changed",
+                "failed_requests": "ccdrift: requests failing",
                 "cut_short": "ccdrift: responses cut short", "fields": "ccdrift: Claude Code stopped logging a field",
                 "new_fields": "ccdrift: Claude Code logs a field ccdrift doesn't read",
                 "blank_cache": "ccdrift can't compute the cache metric", "digest": "ccdrift: weekly summary",
@@ -417,6 +418,52 @@ def hook_failure_message(failure: dict[str, Any], versions: Sequence[str]) -> st
     (first, second), (runs1, runs2), (failed1, failed2) = failure["days"], failure["runs"], failure["failed"]
     return (f"Stop hooks failed on {failed1} of {runs1} runs on {first} and {failed2} of {runs2} on {second}{on}. "
             "Check your hooks; a Claude Code update may have changed their input.")
+
+
+# The transcripts of each thread, as a hook coverage alert names them.
+HOOK_THREADS = {"main": "main-thread sessions", "subagent": "subagents"}
+HOOK_TOOLS_SHOWN = 3   # built-in tools named before the rest are counted
+
+
+def _hook_tools(tools: Sequence[str]) -> str:
+    """The tools of a hook coverage alert: built-in ones by name, the rest counted, and
+    MCP servers counted, never named, since a server's name is the owner's own config."""
+    builtin = [tool for tool in tools if not tool.startswith("mcp__")]
+    servers = len(tools) - len(builtin)
+    parts = builtin[:HOOK_TOOLS_SHOWN]
+    more = len(builtin) - len(parts)
+    if more:
+        parts.append(f"{more} more tool{'' if more == 1 else 's'}")
+    if servers:
+        parts.append("an MCP server's tools" if servers == 1 else f"{servers} MCP servers' tools")
+    return _joined(parts)
+
+
+def hook_coverage_message(change: dict[str, Any], versions: Sequence[str]) -> str:
+    """A hook coverage alert: which tool calls' hooks stopped or started running, in
+    which thread, from when, and what that points at. Names no MCP server or project."""
+    on = f", on Claude Code {', '.join(versions)}" if versions else ""
+    threads = HOOK_THREADS[change["thread"]]
+    events = change["events"]
+    hooks = f"a {events[0]} hook" if len(events) == 1 else f"{_joined(sorted(events, reverse=True))} hooks"
+    projects = len(change["projects"])
+    where = f"{projects} project{'' if projects == 1 else 's'}"
+    counts = (f"none of the last {change['window']} {threads} had {hooks} on those calls, where "
+              f"{change['baseline_other']} of the {change['baseline']} before did"
+              if change["direction"] == "stopped" else
+              f"all of the last {change['window']} {threads} had {hooks} on those calls, where "
+              f"{change['baseline_other']} of the {change['baseline']} before had none")
+    verb = change["direction"]
+    cause = ("If you didn't change your hooks, check its release notes." if change["new_version"] else
+             "No Claude Code version arrived with it, so your own hook settings are the likelier cause.")
+    return (f"Hooks {verb} running on {_hook_tools(change['tools'])} in {threads} from {change['since']}{on}: "
+            f"{counts}, in {where}. Claude Code may have {verb} running them, or {verb} logging them. {cause}")
+
+
+def hook_coverage_lines(change: dict[str, Any]) -> list[str]:
+    """A hook coverage alert's lines for the check's log alone: the projects and tools by name."""
+    return [f"projects: {', '.join(project_path(project) for project in change['projects'])}",
+            f"tools: {', '.join(change['tools'])}"]
 
 
 STREAM_TURNS = {"main": "tool-loop turns", "subagent": "subagent tool-loop turns"}
