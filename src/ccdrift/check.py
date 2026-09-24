@@ -23,7 +23,7 @@ from ccdrift.history import load_history
 from ccdrift.hooks import hook_failures, judged_hook_runs
 from ccdrift.incidents import (RECOVERY_BINS, describe, incident_cost, incident_versions, update_incidents,
                                versions_text)
-from ccdrift.logs import judged_turns, no_transcripts_message
+from ccdrift.logs import judged_turns
 from ccdrift.loops import STREAMS, loop_counts, loop_warning
 from ccdrift.notify import notify, run_exec
 from ccdrift.replay import REPLAY_SOURCE, first_run, replay_incidents
@@ -31,9 +31,10 @@ from ccdrift.sessions import context_alerts, rejudged, session_starts
 from ccdrift.settings import setting_changes
 from ccdrift.state import (CONTEXT_RULE, LOG_FILE, ccdrift_home, load_state, make_stream_private, record_run,
                            save_state, state_lock)
-from ccdrift.texts import (ALERT_TITLES, blank_cache_message, change_message, context_dropped_message,
+from ccdrift.texts import (ALERT_TITLES, CHECK_LINES, blank_cache_message, change_message, context_dropped_message,
                            context_message, cut_short_message, early_message, gap_message, history_message,
-                           hook_failure_message, loop_message, new_fields_message, requests_message, state_unreadable)
+                           hook_failure_message, loop_message, new_fields_message, no_transcripts_message,
+                           requests_message, state_unreadable)
 
 # kind, title, message, and lines for the log only
 Alert = tuple[str, str, str, list[str]]
@@ -280,11 +281,10 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
     is left as it is. Without `digest`, no weekly summary."""
     make_stream_private(sys.stdout, only=state_path.with_name(LOG_FILE))
     started = now or datetime.now().astimezone()
-    stamp = started.strftime("%Y-%m-%d %H:%M")
     notice = state_path.with_name(state_path.name + ".last-failure-notice")
 
     def alert(kind: str, title: str, message: str, send: bool = True) -> None:
-        print(f"[check {stamp}] {title}: {message}")
+        print(CHECK_LINES["alert"].format(at=started, title=title, message=message))
         if not send:
             return
         # The state already records the alerts as sent, so nothing may stop the rest.
@@ -292,14 +292,15 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
             try:
                 notify(title, message)
             except Exception as exc:
-                print(f'[check {stamp}] notification failed for "{title}": {type(exc).__name__}: {exc}')
+                error = f"{type(exc).__name__}: {exc}"
+                print(CHECK_LINES["notify_failed"].format(at=started, title=title, error=error))
         if exec_command:
             try:
                 failure = run_exec(exec_command, kind, title, message)
             except Exception as exc:
                 failure = f"{type(exc).__name__}: {exc}"
             if failure:
-                print(f'[check {stamp}] --exec failed for "{title}": {failure}')
+                print(CHECK_LINES["exec_failed"].format(at=started, title=title, error=failure))
 
     def failure_notice_due() -> bool:
         """A failure notifies and runs --exec at most once per FAILURE_NOTICE_HOURS
@@ -336,7 +337,7 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
     for kind, title, message, details in alerts:
         alert(kind, title, message, send=kind not in LOG_ONLY)
         for detail in details:
-            print(f"    {detail}")
+            print(CHECK_LINES["detail"].format(detail=detail))
     if not alerts:
-        print(f"[check {stamp}] no alerts")
+        print(CHECK_LINES["no_alerts"].format(at=started))
     return 0

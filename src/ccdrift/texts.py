@@ -1051,3 +1051,25 @@ STATE_LINES = {"not_object": "{path} doesn't hold a JSON object",
 NOTIFY_LINES = {"timed_out": "timed out after {seconds} s",
                 "exit": "exit {code}",
                 "stderr": ": {line}"}
+
+
+# ---------------------------------------------------------------------------
+# The check's log and reading the transcripts
+# ---------------------------------------------------------------------------
+
+CHECK_LINES = {"alert": "[check {at:%Y-%m-%d %H:%M}] {title}: {message}",
+               "detail": "    {detail}",
+               "notify_failed": '[check {at:%Y-%m-%d %H:%M}] notification failed for "{title}": {error}',
+               "exec_failed": '[check {at:%Y-%m-%d %H:%M}] --exec failed for "{title}": {error}',
+               "no_alerts": "[check {at:%Y-%m-%d %H:%M}] no alerts"}
+
+LOG_LINES = {"unreadable": "  ! could not read {path}: {error}",
+             "counts": "  files={files} lines={lines} bad_json={bad_json} assistant_lines={assistant_lines} "
+                       "responses={responses}",
+             "peek_line": "# first assistant line, text shown as its length",
+             "peek_fields": "\n# resolved fields:"}
+
+
+def no_transcripts_message(source: Any) -> str:
+    return (f"No Claude Code transcripts found in {source}. Pass --source DIR, or set "
+            "CLAUDE_CONFIG_DIR if Claude Code keeps its files somewhere else.")

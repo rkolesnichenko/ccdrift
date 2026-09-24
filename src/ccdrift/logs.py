@@ -16,7 +16,7 @@ import pandas as pd
 # NUL, line breaks, and the escapes that move a terminal's cursor or retitle its window.
 # Defined in `texts`, which imports nothing heavy, and re-exported here: `schedule` and the
 # parser have always read it from this module.
-from ccdrift.texts import CONTROL_CHARS
+from ccdrift.texts import CONTROL_CHARS, LOG_LINES, no_transcripts_message
 
 
 # ---------------------------------------------------------------------------
@@ -276,11 +276,6 @@ def default_source(environ: Mapping[str, str] = os.environ) -> Path:
     return (Path(config).expanduser() if config else Path.home() / ".claude") / "projects"
 
 
-def no_transcripts_message(source: Path) -> str:
-    return (f"No Claude Code transcripts found in {source}. Pass --source DIR, or set "
-            "CLAUDE_CONFIG_DIR if Claude Code keeps its files somewhere else.")
-
-
 def _text(value: Any) -> Optional[str]:
     """`value` when it is text, without what SQLite, notifications, --exec or a terminal
     can't take: a lone surrogate (JSON "\\ud800") reads as "?", and control characters
@@ -533,7 +528,7 @@ def parse_source(source: Path, verbose: bool = False) -> pd.DataFrame:
             parsed = parse_file(fp, rel)
         except OSError as e:
             if verbose:
-                print(f"  ! could not read {fp}: {e}", file=sys.stderr)
+                print(LOG_LINES["unreadable"].format(path=fp, error=e), file=sys.stderr)
             continue
         lines += parsed.lines
         bad_json += parsed.bad_json
@@ -541,8 +536,8 @@ def parse_source(source: Path, verbose: bool = False) -> pd.DataFrame:
         for key, row in parsed.responses.items():
             rows.setdefault(key, row)
     if verbose:
-        print(f"  files={len(files)} lines={lines} bad_json={bad_json} "
-              f"assistant_lines={assistant_lines} responses={len(rows)}", file=sys.stderr)
+        print(LOG_LINES["counts"].format(files=len(files), lines=lines, bad_json=bad_json,
+                                         assistant_lines=assistant_lines, responses=len(rows)), file=sys.stderr)
     return frame(list(rows.values()))
 
 
@@ -879,9 +874,9 @@ def peek(source: Path) -> bool:
                     except RecursionError:  # decoded, but nested deeper than a walk over it can go
                         continue
                     # The transcript's path names the project folder, so it isn't shown.
-                    print("# first assistant line, text shown as its length")
+                    print(LOG_LINES["peek_line"])
                     print(shown)
-                    print("\n# resolved fields:")
+                    print(LOG_LINES["peek_fields"])
                     print("\n".join(resolved))
                     return True
         except OSError:

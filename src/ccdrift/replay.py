@@ -22,9 +22,10 @@ import pandas as pd
 from ccdrift.detector import DetectorConfig
 from ccdrift.history import HistoryError, load_history
 from ccdrift.incidents import OPEN_END, Event, describe, incident_cost, incident_versions, update_incidents
-from ccdrift.logs import judged_turns, no_transcripts_message
+from ccdrift.logs import judged_turns
 from ccdrift.state import load_state, new_state
-from ccdrift.texts import COMMAND_LINES, PERSISTENT_DAYS, REPLAY_LINES, SHORT_NAMES, incident_line
+from ccdrift.texts import (COMMAND_LINES, PERSISTENT_DAYS, REPLAY_LINES, SHORT_NAMES, incident_line,
+                           no_transcripts_message)
 
 REPLAY_SOURCE = "replay"
 

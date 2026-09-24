@@ -15,11 +15,11 @@ from typing import Optional, Sequence
 import pandas as pd
 
 from ccdrift.history import HistoryError, load_history
-from ccdrift.logs import no_transcripts_message, outside_sdk
+from ccdrift.logs import outside_sdk
 from ccdrift.prices import Price, fit_prices
 from ccdrift.sessions import project_of
 from ccdrift.texts import (ABSENT_NAMES, COST_LINES, DETACHED_NAME, DIMENSION_NAMES, THREAD_NAMES, approx,
-                           project_path, spend_line, unpriced_line)
+                           no_transcripts_message, project_path, spend_line, unpriced_line)
 
 DIMENSIONS = ("thread", "agent", "skill", "plugin", "mcp", "model", "project", "branch")
 TOKEN_COLUMNS = ("input_tokens", "output_tokens", "cache_creation", "cache_read")

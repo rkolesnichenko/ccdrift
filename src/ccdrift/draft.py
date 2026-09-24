@@ -22,11 +22,12 @@ from ccdrift.changelog import (TOPIC_OF, changelog_path, days_before, load_chang
 from ccdrift.detector import DetectorConfig, baseline_bins
 from ccdrift.history import HistoryError, load_history
 from ccdrift.incidents import OPEN_END, RECOVERY_BINS, exclusions, incident_cost, incident_versions
-from ccdrift.logs import judged_turns, no_transcripts_message
+from ccdrift.logs import judged_turns
 from ccdrift.loops import loop_turns
 from ccdrift.report import reason_counts
 from ccdrift.state import load_state
-from ccdrift.texts import COMMAND_LINES, DRAFT_LINES, DRAFT_SETTINGS, SHORT_NAMES, draft_text, version_key
+from ccdrift.texts import (COMMAND_LINES, DRAFT_LINES, DRAFT_SETTINGS, SHORT_NAMES, draft_text, no_transcripts_message,
+                           version_key)
 
 AFTER_DAYS = 14  # judged days after an incident that the draft compares with
 PAUSE_BOUNDS = (60, 300, 900, 3600)  # seconds before the prompt: the upper bound of each bucket
