@@ -202,6 +202,68 @@ def cost_state(ts, usage, sid="s1", start=None):
                            for model, u in usage.items()}}
 
 
+# Text no record may leave in ccdrift's tables: listing, prompt and CLAUDE.md text, and a
+# path naming a project folder.
+PRIVATE_TEXT = "SECRET"
+PRIVATE_PATH = "/home/someone/private-project"
+
+
+def _sized(n: int) -> str:
+    """Text of exactly `n` characters that carries PRIVATE_TEXT when it has room."""
+    return PRIVATE_TEXT[:n].ljust(n, "x")
+
+
+def attachment(ts, record, sid="s1", version="2.1.267", sidechain=False, rendered=True):
+    """One attachment record as Claude Code writes it before a session's first response,
+    wrapping `record`, one of the builders below. From 2.1.263 most of them also carry the
+    text Claude Code put in the prompt, as `rendered`."""
+    rec = {"type": "attachment", "timestamp": ts, "sessionId": sid, "isSidechain": sidechain, "entrypoint": "cli",
+           "version": version, "cwd": PRIVATE_PATH, "gitBranch": "main", "userType": "external",
+           "parentUuid": None, "uuid": f"att-{sid}-{ts}-{record['type']}", "attachment": record}
+    if rendered:
+        rec["rendered"] = [{"content": _sized(40)}]
+    return rec
+
+
+def skill_listing(names, chars=2000, initial=True):
+    return {"type": "skill_listing", "content": _sized(chars), "isInitial": initial, "names": list(names),
+            "skillCount": len(names)}
+
+
+def deferred_tools(added, removed=(), line_chars=20):
+    """The deferred tools, MCP tools named `mcp__<server>__<tool>`, each on a line of its own."""
+    return {"type": "deferred_tools_delta", "addedLines": [_sized(line_chars) for _ in added],
+            "addedNames": list(added), "removedNames": list(removed), "readdedNames": [], "pendingMcpServers": [],
+            "needsAuthMcpServers": [], "failedMcpServers": [], "wireHiddenNames": []}
+
+
+def agent_listing(added, removed=(), line_chars=30, initial=True):
+    return {"type": "agent_listing_delta", "addedTypes": list(added), "removedTypes": list(removed),
+            "addedLines": [_sized(line_chars) for _ in added], "isInitial": initial, "showConcurrencyNote": False}
+
+
+def mcp_instructions(added, removed=(), block_chars=500):
+    return {"type": "mcp_instructions_delta", "addedNames": list(added), "removedNames": list(removed),
+            "addedBlocks": [_sized(block_chars) for _ in added]}
+
+
+def instructions(*chars):
+    """CLAUDE.md files, one of each size in `chars`, from 2.1.263."""
+    return {"type": "instructions", "files": [{"path": f"{PRIVATE_PATH}/CLAUDE-{i}.md", "type": "project",
+                                               "content": _sized(n)} for i, n in enumerate(chars)]}
+
+
+def prompt_snapshot(*chars, tools=None):
+    """The system prompt, in parts of each size in `chars`, from 2.1.267. The snapshot
+    before the first response has no `tools`; the one Claude Code writes right after it
+    carries the tool definitions, `tools` mapping each name to its description's size."""
+    rec = {"type": "prompt_snapshot", "systemPrompt": [_sized(n) for n in chars], "cliPrefix": _sized(30)}
+    if tools is not None:
+        rec["tools"] = [{"name": name, "description": _sized(n), "schema": {"type": "object", "properties": {}}}
+                        for name, n in tools.items()]
+    return rec
+
+
 def write(path, records):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(r) + "\n" for r in records))
