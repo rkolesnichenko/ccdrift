@@ -7,6 +7,7 @@ import pytest
 
 from ccdrift.logs import parse_source
 from ccdrift.sessions import (SOURCE_PROJECT, ContextChange, MIN_BASELINE, WINDOW, context_alerts, context_changes_in,
+                              context_found,
                               first_of_each, found_changes, project_of,
                               project_summary, ratio_starts, rejudged, session_starts)
 from ccdrift.texts import context_change_line, context_message, project_lines, project_path
@@ -382,3 +383,14 @@ def test_the_report_names_each_projects_typical_session_start(tmp_path):
     assert project_lines(project_summary(starts, days)) == [
         "", "Session starts by project over these days: /big ~130k (3 sessions), /small ~54k (2 sessions)"]
     assert project_lines(project_summary(starts, ["2026-10-01"])) == []
+
+
+def test_a_change_carries_its_own_sessions_transcripts_and_its_state_record_gains_nothing(tmp_path):
+    sessions(tmp_path, "-a", [128_000] * 8 + [54_000] * 3)
+    state = new_state()
+    (record, change), = context_found(starts_in(tmp_path), state, date(2026, 9, 12))
+    # The first 3 sessions only set the project's level, so the baseline starts at the 4th.
+    assert change.baseline_files == [f"-a/-a-{d}.jsonl" for d in range(3, 8)]
+    assert change.window_files == [f"-a/-a-{d}.jsonl" for d in range(8, 11)]
+    assert set(record) == {"since", "from", "to", "days", "projects", "of_projects", "new_version", "reported_on"}
+    assert state["context_changes"] == [record]

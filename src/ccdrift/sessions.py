@@ -98,8 +98,9 @@ class ContextChange:
     runs the detector over all the judged sessions and over each project's own rows, and
     returns changes from several frames together, so a change's positions mean nothing
     outside the frame it came from. `project` names that frame: the project whose own
-    sessions the step was found in, or None when it came from the pass over all of them,
-    so a reader can find the step's own sessions without its positions."""
+    sessions the step was found in, or None when it came from the pass over all of them.
+    `window_files` and `baseline_files` name the transcripts of the window and baseline
+    sessions, so a reader can find the step's own sessions without its positions."""
     since: str
     until: str
     before: float
@@ -110,6 +111,8 @@ class ContextChange:
     # ran: the same test lab/session_start.py's G2 gate asks of a step.
     new_version: bool = False
     project: Optional[str] = None
+    window_files: list[str] = field(default_factory=list)
+    baseline_files: list[str] = field(default_factory=list)
 
     @property
     def up(self) -> bool:
@@ -124,6 +127,7 @@ def context_changes_in(starts: pd.DataFrame) -> list[ContextChange]:
     judged = starts["ratio"].astype(float).tolist()
     tokens = starts["prompt_tokens"].astype(float).tolist()
     days = starts["day"].astype(str).tolist()
+    files = starts["source_file"].astype(str).tolist()
     changes = []
     for end in range(MIN_BASELINE + WINDOW - 1, len(judged)):
         window = list(range(end - WINDOW + 1, end + 1))
@@ -141,7 +145,9 @@ def context_changes_in(starts: pd.DataFrame) -> list[ContextChange]:
             fresh = bool({versions[i] for i in window} - {versions[i] for i in baseline}) if versions else False
             changes.append(ContextChange(days[window[0]], days[window[-1]],
                                          statistics.median(tokens[i] for i in baseline),
-                                         statistics.median(tokens[i] for i in window), window, baseline, fresh))
+                                         statistics.median(tokens[i] for i in window), window, baseline, fresh,
+                                         window_files=[files[i] for i in window],
+                                         baseline_files=[files[i] for i in baseline]))
     return changes
 
 
@@ -232,6 +238,14 @@ def context_alerts(starts: pd.DataFrame, state: dict[str, Any], today: date) -> 
     ends within the last RECENT_DAYS days and that aren't recorded yet; each is recorded
     in state["context_changes"] with the projects that moved with it. `starts` is the
     session starts table; each session is judged against its own project's level."""
+    return [record for record, _ in context_found(starts, state, today)]
+
+
+def context_found(starts: pd.DataFrame, state: dict[str, Any],
+                  today: date) -> list[tuple[dict[str, Any], ContextChange]]:
+    """context_alerts, each record with the change it was made from, whose window and
+    baseline transcripts say which sessions to compare. The record, which is what state
+    keeps, gains nothing from it."""
     complete = starts[starts["day"].astype(str) < today.isoformat()].reset_index(drop=True)
     judged = ratio_starts(complete)
     since = (today - timedelta(days=RECENT_DAYS)).isoformat()
@@ -244,7 +258,7 @@ def context_alerts(starts: pd.DataFrame, state: dict[str, Any], today: date) -> 
                   "of_projects": projects["seen"], "new_version": change.new_version,
                   "reported_on": today.isoformat()}
         state["context_changes"].append(record)
-        new.append(record)
+        new.append((record, change))
     return new
 
 
