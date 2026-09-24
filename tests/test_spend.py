@@ -682,6 +682,17 @@ def test_the_json_prices_only_the_models_the_window_actually_ran(tmp_path):
     assert [row["model"] for row in payload["priced_models"]] == ["claude-opus-5"]
 
 
+def test_the_json_names_no_cache_read_ratio_for_an_input_rate_that_all_but_vanished(tmp_path):
+    # A fit can land an input rate just above zero by near-cancellation, and the ratio then
+    # reads as reads costing 9e13 times input. Every model priced so far reads the cache at a
+    # discount, so a ratio above 1 says the fit's input rate collapsed, not that reads cost more.
+    turns = corpus(tmp_path)
+    prices = {"claude-opus-5": Price(input_rate=5.4e-21, cache_read_rate=0.5e-6, output_rate=25e-6,
+                                     web_search_rate=0.0, residual=0.0, rows=9)}
+    payload = json.loads(spend_json(turns, ["model"], prices, ["2026-09-01"]))
+    assert [(row["model"], row["cache_read_ratio"]) for row in payload["priced_models"]] == [("claude-opus-5", None)]
+
+
 def test_the_json_names_no_cache_read_ratio_for_a_price_with_no_input_rate(tmp_path):
     # The ratio divides by the input rate. A fit returns exactly zero only by an exact
     # cancellation, but a price built with one can still reach the JSON, and there is no ratio

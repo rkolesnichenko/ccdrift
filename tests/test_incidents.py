@@ -7,10 +7,10 @@ import pandas as pd
 import pytest
 
 from ccdrift.detector import DetectorConfig
-from ccdrift.incidents import (Event, approx, describe, exclusions, incident_cost, update_incidents,
-                               versions_text)
+from ccdrift.incidents import Event, describe, exclusions, incident_cost, update_incidents, versions_text
 from ccdrift.logs import judged_turns
 from ccdrift.state import new_state
+from ccdrift.texts import approx
 from tests.helpers import HAIKU, MOSTLY_CLEAN_CACHE, QUIET, daily_turns, nth_day, prompt_turn_days
 
 

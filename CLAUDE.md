@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-- Tests: `uv run --group dev --group lab pytest` (739 tests, ~45s). `testpaths = ["tests", "lab"]`, so a bare `pytest` runs both suites.
+- Tests: `uv run --group dev --group lab pytest` (793 tests, ~45s). `testpaths = ["tests", "lab"]`, so a bare `pytest` runs both suites.
 - Single test: `uv run --group dev --group lab pytest tests/test_check.py::test_name`, or `-k <substring>`. No install step is needed; `pythonpath = [".", "src"]` is set in pyproject.toml.
 - The `lab` group is required even when running only `tests/`: lab collection imports matplotlib.
 - Build: `uv build`. There is no lint, format or type-check step, by design (see Style).

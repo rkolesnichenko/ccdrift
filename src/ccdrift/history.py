@@ -508,5 +508,6 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
 
 
 def load_turns(source: Path, state_path: Path) -> pd.DataFrame:
-    """The responses of load_history, claiming the store; what the daily check reads."""
+    """The responses of load_history, claiming the store, over the whole history. The check
+    claims it too but reads from history_start on (load_history with `since`)."""
     return load_history(source, state_path, claim=True).responses

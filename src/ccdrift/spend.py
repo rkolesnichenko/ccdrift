@@ -223,6 +223,17 @@ def priced_total(turns: pd.DataFrame, prices: dict[str, Price]) -> Optional[floa
     return float(by_model["dollars"].fillna(0).sum())
 
 
+def _read_ratio(price: Price) -> Optional[float]:
+    """What a price charges for a cache read as a share of its input rate, or None when that
+    share isn't a discount. Every model priced so far reads the cache below its input rate,
+    so a ratio above 1 means the fit's input rate collapsed toward zero by near-cancellation
+    (5.4e-21 per token reads as reads costing 9e13 times input), not that reads cost more."""
+    if price.input_rate <= 0:
+        return None
+    ratio = price.cache_read_rate / price.input_rate
+    return round(ratio, 3) if ratio <= 1 else None
+
+
 def spend_json(turns: pd.DataFrame, dimensions: Sequence[str], prices: dict[str, Price],
                window: Sequence[str]) -> str:
     """The breakdown as JSON: aggregates only, and no bucket that names a folder or a
@@ -242,8 +253,7 @@ def spend_json(turns: pd.DataFrame, dimensions: Sequence[str], prices: dict[str,
         # input rate of exactly zero, which a fit reaches only by an exact cancellation and a
         # price built by hand can carry, has no ratio, and says so rather than crashing.
         "priced_models": [{"model": model, "residual": fitted[model].residual, "rows": fitted[model].rows,
-                           "cache_read_ratio": round(fitted[model].cache_read_rate / fitted[model].input_rate, 3)
-                           if fitted[model].input_rate > 0 else None}
+                           "cache_read_ratio": _read_ratio(fitted[model])}
                           for model in sorted(fitted)],
         "unpriced_models": [{"model": model, "share": share} for model, share in unpriced_models(turns, prices)],
         "dimensions": {d: [{"bucket": row.bucket, "responses": int(row.responses),

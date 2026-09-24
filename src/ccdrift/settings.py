@@ -10,7 +10,7 @@ from typing import Any, Sequence
 
 import pandas as pd
 
-from ccdrift.texts import NOT_LOGGED, change_line
+from ccdrift.texts import NOT_LOGGED
 
 ALERT_SETTINGS = ("cache_tier", "effort")
 REPORT_SETTINGS = ("cache_tier", "effort", "speed", "service_tier")

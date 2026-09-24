@@ -11,7 +11,7 @@ Run each step and paste the real output. Do not summarize a step you did not run
 uv run --group dev --group lab pytest -q
 ```
 
-Expect 739 passing at present, roughly 45s. The `lab` group is required even if only `tests/` matters; lab collection imports matplotlib. If the count dropped, find out which test disappeared before doing anything else.
+Expect 793 passing at present, roughly 45s. The `lab` group is required even if only `tests/` matters; lab collection imports matplotlib. If the count dropped, find out which test disappeared before doing anything else.
 
 ## 2. Status line stays import-light
 
