@@ -306,7 +306,7 @@ misses the cache when it reads less than half of what that response had cached.
 Every run follows these turns one by one on the main thread and in subagents, each
 apart, with the same kind of CUSUM against the usual miss rate of the 14 days before the
 last week (at least 1,000 turns): on the main thread against 2% with h = 3, and in
-subagents against 5% with h = 5 (measured in [lab/loop_cache.py](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/loop_cache.py)). It
+subagents against 2% with h = 8 (measured in [lab/loop_cache.py](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/loop_cache.py)). It
 warns when the sum passes h within the last day, at most once a week per stream, and
 also while a cache incident is open.
 

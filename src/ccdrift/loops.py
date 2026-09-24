@@ -20,8 +20,13 @@ from ccdrift.logs import outside_sdk
 
 STREAMS = ("main", "subagent")
 LoopSetting = namedtuple("LoopSetting", ["p1", "h", "min_sessions"])
+# Measured by lab/loop_cache.py (G8, G9) on 2026-09-24 over 2026-08-06..2026-09-23. Main
+# thread: no false alarm over 16 clean days, a planted 2% miss rate caught in 50 of 50 runs
+# in a median 81.5 turns. Subagents: the 2026-09-21 setting, p1 0.05 and h 5, raised 4 false
+# alarms over 15 clean days once the corpus reached 2026-09-23; p1 0.02 and h 8, the only
+# one of 36 combinations that passes, raises none and catches 50 of 50 in a median 262 turns.
 LOOP_SETTINGS: dict[str, Optional[LoopSetting]] = {"main": LoopSetting(p1=0.02, h=3.0, min_sessions=1),
-                                                   "subagent": LoopSetting(p1=0.05, h=5.0, min_sessions=1)}
+                                                   "subagent": LoopSetting(p1=0.02, h=8.0, min_sessions=1)}
 
 LOOP_COLUMNS = ["timestamp", "day", "session_id", "version", "cache_creation", "is_loop_miss"]
 
