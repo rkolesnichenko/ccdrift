@@ -55,8 +55,11 @@ uv run --group lab python -m lab.context
 # starts, which the alert judges, or with --with-sdk over Agent SDK starts too
 uv run --group lab python -m lab.components
 uv run --group lab python -m lab.components --with-sdk
+
+# G15: does the hook coverage rule find hooks that stop or start running, and nothing else?
+uv run --group lab python -m lab.hook_coverage
 ```
 
 `--help` lists every option, including `--main-thread-only`, `--since`, `--until` and
-the detector settings, and for `lab.failures`, `lab.context` and `lab.components`, `--today`, before which
+the detector settings, and for `lab.failures`, `lab.context`, `lab.components` and `lab.hook_coverage`, `--today`, before which
 the days read count as complete (default: today).
