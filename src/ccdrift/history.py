@@ -8,6 +8,7 @@ since. A year of one heavy user's responses takes about 65 MB."""
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 import sys
 from collections import Counter
@@ -17,14 +18,15 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from ccdrift.logs import (ATTRIBUTION_FIELDS, MAX_TIME, MIN_TIME, SDK_ENTRYPOINT_PREFIX, SETTING_FIELDS, TOKEN_FIELDS,
-                          USAGE_COUNTS, ParsedFile, Tables, census_frame, compaction_frame, duration_frame,
-                          failure_frame, frame, hook_frame, jsonl_files, parse_all, parse_file, usage_frame)
+from ccdrift.logs import (ATTRIBUTION_FIELDS, COMPONENT_SETS, COMPONENT_SIZES, MAX_TIME, MIN_TIME, SDK_ENTRYPOINT_PREFIX,
+                          SETTING_FIELDS, TOKEN_FIELDS, USAGE_COUNTS, ParsedFile, Tables, census_frame, compaction_frame,
+                          components_frame, duration_frame, failure_frame, frame, hook_frame, jsonl_files, parse_all,
+                          parse_file, usage_frame)
 from ccdrift.state import make_private
 from ccdrift.texts import HISTORY_LINES
 
 HISTORY_FILE = "history.sqlite"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 # Bump whenever parse_file's output changes, so every transcript still on disk is
 # read again. Rows of transcripts Claude Code already deleted keep their values.
 # 3: counts, times and ids out of range or of the wrong type read as missing.
@@ -37,7 +39,10 @@ SCHEMA_VERSION = 6
 #    usage and cost of each cost-state record.
 # 9: an error status past MAX_COUNT reads as missing, and a line nested past the JSON
 #    decoder's limit counts as bad JSON.
-PARSER_VERSION = 9
+# 10: what each session started with: the names and sizes of its skills, deferred tools,
+#     agent types, MCP instructions, CLAUDE.md files, system prompt, tool definitions and
+#     first message.
+PARSER_VERSION = 10
 
 TEXT_COLUMNS = ("model", "stop_reason", "miss_reason") + ATTRIBUTION_FIELDS + SETTING_FIELDS
 FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction", "opens_transcript")
@@ -97,6 +102,10 @@ CREATE TABLE IF NOT EXISTS field_census (
 CREATE TABLE IF NOT EXISTS field_days (
     file_id INTEGER NOT NULL, day TEXT NOT NULL, version TEXT NOT NULL,
     responses INTEGER NOT NULL, PRIMARY KEY (file_id, day, version));
+CREATE TABLE IF NOT EXISTS components (
+    file_id INTEGER PRIMARY KEY, skills TEXT, deferred TEXT, agents TEXT, mcp TEXT, tools TEXT,
+    skills_chars INTEGER, deferred_chars INTEGER, agents_chars INTEGER, mcp_chars INTEGER, claude_md_files INTEGER,
+    claude_md_chars INTEGER, system_chars INTEGER, tools_chars INTEGER, message_chars INTEGER);
 """
 
 
@@ -347,6 +356,7 @@ class History:
             self.db.execute("DELETE FROM model_usage WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM field_census WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM field_days WHERE file_id = ?", (file_id,))
+            self.db.execute("DELETE FROM components WHERE file_id = ?", (file_id,))
             self.db.executemany(_upsert("responses", RESPONSE_COLUMNS), [
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]),
                  *(row[c] for c in TEXT_COLUMNS), *(int(row[c]) for c in FLAG_COLUMNS),
@@ -380,6 +390,12 @@ class History:
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]), row["model"],
                  *(_count(row[c]) for c in USAGE_COUNTS), row["cost_usd"])
                 for row in parsed.model_usage.values()])
+            row = parsed.components
+            self.db.execute(
+                f"INSERT INTO components (file_id, {', '.join(COMPONENT_SETS + COMPONENT_SIZES)}) "
+                f"VALUES ({', '.join('?' * (1 + len(COMPONENT_SETS) + len(COMPONENT_SIZES)))})",
+                (file_id, *(None if row[c] is None else json.dumps(row[c]) for c in COMPONENT_SETS),
+                 *(_count(row[c]) for c in COMPONENT_SIZES)))
             self.db.execute("UPDATE files SET last_ts = (SELECT MAX(ts) FROM responses WHERE file_id = ?) WHERE id = ?",
                             (file_id, file_id))
 
@@ -471,6 +487,21 @@ class History:
             "SELECT day, version, SUM(responses) FROM field_days" + where + " GROUP BY 1, 2", params)}
         return census_frame(census, days)
 
+    def components(self, since: Optional[str] = None) -> pd.DataFrame:
+        """What each stored transcript's session started with, as parse_all's `components`
+        table. With `since` (a UTC day), only the transcripts History.responses keeps."""
+        query = (f"SELECT f.path AS source_file, f.session_id, {', '.join(f'c.{n}' for n in COMPONENT_SETS + COMPONENT_SIZES)} "
+                 "FROM components c JOIN files f ON f.id = c.file_id")
+        params: tuple = ()
+        if since is not None:
+            query += " WHERE c.file_id IN (SELECT id FROM files WHERE last_ts >= ?)"
+            params = (_day_start(since),)
+        rows = pd.read_sql_query(query + " ORDER BY f.path", self.db, params=params)
+        # pandas 3 reads NULL as NaN in a text column that holds values too; pandas 2 as None.
+        for col in COMPONENT_SETS:
+            rows[col] = [json.loads(value) if isinstance(value, str) else None for value in rows[col]]
+        return components_frame(rows.to_dict("records"))
+
 
 def load_history(source: Path, state_path: Path, claim: bool, since: Optional[str] = None,
                  active_days: int = 0, active_responses: int = 0) -> Tables:
@@ -499,7 +530,7 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
                 since = None if active_start is None else min(since, active_start)
             return Tables(history.responses(since), history.durations(since), history.hook_runs(since),
                           history.compactions(since), history.failures(since), history.field_census(since),
-                          history.model_usage(since))
+                          history.model_usage(since), history.components(since))
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc
     except pd.errors.DatabaseError as exc:

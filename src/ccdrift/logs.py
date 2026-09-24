@@ -76,6 +76,19 @@ CANDIDATES: dict[str, list[str]] = {
     "compact_pre_tokens": ["compactMetadata.preTokens"],
     "cost_usage":        ["modelUsage"],
     "cost_start":        ["startTime"],
+    # What a session started with, from the attachment records before its first response.
+    # A delta names what it adds addedNames, or addedTypes for agents, and carries its
+    # text as addedLines, or addedBlocks for MCP instructions.
+    "attachment_type":   ["attachment.type"],
+    "is_initial":        ["attachment.isInitial"],
+    "skill_names":       ["attachment.names"],
+    "skill_listing":     ["attachment.content"],
+    "added_names":       ["attachment.addedNames", "attachment.addedTypes"],
+    "removed_names":     ["attachment.removedNames", "attachment.removedTypes"],
+    "added_text":        ["attachment.addedLines", "attachment.addedBlocks"],
+    "instruction_files": ["attachment.files"],
+    "system_prompt":     ["attachment.systemPrompt"],
+    "tool_definitions":  ["attachment.tools"],
 }
 
 
@@ -235,11 +248,94 @@ USAGE_KEYS = ("inputTokens", "outputTokens", "cacheCreationInputTokens", "cacheR
               "thinkingTokens", "webSearchRequests")
 
 
+# What a session started with, one row per transcript. The name sets are sorted lists and
+# the sizes are characters; None means Claude Code logged no record of that part, so a
+# part a version doesn't log reads as unknown rather than as empty. `deferred` holds the
+# deferred tools, MCP ones named mcp__<server>__<tool>; `mcp` the MCP servers that sent
+# instructions; `tools` the tools whose definitions were sent in full.
+COMPONENT_SETS = ("skills", "deferred", "agents", "mcp", "tools")
+COMPONENT_SIZES = ("skills_chars", "deferred_chars", "agents_chars", "mcp_chars", "claude_md_files",
+                   "claude_md_chars", "system_chars", "tools_chars", "message_chars")
+COMPONENT_COLUMNS = ("source_file", "session_id") + COMPONENT_SETS + COMPONENT_SIZES
+
+# The delta records, by the component whose names and size they change.
+COMPONENT_DELTAS = {"deferred_tools_delta": "deferred", "agent_listing_delta": "agents",
+                    "mcp_instructions_delta": "mcp"}
+
+
+def new_components(rel: str) -> dict:
+    """A transcript's component row before any record is read: nothing logged, and no
+    user text yet."""
+    return {"source_file": rel, "session_id": None, **{name: None for name in COMPONENT_SETS + COMPONENT_SIZES},
+            "message_chars": 0}
+
+
+def _names(value: Any) -> Optional[set[str]]:
+    """The names in a logged list; None when it isn't a list."""
+    if not isinstance(value, list):
+        return None
+    return {name for name in map(_text, value) if name is not None}
+
+
+def _size(value: Any) -> Optional[int]:
+    """The characters in a logged text or list of texts; None when it is neither."""
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, list) and all(isinstance(part, str) for part in value):
+        return sum(len(part) for part in value)
+    return None
+
+
+def read_attachment(row: dict, obj: dict, started: bool) -> None:
+    """Fold one attachment record into a transcript's component row. Before the first
+    response (`started` False) every kind counts: a delta adds and removes names and adds
+    its size, unless it is initial, and a skills listing, CLAUDE.md record or system
+    prompt replaces what came before. After it, only the tool definitions are read, from
+    the first snapshot that carries them: from 2.1.267 Claude Code writes them in the
+    snapshot right after the first response, describing that same first request. A
+    record that isn't the shape Claude Code writes is left out. Only names and sizes are
+    kept: never listing, prompt, CLAUDE.md or tool text, nor a CLAUDE.md path."""
+    kind = field_get(obj, "attachment_type")
+    if kind == "prompt_snapshot" and row["tools"] is None:
+        definitions = field_get(obj, "tool_definitions")
+        if isinstance(definitions, list) and definitions and all(isinstance(d, dict) for d in definitions):
+            names = _names([d.get("name") for d in definitions])
+            if names:
+                row["tools"] = sorted(names)
+                row["tools_chars"] = len(json.dumps(definitions, ensure_ascii=False))
+    if started:
+        return
+    if kind in COMPONENT_DELTAS:
+        part = COMPONENT_DELTAS[kind]
+        added, removed = _names(field_get(obj, "added_names")), _names(field_get(obj, "removed_names", default=[]))
+        size = _size(field_get(obj, "added_text", default=[]))
+        if added is None or removed is None or size is None:
+            return
+        fresh = row[part] is None or field_get(obj, "is_initial") is True
+        row[part] = sorted(((set() if fresh else set(row[part])) | added) - removed)
+        row[f"{part}_chars"] = size + (0 if fresh else row[f"{part}_chars"])
+    elif kind == "skill_listing":
+        names, size = _names(field_get(obj, "skill_names")), _size(field_get(obj, "skill_listing"))
+        if names is not None and size is not None:
+            row["skills"], row["skills_chars"] = sorted(names), size
+    elif kind == "instructions":
+        files = field_get(obj, "instruction_files")
+        sizes = [_size(f.get("content")) if isinstance(f, dict) else None for f in files] \
+            if isinstance(files, list) else [None]
+        if None not in sizes:
+            row["claude_md_files"], row["claude_md_chars"] = len(sizes), sum(sizes)
+    elif kind == "prompt_snapshot":
+        size = _size(field_get(obj, "system_prompt"))
+        if size is not None:
+            row["system_chars"] = size
+
+
 @dataclass
 class ParsedFile:
     """One transcript's responses, turn durations, hook runs, compactions and per-model
     cost records by key, the transcript's first session id, line counts for --verbose,
-    and the key census (field_census, field_days) of its responses."""
+    the key census (field_census, field_days) of its responses, and what its session
+    started with (components, one row)."""
     responses: dict[str, dict] = field(default_factory=dict)
     durations: dict[str, dict] = field(default_factory=dict)
     hook_runs: dict[str, dict] = field(default_factory=dict)
@@ -248,6 +344,7 @@ class ParsedFile:
     field_census: dict[tuple[str, str, str], int] = field(default_factory=dict)
     field_days: dict[tuple[str, str], int] = field(default_factory=dict)
     model_usage: dict[str, dict] = field(default_factory=dict)
+    components: dict = field(default_factory=dict)
     session_id: Optional[str] = None
     lines: int = 0
     bad_json: int = 0
@@ -333,7 +430,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
     """Parse one transcript. Claude Code writes each content block of a response on
     its own line with the response's usage repeated, so lines that share a
     message.id are merged. Raises OSError when the file can't be read."""
-    parsed = ParsedFile()
+    parsed = ParsedFile(components=new_components(rel))
     # Set by lines between two responses: a prompt typed by the user opens
     # a new turn, and a compaction rewrites the conversation.
     prompt_pending = compact_pending = False
@@ -354,9 +451,17 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
             if parsed.session_id is None:
                 parsed.session_id = _text(field_get(obj, "session_id"))
             role = field_get(obj, "role")
+            if role == "attachment":
+                if not field_get(obj, "is_sidechain", default=False):
+                    read_attachment(parsed.components, obj, main_thread_seen)
+                continue
             if role == "user":
-                if not field_get(obj, "is_meta") and not has_tool_result(field_get(obj, "content")):
+                content = field_get(obj, "content")
+                if not field_get(obj, "is_meta") and not has_tool_result(content):
                     prompt_pending = True
+                # Everything the user sent before the first response went with it.
+                if not main_thread_seen and not field_get(obj, "is_sidechain", default=False):
+                    parsed.components["message_chars"] += content_chars(content)[1]
                 continue
             if role == "system":
                 subtype = field_get(obj, "subtype")
@@ -511,7 +616,8 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
     # read straight from the transcripts has the columns the store's own read of it does.
     session = parsed.session_id or fp.stem
     for row in (*parsed.responses.values(), *parsed.durations.values(), *parsed.hook_runs.values(),
-                *parsed.compactions.values(), *parsed.failures.values(), *parsed.model_usage.values()):
+                *parsed.compactions.values(), *parsed.failures.values(), *parsed.model_usage.values(),
+                parsed.components):
         row["session_id"] = session
     return parsed
 
@@ -651,10 +757,22 @@ def census_frame(census: Mapping[tuple[str, str, str], int],
     return df.sort_values(["day", "version", "path"], kind="stable").reset_index(drop=True)
 
 
+def components_frame(rows) -> pd.DataFrame:
+    """What each session started with, one row per transcript, sorted by its path. A size
+    Claude Code didn't log is NaN, not 0."""
+    df = pd.DataFrame(list(rows), columns=list(COMPONENT_COLUMNS))
+    for col in COMPONENT_SIZES:
+        df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
+    for col in COMPONENT_SETS:
+        df[col] = df[col].astype(object).where(df[col].notna(), None)
+    return df.sort_values("source_file", kind="stable").reset_index(drop=True)
+
+
 @dataclass
 class Tables:
     """Everything ccdrift reads from transcripts, one table per record kind, plus the
-    key census (field_census) and per-model usage and cost (model_usage)."""
+    key census (field_census), per-model usage and cost (model_usage) and what each
+    session started with (components)."""
     responses: pd.DataFrame
     durations: pd.DataFrame
     hook_runs: pd.DataFrame
@@ -662,6 +780,7 @@ class Tables:
     failures: pd.DataFrame
     field_census: pd.DataFrame = field(default_factory=pd.DataFrame)
     model_usage: pd.DataFrame = field(default_factory=pd.DataFrame)
+    components: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def parse_all(source: Path) -> Tables:
@@ -670,6 +789,7 @@ def parse_all(source: Path) -> Tables:
     kinds = {"responses": {}, "durations": {}, "hook_runs": {}, "compactions": {}, "failures": {}, "model_usage": {}}
     census: dict[tuple[str, str, str], int] = {}
     days: dict[tuple[str, str], int] = {}
+    components = []
     for fp, rel in jsonl_files(source):
         try:
             parsed = parse_file(fp, rel)
@@ -685,12 +805,13 @@ def parse_all(source: Path) -> Tables:
             census[key] = census.get(key, 0) + count
         for day_key, count in parsed.field_days.items():
             days[day_key] = days.get(day_key, 0) + count
+        components.append(parsed.components)
     return Tables(frame(list(kinds["responses"].values())), duration_frame(list(kinds["durations"].values())),
                   hook_frame(list(kinds["hook_runs"].values())),
                   compaction_frame(list(kinds["compactions"].values())),
                   failure_frame(list(kinds["failures"].values())),
                   census_frame(census, days),
-                  usage_frame(list(kinds["model_usage"].values())))
+                  usage_frame(list(kinds["model_usage"].values())), components_frame(components))
 
 
 def parse_durations(source: Path) -> pd.DataFrame:
