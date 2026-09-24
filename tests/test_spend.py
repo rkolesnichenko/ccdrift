@@ -121,10 +121,13 @@ def money_corpus(tmp_path, unpriced_out=None):
 CACHE_RATIOS = {"claude-opus-5": (5e-6, 25e-6, 0.1), "claude-opus-5-5": (4e-6, 20e-6, 0.05)}
 
 
-def two_cache_ratios_corpus(tmp_path):
+def two_cache_ratios_corpus(tmp_path, keys=None, rates=None):
     """One main-thread response per model, each reading a million tokens from the cache,
     beside four cost records per model priced at CACHE_RATIOS. A fit sharing one read ratio
-    between them could price at most one of the two.
+    between them could price at most one of the two. `keys` renames one of those models'
+    cost-state key, as Claude Code keys a 1M-context tier `claude-opus-5-5[1m]`; `rates` adds
+    cost records under further keys, taken as written, as (rate in, rate out, read ratio,
+    how many records).
 
     claude-opus-5:   10 input + 1,000,000 read at $0.50/Mtok + 100,000 output = $3.00005.
     claude-opus-5-5: 10 input + 1,000,000 read at $0.20/Mtok + 100,000 output = $2.20004."""
@@ -136,12 +139,16 @@ def two_cache_ratios_corpus(tmp_path):
               {"input": 50, "output": 5_000, "cache_creation": 900, "cache_read": 40},
               {"input": 7_000, "output": 20, "cache_creation": 5, "cache_read": 60_000}]
     records = []
+    priced = [((keys or {}).get(model, model), *ratios, len(counts)) for model, ratios in CACHE_RATIOS.items()]
+    priced += [(key, *ratios) for key, ratios in (rates or {}).items()]
     for i, one in enumerate(counts):
         usage = {}
-        for model, (rate_in, rate_out, read_ratio) in CACHE_RATIOS.items():
+        for key, rate_in, rate_out, read_ratio, many in priced:
+            if i >= many:
+                continue
             cost = ((one["input"] + 1.25 * one["cache_creation"]) * rate_in
                     + one["cache_read"] * rate_in * read_ratio + one["output"] * rate_out)
-            usage[model] = {**one, "costUSD": cost}
+            usage[key] = {**one, "costUSD": cost}
         records.append(cost_state(at(600 * i), usage, start=i + 1))
     write(tmp_path / "proj-a" / "s1.jsonl", responses + records)
 
@@ -466,6 +473,40 @@ def test_two_models_reading_the_cache_at_different_ratios_are_each_charged_at_th
     assert "$5.20" in out.splitlines()[0]                      # 3.00005 + 2.20004
     assert "$3.00" in bucket_line(out, "claude-opus-5") and "$2.20" in bucket_line(out, "claude-opus-5-5")
     assert "no price" not in out
+
+
+def test_a_model_whose_cost_records_name_only_its_1m_context_tier_is_charged_from_them(tmp_path, capsys):
+    # claude-opus-5-5's first cost record, on 2026-09-24, was keyed claude-opus-5-5[1m] while
+    # all 3,001 of its responses said claude-opus-5-5: joined exactly, it could never be
+    # priced, and at 5.6% of the window it withheld the total for good.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    two_cache_ratios_corpus(tmp_path / "logs", keys={"claude-opus-5-5": "claude-opus-5-5[1m]"})
+    run_spend(tmp_path / "logs", state, today=TODAY)
+    out = capsys.readouterr().out
+    assert "$5.20" in out.splitlines()[0]                      # 3.00005 + 2.20004
+    assert "$2.20" in bucket_line(out, "claude-opus-5-5") and "no price" not in out
+
+
+def test_a_model_with_a_plain_key_is_charged_at_it_beside_its_1m_context_tier(tmp_path, capsys):
+    # claude-opus-5 has both keys. A response doesn't say which tier it ran on, so it keeps
+    # the plain price; the 1M tier's, here twice as dear, must not replace it.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    two_cache_ratios_corpus(tmp_path / "logs", rates={"claude-opus-5[1m]": (10e-6, 50e-6, 0.1, 4)})
+    run_spend(tmp_path / "logs", state, today=TODAY)
+    assert "$3.00" in bucket_line(capsys.readouterr().out, "claude-opus-5")
+
+
+def test_a_model_whose_plain_key_went_unpriced_does_not_borrow_its_1m_context_price(tmp_path, capsys):
+    # With a plain key on record the 1M tier is a different price, not a second name for the
+    # same one: too few plain records leave the model unpriced rather than charged as 1M.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    two_cache_ratios_corpus(tmp_path / "logs", keys={"claude-opus-5-5": "claude-opus-5-5[1m]"},
+                            rates={"claude-opus-5-5": (4e-6, 20e-6, 0.05, 1)})
+    run_spend(tmp_path / "logs", state, today=TODAY)
+    assert bucket_line(capsys.readouterr().out, "claude-opus-5-5").endswith("no price")
 
 
 def test_a_rounding_error_model_no_longer_blanks_the_bucket_it_landed_in(tmp_path, capsys):
