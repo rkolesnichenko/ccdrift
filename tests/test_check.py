@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 import ccdrift.check
+import ccdrift.history
 import ccdrift.loops
 from ccdrift.check import blank_cache_stretch, run_check
 from ccdrift.incidents import add_incident, close_incident
@@ -106,6 +107,24 @@ def test_the_check_leaves_a_file_of_the_users_own_its_output_is_sent_to_as_it_is
         monkeypatch.setattr(sys, "stdout", out)
         run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4))
     assert stat.S_IMODE(log.stat().st_mode) == 0o644
+
+
+def test_the_check_carries_on_past_a_transcript_the_parser_fails_on_and_its_log_names_it(
+        tmp_path, monkeypatch, capsys):
+    # Before, it failed every hour with that exception until Claude Code deleted the transcript.
+    main_thread_days(tmp_path / "logs" / "p", [{}] * 3)
+    write(tmp_path / "logs" / "p" / "bad.jsonl", [line("b1", text(40), ts=at(0))])
+    real = ccdrift.history.parse_file
+
+    def parse(fp, rel):
+        if rel == "p/bad.jsonl":
+            raise RuntimeError("the parser tripped on this transcript")
+        return real(fp, rel)
+
+    monkeypatch.setattr(ccdrift.history, "parse_file", parse)
+    assert run_check(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4)) == 0
+    assert load_state(tmp_path / "state.json")["last_run"]["ok"]
+    assert "Skipped p/bad.jsonl: RuntimeError: the parser tripped" in capsys.readouterr().err
 
 
 def test_cache_metric_alert_points_to_ccdrift_peek(tmp_path, sent, capsys):

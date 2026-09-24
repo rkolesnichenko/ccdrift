@@ -280,12 +280,18 @@ class History:
         """Read the transcripts under `source` that are new or changed since the last
         update, or all of them after a parser change, and return how many were read.
         A known transcript that can't be read keeps its rows and is tried again next
-        time. With `claim`, a store that holds no transcript folder yet is tied to
-        `source` once it has read one."""
+        time. So does one the parser fails on, or whose rows the store can't take, with
+        a line on stderr, which the check's log keeps: one bad transcript no longer fails
+        every check until Claude Code deletes it. When two or more fail and none reads,
+        the first failure is raised: that is the parser, not a transcript, and the check
+        has to say so. One alone is skipped even when it is the only one to read, since
+        an hourly check often reads just the transcript that changed. With `claim`, a
+        store that holds no transcript folder yet is tied to `source` once it has read one."""
         known = {path: (size, mtime) for path, size, mtime in
                  self.db.execute("SELECT path, size, mtime_ns FROM files")}
         reread = self.meta.get("parser_version") != str(PARSER_VERSION)
         read = 0
+        failed: list[Exception] = []
         for fp, rel in jsonl_files(source):
             try:
                 stat = fp.stat()
@@ -293,17 +299,36 @@ class History:
                     continue
                 parsed = parse_file(fp, rel)
             except OSError:
-                if rel in known:
-                    with self.db:
-                        self.db.execute("UPDATE files SET size = NULL WHERE path = ?", (rel,))
+                self._retry(rel, known)
                 continue
-            self._replace(rel, stat.st_size, stat.st_mtime_ns, parsed)
+            except Exception as exc:  # a parser bug no test has found yet
+                self._skip(rel, known, exc, failed)
+                continue
+            try:
+                self._replace(rel, stat.st_size, stat.st_mtime_ns, parsed)
+            except (OverflowError, ValueError, TypeError) as exc:  # a value SQLite can't store
+                self._skip(rel, known, exc, failed)
+                continue
             read += 1
+        if len(failed) > 1 and not read:
+            raise failed[0]
         if claim and read and self.built_from() is None:
             self._set_meta("source", str(source.expanduser().resolve()))
         self._set_meta("parser_version", str(PARSER_VERSION))
         self._days = None
         return read
+
+    def _retry(self, rel: str, known: dict[str, tuple[int, int]]) -> None:
+        """Keep a known transcript's rows and have the next update read it again."""
+        if rel in known:
+            with self.db:
+                self.db.execute("UPDATE files SET size = NULL WHERE path = ?", (rel,))
+
+    def _skip(self, rel: str, known: dict[str, tuple[int, int]], exc: Exception, failed: list[Exception]) -> None:
+        """Leave out a transcript that failed, saying so, and try it again next time."""
+        print(HISTORY_LINES["skipped"].format(path=rel, error=f"{type(exc).__name__}: {exc}"), file=sys.stderr)
+        failed.append(exc)
+        self._retry(rel, known)
 
     def _replace(self, rel: str, size: int, mtime_ns: int, parsed: ParsedFile) -> None:
         """Replace one transcript's rows in a single transaction."""
