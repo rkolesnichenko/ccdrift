@@ -501,6 +501,95 @@ def test_a_known_transcript_that_becomes_unreadable_is_marked_for_retry_and_the_
         assert history.update(tmp_path / "logs") == 1
 
 
+def failing_parse(monkeypatch, fails):
+    """parse_file, raising for the transcripts in `fails` as a parser bug no input test found would."""
+    real = ccdrift.history.parse_file
+
+    def parse(fp, rel):
+        if rel in fails:
+            raise RuntimeError("the parser tripped on this transcript")
+        return real(fp, rel)
+
+    monkeypatch.setattr(ccdrift.history, "parse_file", parse)
+    return real
+
+
+def test_a_transcript_the_parser_fails_on_is_skipped_keeping_its_rows_and_read_again_next_time(
+        tmp_path, monkeypatch, capsys):
+    # One exception out of parse_file used to fail every check until Claude Code deleted
+    # the transcript: 0.13.2 fixed the two inputs known to do it, and this is for the next.
+    transcripts(tmp_path / "logs")
+    with History(tmp_path / "history.sqlite") as history:
+        history.update(tmp_path / "logs")
+        before = len(history.responses())
+    monkeypatch.setattr(ccdrift.history, "PARSER_VERSION", ccdrift.history.PARSER_VERSION + 1)
+    real = failing_parse(monkeypatch, {"p/s1.jsonl"})
+    with History(tmp_path / "history.sqlite") as history:
+        assert history.update(tmp_path / "logs") == 1  # the subagent transcript
+        assert len(history.responses()) == before
+        assert history.meta["parser_version"] == str(ccdrift.history.PARSER_VERSION)
+    err = capsys.readouterr().err
+    assert "p/s1.jsonl" in err and "RuntimeError: the parser tripped on this transcript" in err
+    monkeypatch.setattr(ccdrift.history, "parse_file", real)
+    with History(tmp_path / "history.sqlite") as history:
+        assert history.update(tmp_path / "logs") == 1
+
+
+def test_a_bad_transcript_that_is_the_only_one_to_read_is_skipped_not_raised(tmp_path, monkeypatch, capsys):
+    # The hourly check reads only what changed, often one transcript: failing when that one
+    # fails would put back the failure this skip exists to remove.
+    transcripts(tmp_path / "logs")
+    with History(tmp_path / "history.sqlite") as history:
+        history.update(tmp_path / "logs")
+    (tmp_path / "logs" / "p" / "s1.jsonl").write_text(
+        (tmp_path / "logs" / "p" / "s1.jsonl").read_text() + "\n")  # changed, so it is read again
+    failing_parse(monkeypatch, {"p/s1.jsonl"})
+    with History(tmp_path / "history.sqlite") as history:
+        assert history.update(tmp_path / "logs") == 0
+    assert "p/s1.jsonl" in capsys.readouterr().err
+
+
+def test_a_parser_that_fails_on_every_transcript_it_reads_still_fails_the_update(tmp_path, monkeypatch):
+    # Then it is the parser, not a transcript, and the check has to say so rather than
+    # carry on quietly with rows that stopped changing.
+    transcripts(tmp_path / "logs")
+    failing_parse(monkeypatch, {"p/s1.jsonl", "p/s1/subagents/agent-a.jsonl"})
+    with History(tmp_path / "history.sqlite") as history, pytest.raises(RuntimeError, match="tripped"):
+        history.update(tmp_path / "logs")
+
+
+def test_a_transcript_whose_rows_the_store_cant_take_is_skipped_too(tmp_path, monkeypatch, capsys):
+    # How the unbounded apiErrorStatus failed before 0.13.2: the parse passed and the write didn't.
+    transcripts(tmp_path / "logs")
+    real = History._replace
+
+    def replace(self, rel, *args):
+        if rel == "p/s1.jsonl":
+            raise OverflowError("Python int too large to convert to SQLite INTEGER")
+        return real(self, rel, *args)
+
+    monkeypatch.setattr(History, "_replace", replace)
+    with History(tmp_path / "history.sqlite") as history:
+        assert history.update(tmp_path / "logs") == 1
+    assert "OverflowError: Python int too large" in capsys.readouterr().err
+
+
+def test_a_store_error_while_writing_is_not_taken_for_a_bad_transcript(tmp_path, monkeypatch):
+    # A locked or damaged store is about every transcript, so it fails the update as before.
+    transcripts(tmp_path / "logs")
+
+    real = History._replace
+
+    def replace(self, rel, *args):
+        if rel == "p/s1.jsonl":  # one transcript, so no count of failures can stand in for the rule
+            raise sqlite3.OperationalError("database is locked")
+        return real(self, rel, *args)
+
+    monkeypatch.setattr(History, "_replace", replace)
+    with History(tmp_path / "history.sqlite") as history, pytest.raises(sqlite3.OperationalError):
+        history.update(tmp_path / "logs")
+
+
 def test_report_and_incident_list_leave_an_unclaimed_store_alone(tmp_path):
     transcripts(tmp_path / "logs")
     load_history(tmp_path / "logs", tmp_path / "state.json", claim=False)

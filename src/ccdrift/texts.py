@@ -1099,4 +1099,5 @@ HISTORY_LINES = {"busy": "Can't use the history store {path}: {error}. Another c
                  "bad_schema": "its schema version {stored!r} isn't a number",
                  "newer": "The history store {path} was written by a newer ccdrift. Upgrade ccdrift, or move the "
                           "store aside to rebuild it from the transcripts still on disk.",
-                 "other_source": "Not using ccdrift's history in {path}: it was built from {built_from}."}
+                 "other_source": "Not using ccdrift's history in {path}: it was built from {built_from}.",
+                 "skipped": "Skipped {path}: {error}. Its rows stay as they were, and it is read again next time."}
