@@ -16,7 +16,9 @@ import ccdrift.history
 import ccdrift.loops
 from ccdrift.check import blank_cache_stretch, run_check
 from ccdrift.incidents import add_incident, close_incident
+from ccdrift.logs import parse_source
 from ccdrift.loops import LoopSetting
+from ccdrift.sessions import context_found, session_starts
 from ccdrift.state import load_state, new_state, save_state
 from ccdrift.status import short_status, status_report
 from tests.helpers import (DAY, agent_listing, at, attachment, busy_days, damage_responses_table, deferred_tools,
@@ -536,8 +538,8 @@ def test_a_session_start_alert_counts_what_the_sessions_started_with_and_logs_th
     message = sent_to_exec.read_text()
     assert message.endswith(
         " Of what Claude Code logs about a session's start, 11 agent types, 4 skills and 11 MCP tools were added, "
-        "about 2.4k more characters, though the logs can't say how many of the tokens that is. Claude Code didn't "
-        "log CLAUDE.md files, the system prompt or tool definitions in every session compared, so ccdrift couldn't "
+        "about 2.4k more characters, though the logs can't say how many of the tokens that is. CLAUDE.md files, "
+        "the system prompt or tool definitions weren't logged in every session compared, so ccdrift couldn't "
         "compare those parts.\n")
     assert "agent-26" not in message and "skill-71" not in message and "tracker" not in message
     lines = out.splitlines()
@@ -545,6 +547,48 @@ def test_a_session_start_alert_counts_what_the_sessions_started_with_and_logs_th
     assert "    skills added: skill-68, skill-69, skill-70, skill-71" in lines
     assert "    MCP tools added: tracker (11)" in lines
     assert "    the skills listing: 21,077 -> 22,976 characters" in lines
+
+
+def test_a_session_start_alert_names_no_addition_when_its_window_and_baseline_are_two_different_projects(
+        tmp_path, sent, capsys):
+    # -Users-me-b runs first, with its own skill and MCP server; work then moves to
+    # -Users-me-a, whose sessions genuinely start with half the context. Each project has
+    # too few sessions on its own for its own pass to judge it, so only the pooled pass
+    # finds the step, and first_of_each keeps it: its window is -a's own three sessions,
+    # its baseline -b's, a different project entirely -- the shape the reviewer reproduced.
+    # Neither project's own skill or MCP server changed; the fix must say nothing changed
+    # rather than reading -b's as removed and -a's as added.
+    def start(project, day, tokens, skill, mcp_tool, sid):
+        write(tmp_path / "logs" / project / f"{sid}.jsonl", [
+            attachment(at(day * DAY), skill_listing([skill]), sid=sid, version="2.1.250"),
+            attachment(at(day * DAY), deferred_tools(["Read", mcp_tool]), sid=sid, version="2.1.250"),
+            prompt(at(day * DAY), sid=sid),
+            line(f"m{sid}", text(40), ts=at(day * DAY), sid=sid, cache_creation=100, cache_read=tokens - 110,
+                 version="2.1.250", entrypoint="cli")])
+
+    for d in range(8):
+        start("-Users-me-b", d, 40_000, "skill-b", "mcp__toolb__x", f"b{d}")
+    for d in (8, 9, 10):
+        start("-Users-me-a", d, 128_000, "skill-a", "mcp__toola__y", f"a{d}")
+    for d in (11, 12, 13):
+        start("-Users-me-a", d, 64_000, "skill-a", "mcp__toola__y", f"a{d}")
+
+    # The scenario actually exercises the pooled pass's change, not either project's own.
+    starts = session_starts(parse_source(tmp_path / "logs"))
+    (record, change), = context_found(starts, new_state(), date(2026, 9, 15))
+    assert change.project is None
+    assert {f.split("/")[0] for f in change.window_files} == {"-Users-me-a"}
+    assert {f.split("/")[0] for f in change.baseline_files} == {"-Users-me-b"}
+
+    sent_to_exec = tmp_path / "exec.txt"
+    check_logs(tmp_path, today=date(2026, 9, 15), exec_command=f'echo "$CCDRIFT_MESSAGE" >> "{sent_to_exec}"')
+    assert sent == ["ccdrift: session start changed"]
+    message = sent_to_exec.read_text()
+    assert "Of what Claude Code logs" not in message
+    assert "added" not in message and "removed" not in message
+    out = capsys.readouterr().out
+    assert "added:" not in out and "removed:" not in out
+    assert "skill-b" not in out and "skill-a" not in out and "toolb" not in out and "toola" not in out
 
 
 def test_a_state_from_an_older_ccdrift_is_rejudged_once_and_keeps_a_real_change(tmp_path, sent, capsys):

@@ -10,6 +10,8 @@ from typing import Any, Optional, Sequence
 
 import pandas as pd
 
+from ccdrift.sessions import project_of
+
 # The parts compared, by the size column that says whether a session logged it. The
 # first five have name sets of their own, under the part's name; CLAUDE.md files and the
 # system prompt are sizes only.
@@ -60,20 +62,39 @@ def _split(changes: dict[str, list[str]]) -> dict[str, Any]:
     return out
 
 
+def _own_project_baseline(window: Sequence[str], baseline: Sequence[str]) -> Optional[list[str]]:
+    """`baseline`, narrowed to the one project `window` belongs to; None when `window`
+    itself spans more than one, so nothing is compared. `sessions.found_changes` runs its
+    pooled pass over every project's sessions together, and hands compare_components a
+    window and baseline that can each mix them: the any-move rule below was measured
+    within one project and version, so comparing across projects would read a machine-wide
+    move between projects, or the ordinary difference between two projects' own skills,
+    MCP servers or CLAUDE.md, as something that changed."""
+    projects = {project_of(path) for path in window}
+    if len(projects) != 1:
+        return None
+    (only,) = projects
+    return [path for path in baseline if project_of(path) == only]
+
+
 def compare_components(components: pd.DataFrame, window: Sequence[str],
                        baseline: Sequence[str]) -> Optional[dict[str, Any]]:
     """What changed between the sessions of `baseline` and those of `window`, given as
-    transcript paths. A part counts as logged on a side when more than half of that
-    side's sessions logged it, and is compared over those sessions; otherwise it is
-    `unknown`. A name is `added` when more than half of the window's sessions carry it
-    and fewer than half of the baseline's do, and `removed` the other way round, so a
-    one-off, like a server that failed to start once, drops out. `sizes` holds each part
-    whose median size moved, as (baseline, window). Any move counts: within one project
-    and version a part's size matched its group's median in all but 8 to 151 of the 47
-    to 1,055 sessions that logged it, measured on 2026-09-24, and those that didn't
-    differed by thousands of characters. None when no part is logged on both sides,
-    such as sessions from before ccdrift kept these rows."""
+    transcript paths, both narrowed to `window`'s own project first (_own_project_baseline).
+    A part counts as logged on a side when more than half of that side's sessions logged
+    it, and is compared over those sessions; otherwise it is `unknown`. A name is `added`
+    when more than half of the window's sessions carry it and fewer than half of the
+    baseline's do, and `removed` the other way round, so a one-off, like a server that
+    failed to start once, drops out. `sizes` holds each part whose median size moved, as
+    (baseline, window). Any move counts: within one project and version a part's size
+    matched its group's median in all but 8 to 151 of the 47 to 1,055 sessions that logged
+    it, measured on 2026-09-24, and those that didn't differed by thousands of characters.
+    None when no part is logged on both sides, such as sessions from before ccdrift kept
+    these rows, or when the baseline left after narrowing has too few of them."""
     if components.empty:
+        return None
+    baseline = _own_project_baseline(window, baseline)
+    if baseline is None:
         return None
     rows = {str(row["source_file"]): row for row in components.to_dict("records")}
     after = [rows.get(str(path), {}) for path in window]

@@ -98,10 +98,9 @@ class ContextChange:
     runs the detector over all the judged sessions and over each project's own rows, and
     returns changes from several frames together, so a change's positions mean nothing
     outside the frame it came from. `project` names that frame: the project whose own
-    sessions the step was found in, or None when it came from the pass over all of them,
-    so a reader can find the step's own sessions without its positions, as are
-    `window_files` and `baseline_files`, the transcripts of the window and baseline
-    sessions."""
+    sessions the step was found in, or None when it came from the pass over all of them.
+    `window_files` and `baseline_files` name the transcripts of the window and baseline
+    sessions, so a reader can find the step's own sessions without its positions."""
     since: str
     until: str
     before: float

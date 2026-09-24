@@ -77,7 +77,7 @@ CANDIDATES: dict[str, list[str]] = {
     "cost_usage":        ["modelUsage"],
     "cost_start":        ["startTime"],
     # What a session started with, from the attachment records before its first response.
-    # A delta names what it adds addedNames, or addedTypes for agents, and carries its
+    # A delta names what it adds in addedNames, or addedTypes for agents, and carries its
     # text as addedLines, or addedBlocks for MCP instructions.
     "attachment_type":   ["attachment.type"],
     "is_initial":        ["attachment.isInitial"],

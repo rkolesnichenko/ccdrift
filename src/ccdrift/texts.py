@@ -503,10 +503,13 @@ def components_text(what: Optional[Mapping[str, Any]]) -> str:
             f", about {approx(-moved)} fewer characters" if moved < 0 else "")
     text = (f" Of what Claude Code logs about a session's start, {changed}{size}, though the logs can't say how many "
             "of the tokens that is." if changed else
-            " Nothing Claude Code logs about a session's start changed, so the step is in what it doesn't log.")
+            " Nothing ccdrift could compare of what Claude Code logs about a session's start changed, so the step "
+            "is in what it doesn't log or couldn't compare.")
     unknown = [COMPONENT_PARTS[part] for part in what["unknown"]]
     if unknown:
-        text += (f" Claude Code didn't log {_joined(unknown, 'or')} in every session compared, so ccdrift couldn't "
+        joined = _joined(unknown, "or")
+        verb = "wasn't" if len(unknown) == 1 else "weren't"
+        text += (f" {joined[0].upper()}{joined[1:]} {verb} logged in every session compared, so ccdrift couldn't "
                  f"compare {'that part' if len(unknown) == 1 else 'those parts'}.")
     return text
 

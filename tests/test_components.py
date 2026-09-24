@@ -264,6 +264,23 @@ def test_nothing_to_compare_when_no_part_is_logged_on_both_sides():
     assert compare_components(components_frame([]), ["w0.jsonl"], ["b0.jsonl"]) is None
 
 
+def test_a_window_in_one_project_is_compared_only_to_that_projects_own_baseline():
+    # The baseline interleaves another project's sessions, which carry a different skill
+    # and MCP tool, with the window project's own, unchanged. Comparing the pooled baseline
+    # would read "b/b0..3"'s "other" and "mcp__ghB__y" as removed and the window project's
+    # own "review" as added, since only 4 of the 10 pooled baseline sessions carry it.
+    window = rows("a/w", 3, skills=["review"], deferred=["Read"])
+    baseline = (rows("a/b", 4, skills=["review"], deferred=["Read"])
+                + rows("b/b", 6, skills=["other"], deferred=["Read", "mcp__ghB__y"]))
+    what = compared(window, baseline)
+    assert what["added"] == {} and what["removed"] == {}
+
+
+def test_a_window_spanning_two_projects_compares_nothing():
+    window = rows("a/w", 2) + rows("b/w", 1)
+    assert compared(window, rows("a/b", 10)) is None
+
+
 CHANGE = {"since": "2026-08-27", "from": 106_031.0, "to": 128_699.0, "days": ["2026-08-27", "2026-08-29"],
           "projects": ["-Users-me-app"], "of_projects": 1, "new_version": False}
 STEP = {"added": {"agents": [f"agent-{i}" for i in range(11)], "skills": ["a", "b", "c", "d"],
@@ -278,8 +295,8 @@ def test_the_alert_counts_what_changed_and_names_none_of_it():
     assert message.startswith(context_message(CHANGE, []))
     assert message.endswith(
         " Of what Claude Code logs about a session's start, 11 agent types, 4 skills and 11 MCP tools were added, "
-        "about 3.1k more characters, though the logs can't say how many of the tokens that is. Claude Code didn't "
-        "log CLAUDE.md files, the system prompt or tool definitions in every session compared, so ccdrift couldn't "
+        "about 3.1k more characters, though the logs can't say how many of the tokens that is. CLAUDE.md files, "
+        "the system prompt or tool definitions weren't logged in every session compared, so ccdrift couldn't "
         "compare those parts.")
     assert not any(name in message for name in ("agent-0", "srv-one", "srv-two", "mcp__"))
 
@@ -313,8 +330,9 @@ def test_a_size_that_moved_with_no_name_added_or_removed_is_still_said():
 def test_nothing_logged_having_changed_points_away_from_skills_agents_and_claude_md():
     what = {"added": {}, "removed": {}, "sizes": {}, "unknown": ["tools"]}
     assert context_message(CHANGE, [], what).endswith(
-        " Nothing Claude Code logs about a session's start changed, so the step is in what it doesn't log. Claude "
-        "Code didn't log tool definitions in every session compared, so ccdrift couldn't compare that part.")
+        " Nothing ccdrift could compare of what Claude Code logs about a session's start changed, so the step is "
+        "in what it doesn't log or couldn't compare. Tool definitions wasn't logged in every session compared, "
+        "so ccdrift couldn't compare that part.")
 
 
 def test_the_alert_says_nothing_more_when_there_was_nothing_to_compare():
