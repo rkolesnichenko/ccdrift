@@ -261,6 +261,17 @@ def hook_failure_line(failure: dict[str, Any]) -> str:
             f"{failed2} of {runs2} on {second}")
 
 
+# A thread's tool calls, as `ccdrift status` names a hook coverage alert.
+HOOK_CALLS = {"main": "main-thread tool calls", "subagent": "subagent tool calls"}
+
+
+def hook_change_line(thread: str, direction: str, since: str) -> str:
+    """A hook coverage alert in `ccdrift status`: "hooks started running on subagent tool
+    calls from 2026-09-05". It takes the thread, direction and first day alone, so it
+    can't name a project, tool or MCP server."""
+    return f"hooks {direction} running on {HOOK_CALLS[thread]} from {since}"
+
+
 def field_gap_line(gap: dict[str, Any]) -> str:
     where = "" if gap["version"] == "unknown" else f" on {gap['version']}"
     return (f"{gap['field']} not logged{where}: {gap['share']:.0%} of {gap['responses']} responses, "

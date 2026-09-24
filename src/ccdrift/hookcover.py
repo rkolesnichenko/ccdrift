@@ -19,10 +19,12 @@ HookSetting = namedtuple("HookSetting", ["window", "baseline", "agree", "min_cal
 
 # Measured by lab/hook_coverage.py (G15) on 2026-09-24 over 1,222 CLI transcripts in 354
 # streams: the real start at 2.1.261 found once, no other alert, 11 of 11 planted stops
-# caught, 7 of them the morning after and the rest within 3 days, and a move to an
-# unhooked project left alone. 35 of the 36 settings tried pass; window 2 with baseline 10,
-# agreement 0.8 and no call minimum raised one false alarm, and window 3 is the smallest
-# at which every one passes.
+# caught, 7 of them the morning after and the rest within 3 days, a move to an unhooked
+# project left alone, and the first check after upgrading quiet. The one stricter setting
+# tried passes too. 32 of the 36 settings pass: all 18 at agreement 1.0, while 4 of the 18
+# at 0.8 raise one false alarm, a subagent stream starting 2026-09-21 on a mostly unhooked
+# baseline. Window 3 rather than 2 is a judgement: hooks scoped to an agent type or a
+# skill, which these logs hold none of, would make short runs look like a change.
 SETTING = HookSetting(window=3, baseline=10, agree=1.0, min_calls=3)
 
 RECENT_DAYS = 14   # a change must end within this many days, as the other change alerts
@@ -46,9 +48,17 @@ def transcript_states(coverage: pd.DataFrame, today: date, min_calls: int) -> pd
     rows = rows.assign(project=rows["source_file"].astype(str).map(project_of),
                        thread=rows["is_sidechain"].astype(bool).map({True: "subagent", False: "main"}),
                        version=rows["version"].fillna("unknown").astype(str))
-    grouped = rows.groupby([*STREAM, "source_file"], sort=True).agg(
-        calls=("calls", "sum"), hooked=("hooked", "sum"), day=("day", "min"),
-        versions=("version", lambda v: tuple(sorted(set(v))))).reset_index()
+    keys = [*STREAM, "source_file"]
+    grouped = rows.groupby(keys, sort=True).agg(
+        calls=("calls", "sum"), hooked=("hooked", "sum"), day=("day", "min")).reset_index()
+    # A transcript's versions can differ between its streams (46 of the 6,244 states on
+    # 2026-09-24), so they stay per stream. Nearly every one ran a single version there, so
+    # only the rest are gathered a group at a time, which otherwise cost the most here.
+    pairs = rows[[*keys, "version"]].drop_duplicates().sort_values([*keys, "version"], kind="stable")
+    mixed = pairs.duplicated(keys, keep=False)
+    versions = pd.concat([pairs[~mixed].set_index(keys)["version"].map(lambda v: (v,)),
+                          pairs[mixed].groupby(keys, sort=True)["version"].agg(tuple)])
+    grouped = grouped.join(versions.rename("versions"), on=keys)
     grouped = grouped[grouped["calls"] >= min_calls]
     grouped = grouped.assign(on=2 * grouped["hooked"] >= grouped["calls"])
     return (grouped[STATE_COLUMNS].sort_values([*STREAM, "day", "source_file"], kind="stable")
@@ -59,7 +69,10 @@ def stream_changes(states: pd.DataFrame, setting: HookSetting) -> list[dict[str,
     """Every change in every stream: its latest `window` transcripts all in one state,
     while at least `agree` of the `baseline` transcripts before them were in the other.
     A stream needs a full baseline. Several windows after one step qualify; the first of
-    each run is kept. `direction` is "stopped" (hooked, then not) or "started"."""
+    each run is kept. `direction` is "stopped" (hooked, then not) or "started". The step
+    lies between `after`, the day of the last transcript before the window, and `since`,
+    the day of the first in it; `new_version` says whether that first transcript ran a
+    Claude Code version the last one before it didn't."""
     found = []
     for stream, rows in states.groupby(STREAM, sort=True):
         on, days, versions = rows["on"].tolist(), rows["day"].astype(str).tolist(), rows["versions"].tolist()
@@ -71,9 +84,10 @@ def stream_changes(states: pd.DataFrame, setting: HookSetting) -> list[dict[str,
             other = sum(on[i] != state for i in baseline)
             qualifies = all(on[i] == state for i in window) and other >= setting.agree * setting.baseline
             if qualifies and previous != state:
-                arrived = set().union(*(versions[i] for i in window)) - set().union(*(versions[i] for i in baseline))
+                arrived = set(versions[window[0]]) - set(versions[baseline[-1]])
                 found.append({**dict(zip(STREAM, stream)), "direction": "started" if state else "stopped",
-                              "since": days[window[0]], "until": days[window[-1]], "window": setting.window,
+                              "after": days[baseline[-1]], "since": days[window[0]], "until": days[window[-1]],
+                              "window": setting.window,
                               "baseline": setting.baseline, "baseline_other": other,
                               "new_version": bool(arrived - {"unknown"})})
             previous = state if qualifies else None
@@ -114,27 +128,42 @@ def _near(one: str, other: str) -> bool:
 
 def hook_coverage_alerts(coverage: pd.DataFrame, state: dict[str, Any], today: date,
                          setting: HookSetting = SETTING) -> list[dict[str, Any]]:
-    """Changes whose window ends within the last RECENT_DAYS days and that aren't
-    recorded yet, merged into alerts. Each stream's change is recorded in
-    state["hook_changes"]; a stream is reported again only once it turns the other way,
-    after the latest change recorded for it. A stream whose window fills after a change
-    in the same thread and direction was reported, within MERGE_DAYS of it, is recorded
-    without an alert of its own: one update reaches every stream, each on its own day."""
+    """New changes merged into alerts. Every change is recorded in state["hook_changes"],
+    each with `after`, `since` and whether it `alerted`; a stream's change is new only
+    once the stream turns the other way, after the latest change recorded for it. A new
+    change alerts when its window ends within the last RECENT_DAYS days, unless a change
+    in the same thread and direction, recorded before, started between its `after` and
+    its `since` (the same step, seen first in another stream), or one that alerted
+    started within MERGE_DAYS of it (one update reaching each stream on its own day).
+    Only changes that alerted fold others in, so silent records don't chain. Changes that
+    ended before the last RECENT_DAYS days count as recorded before, whether or not a
+    check saw them: on the first check after upgrading, a step's quieter streams are no
+    news either."""
     cutoff = (today - timedelta(days=RECENT_DAYS)).isoformat()
     recorded = state["hook_changes"]
-    reported = list(recorded)
-    fresh = []
+    before = list(recorded)
+    new = []
     for change in stream_changes(transcript_states(coverage, today, setting.min_calls), setting):
-        if change["until"] < cutoff:
-            continue
         key = stream_key(change)
         mine = [r for r in recorded if r["stream"] == key]
         latest = max(mine, key=lambda r: r["since"]) if mine else None
         if latest is not None and (latest["direction"] == change["direction"] or latest["since"] > change["since"]):
             continue
-        recorded.append({"stream": key, "thread": change["thread"], "direction": change["direction"],
-                         "since": change["since"], "reported_on": today.isoformat()})
-        if not any(r.get("thread") == change["thread"] and r["direction"] == change["direction"]
-                   and _near(r["since"], change["since"]) for r in reported):
-            fresh.append(change)
+        record = {"stream": key, "thread": change["thread"], "direction": change["direction"],
+                  "after": change["after"], "since": change["since"], "reported_on": today.isoformat(),
+                  "alerted": False}
+        recorded.append(record)
+        new.append((change, record))
+    known = before + [record for change, record in new if change["until"] < cutoff]
+    fresh = []
+    for change, record in new:
+        if change["until"] < cutoff:
+            continue
+        same = [r for r in known if r.get("thread") == change["thread"] and r["direction"] == change["direction"]]
+        if any(change["after"] <= r["since"] <= change["since"] for r in same):
+            continue
+        if any(r.get("alerted") and _near(r["since"], change["since"]) for r in same):
+            continue
+        record["alerted"] = True
+        fresh.append(change)
     return merged(fresh)

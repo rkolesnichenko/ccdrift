@@ -4,7 +4,8 @@ from datetime import date, timedelta
 
 from ccdrift.hookcover import HookSetting
 from ccdrift.logs import coverage_frame
-from lab.hook_coverage import GRID, choose, judge, move_history, plant_stop, replay
+from lab import hook_coverage
+from lab.hook_coverage import GRID, judge, move_history, plant_stop, replay, stricter_pass
 
 EVEN = HookSetting(window=3, baseline=10, agree=0.8, min_calls=2)
 TODAY = date(2026, 9, 24)
@@ -52,6 +53,27 @@ def test_a_stop_the_logs_already_hold_is_a_false_alarm_that_fails_the_gate():
     assert result["others"] == 1 and not result["passed"]
 
 
+def test_the_real_shapes_first_check_after_upgrading_is_quiet():
+    result = judge(real_shape(), EVEN, TODAY)
+    assert result["first"] == 0 and result["passed"]
+
+
+def test_a_setting_whose_first_check_after_upgrading_alerts_fails_the_gate(monkeypatch):
+    # Only the first check, on an empty state over the real shape, alerts: the replays,
+    # which carry their state from their first day, are left as they are.
+    frame, shipped = real_shape(), hook_coverage.hook_coverage_alerts
+
+    def rereported(coverage, state, today, setting):
+        first = coverage is frame and today == TODAY and not state["hook_changes"]
+        alerts = shipped(coverage, state, today, setting)
+        return alerts + [{"thread": "subagent", "direction": "started", "since": "2026-09-05"}] if first else alerts
+
+    monkeypatch.setattr(hook_coverage, "hook_coverage_alerts", rereported)
+    result = judge(frame, EVEN, TODAY)
+    assert result["first"] == 1 and not result["passed"]
+    assert (result["real"], result["others"], result["caught"], result["moved"]) == (1, 0, result["plants"], 0)
+
+
 def test_the_real_change_counts_as_not_measurable_once_the_transcripts_before_it_are_gone():
     frame = coverage_frame(stream("-p", "main", [True] * 40)
                            + stream("-p", "subagent", [True] * 19, first=date(2026, 9, 5)))
@@ -74,10 +96,22 @@ def test_every_setting_leaves_a_move_to_an_unhooked_project_alone():
     assert all(replay(move_history(), setting) == [] for setting in GRID)
 
 
-def test_the_gate_ships_the_smallest_window_where_every_setting_passes_then_the_largest_of_the_rest():
-    one_miss = [{"setting": s, "passed": s != HookSetting(2, 10, 0.8, 1)} for s in GRID]
-    assert choose(one_miss) == HookSetting(window=3, baseline=10, agree=1.0, min_calls=3)
-    all_pass = [{"setting": s, "passed": True} for s in GRID]
-    assert choose(all_pass) == HookSetting(window=2, baseline=10, agree=1.0, min_calls=3)
-    assert choose([{"setting": s, "passed": s.window != 4} for s in GRID]) == HookSetting(2, 10, 1.0, 3)
-    assert choose([{"setting": s, "passed": False} for s in GRID]) is None
+SHIPPED = HookSetting(window=3, baseline=10, agree=1.0, min_calls=3)
+
+
+def test_the_gate_passes_when_the_shipped_setting_and_every_stricter_one_pass():
+    stricter_ones = [s for s in GRID if s.window >= 3 and s.baseline >= 10 and s.agree >= 1.0 and s.min_calls >= 3]
+    assert len(stricter_ones) == 2 and SHIPPED in stricter_ones
+    assert stricter_pass([{"setting": s, "passed": s in stricter_ones} for s in GRID], SHIPPED)
+
+
+def test_one_stricter_setting_failing_fails_the_gate():
+    stricter_failing = HookSetting(window=4, baseline=10, agree=1.0, min_calls=3)
+    assert not stricter_pass([{"setting": s, "passed": s != stricter_failing} for s in GRID], SHIPPED)
+    assert not stricter_pass([{"setting": s, "passed": s != SHIPPED} for s in GRID], SHIPPED)
+
+
+def test_a_looser_setting_failing_doesnt_matter():
+    looser = [HookSetting(2, 10, 1.0, 3), HookSetting(3, 5, 1.0, 3), HookSetting(3, 10, 0.8, 3), HookSetting(3, 10, 1.0, 2),
+              HookSetting(4, 10, 0.8, 3)]
+    assert stricter_pass([{"setting": s, "passed": s not in looser} for s in GRID], SHIPPED)

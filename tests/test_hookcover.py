@@ -53,6 +53,14 @@ def test_a_transcript_with_too_few_calls_of_a_tool_doesnt_count():
     assert states["day"].tolist() == [nth_day(1)]
 
 
+def test_a_transcripts_versions_in_a_stream_are_those_its_calls_of_that_tool_ran_on():
+    # Resumed after an upgrade, the transcript called Bash on both versions but Read only on the new one.
+    rows = (transcripts("-p", [True], tools=("Bash", "Read"), version="2.1.261")
+            + transcripts("-p", [True], version="2.1.247"))
+    states = transcript_states(coverage_frame(rows), date(2026, 10, 30), 2)
+    assert states["versions"].tolist() == [("2.1.247", "2.1.261"), ("2.1.261",)]
+
+
 def test_agent_sdk_sessions_and_the_current_day_are_left_out():
     frame = coverage(transcripts("-p", [True] * 3), transcripts("-q", [True], entrypoint="sdk-py"))
     states = transcript_states(frame, date(2026, 9, 3), 2)
@@ -169,6 +177,65 @@ def test_a_stream_joining_a_change_already_reported_is_recorded_without_a_second
     later = coverage(transcripts("-a", [False] * 10 + [True] * 5), transcripts("-b", [False] * 10 + [True] * 3, first_day=2))
     assert alerts_on(later, state, date(2026, 9, 16)) == []
     assert sorted(r["stream"].split("|")[0] for r in state["hook_changes"]) == ["-a", "-b"]
+
+
+def test_a_project_used_again_long_after_a_reported_change_doesnt_report_it_again():
+    # -b sat idle from before the step and is used again 20 days after -a reported it: its
+    # window fills late, but the step lies between its last transcript before and its first after.
+    frame = coverage(transcripts("-a", [False] * 10 + [True] * 3), transcripts("-b", [False] * 10),
+                     transcripts("-b", [True] * 3, first_day=30))
+    state = new_state()
+    assert [a["since"] for a in alerts_on(frame, state, date(2026, 9, 14))] == [nth_day(10)]
+    assert alerts_on(frame, state, date(2026, 10, 4)) == []
+    late = [r for r in state["hook_changes"] if r["stream"].startswith("-b|")]
+    assert [(r["after"], r["since"], r["alerted"]) for r in late] == [(nth_day(9), nth_day(30), False)]
+
+
+def test_the_first_check_after_upgrading_doesnt_report_a_step_whose_busiest_stream_ended_long_ago():
+    # -a's change ended 16 days before the check; quieter -b's window, over the same step,
+    # filled within the last two weeks. Neither is news on a first check.
+    frame = coverage(transcripts("-a", [False] * 10 + [True] * 3), transcripts("-b", [False] * 10),
+                     transcripts("-b", [True] * 3, first_day=20))
+    state = new_state()
+    assert alerts_on(frame, state, date(2026, 9, 29)) == []
+    assert sorted((r["stream"].split("|")[0], r["alerted"]) for r in state["hook_changes"]) == [("-a", False),
+                                                                                                ("-b", False)]
+
+
+def test_a_stream_that_flips_back_doesnt_bring_its_old_change_back():
+    state = new_state()
+    stopped = coverage(transcripts("-p", [True] * 10 + [False] * 10))
+    assert [a["direction"] for a in alerts_on(stopped, state, date(2026, 9, 21))] == ["stopped"]
+    back = coverage(transcripts("-p", [True] * 10 + [False] * 10 + [True] * 3))
+    assert [a["direction"] for a in alerts_on(back, state, date(2026, 9, 24))] == ["started"]
+    assert alerts_on(back, state, date(2026, 9, 25)) == []
+    assert [r["direction"] for r in state["hook_changes"]] == ["stopped", "started"]
+
+
+def test_a_change_in_the_main_thread_isnt_folded_into_one_reported_for_subagents():
+    frame = coverage(transcripts("-p", [True] * 10 + [False] * 3),
+                     transcripts("-p", [True] * 10 + [False] * 3, first_day=5, thread="main"))
+    state = new_state()
+    assert [a["thread"] for a in alerts_on(frame, state, date(2026, 9, 14))] == ["subagent"]
+    assert [(a["thread"], a["since"]) for a in alerts_on(frame, state, date(2026, 9, 19))] == [("main", nth_day(15))]
+
+
+def test_a_change_folds_only_into_one_that_alerted_so_silent_records_dont_chain():
+    # -b starts ten days after -a and is folded into -a's alert; -c starts ten days after
+    # -b, twenty after -a, and is news of its own.
+    frame = coverage(transcripts("-a", [False] * 10 + [True] * 3), transcripts("-b", [False] * 10 + [True] * 3, 10),
+                     transcripts("-c", [False] * 10 + [True] * 3, 20))
+    state = new_state()
+    assert [a["since"] for a in alerts_on(frame, state, date(2026, 9, 14))] == [nth_day(10)]
+    assert alerts_on(frame, state, date(2026, 9, 24)) == []
+    assert [a["since"] for a in alerts_on(frame, state, date(2026, 10, 4))] == [nth_day(30)]
+
+
+def test_a_version_that_arrives_only_within_the_window_isnt_new_to_the_change():
+    # The step lies between the last transcript before the window and the first in it.
+    found = changes(coverage(transcripts("-p", [False] * 10 + [True] * 3,
+                                         versions=["2.1.247"] * 11 + ["2.1.261"] * 2)))
+    assert found[0]["new_version"] is False and found[0]["after"] == nth_day(9)
 
 
 STARTED = {"thread": "subagent", "direction": "started", "since": "2026-09-05", "until": "2026-09-07",

@@ -2,7 +2,7 @@
 
 Each project, thread, hook event and tool is a stream of CLI transcripts, each hooked or
 not (ccdrift.hookcover). The gate replays the rule day by day, as the daily check would
-see each day the morning after, and asks four things of a setting:
+see each day the morning after, and asks five things of a setting:
 
 - the one real change in the owner's logs is found once: from Claude Code 2.1.261,
   subagent tool calls got hook records they never had before (2026-09-05). Where the
@@ -13,13 +13,20 @@ see each day the morning after, and asks four things of a setting:
   stream with the most transcripts before that day in each thread. A plant is credited
   only when the planted replay reports a stop the unplanted one didn't. The gate reports
   the lag in days: 0 when the alert comes the morning after the day the hooks stopped;
-- work moving from a hooked project to an unhooked one is no change.
+- work moving from a hooked project to an unhooked one is no change;
+- the first check after upgrading, on an empty state on the gate's --today, reports
+  nothing: a change the logs already hold isn't news, however late its streams filled.
 
 The grid tries each window, baseline, agreement and minimum number of calls in GRID. The
-gate ships the smallest window at which every setting in the grid passes, rather than the
-smallest at which one does: on the owner's logs one setting at window 2 raised a false
-alarm while every one at window 3 passed, and the shorter window caught some plants a day
-sooner, none by more. At that window it takes the largest baseline, agreement and minimum.
+gate checks the shipped setting and every setting in the grid at least as strict as it
+(window, baseline, agreement and minimum each at least the shipped one's): it passes when
+all of them pass, so the setting doesn't rest on a lucky neighbour. Which passing setting
+ships is a stated judgement, not the gate's. On the owner's logs every setting at agreement
+1.0 passes, at every window, baseline and minimum, while 4 of the 18 at 0.8 raise a false
+alarm. Window 3 ships rather than 2 because hooks scoped to an agent type or a skill, which
+these logs hold none of, would make short runs look like a change, and window 2 caught only
+4 of its 14 plants sooner (baseline 10, agreement 1.0, a minimum of 1 or 2 calls; 3 of 13
+at 3): one by two days, the rest planted too late for window 3 to see by the last day.
 The output is aggregate: no project, transcript or tool name.
 
 Run from the repo root:
@@ -124,7 +131,7 @@ def move_history() -> pd.DataFrame:
 
 
 def judge(coverage: pd.DataFrame, setting: HookSetting, today: date) -> dict[str, Any]:
-    """What the four questions answer for one setting."""
+    """What the five questions answer for one setting."""
     quiet = replay(coverage, setting)
     real = [a for a in quiet if (a["thread"], a["direction"]) == REAL and REAL_DAYS[0] <= a["since"] <= REAL_DAYS[1]]
     others = [a for a in quiet if a not in real]
@@ -144,21 +151,24 @@ def judge(coverage: pd.DataFrame, setting: HookSetting, today: date) -> dict[str
                 caught += 1
                 lags.append((date.fromisoformat(alerts[0]["on"]) - date.fromisoformat(day)).days)
     moved = replay(move_history(), setting)
+    first = hook_coverage_alerts(coverage, new_state(), today, setting)
     passed = ((not measurable or len(real) == 1 and real[0]["new_version"]) and not others and plants > 0
-              and caught == plants and not moved)
+              and caught == plants and not moved and not first)
     return {"setting": setting, "real": len(real), "measurable": measurable, "others": len(others),
-            "plants": plants, "caught": caught, "lags": lags, "moved": len(moved), "passed": passed}
+            "plants": plants, "caught": caught, "lags": lags, "moved": len(moved), "first": len(first),
+            "passed": passed}
 
 
-def choose(results: list[dict[str, Any]]) -> Optional[HookSetting]:
-    """The smallest window at which every setting tried passes, then the largest baseline,
-    agreement and minimum there; None when no window passes throughout."""
-    windows = sorted({r["setting"].window for r in results})
-    for window in windows:
-        at = [r for r in results if r["setting"].window == window]
-        if all(r["passed"] for r in at):
-            return max((r["setting"] for r in at), key=lambda s: (s.baseline, s.agree, s.min_calls))
-    return None
+def stricter(results: list[dict[str, Any]], setting: HookSetting) -> list[dict[str, Any]]:
+    """The results of the settings at least as strict as `setting`, itself among them:
+    each of window, baseline, agreement and minimum at least its own."""
+    return [r for r in results if all(getattr(r["setting"], name) >= getattr(setting, name)
+                                      for name in HookSetting._fields)]
+
+
+def stricter_pass(results: list[dict[str, Any]], setting: HookSetting) -> bool:
+    """Whether `setting` and every setting at least as strict as it pass."""
+    return all(r["passed"] for r in stricter(results, setting))
 
 
 def line(result: dict[str, Any]) -> str:
@@ -166,8 +176,8 @@ def line(result: dict[str, Any]) -> str:
     lag = f" lag in days {sorted(result['lags'])}" if result["lags"] else ""
     real = f"real {result['real']}" if result["measurable"] else "real not measurable"
     return (f"window {s.window} baseline {s.baseline} agree {s.agree} min_calls {s.min_calls}: {real}, "
-            f"others {result['others']}, planted {result['caught']}/{result['plants']}{lag}, moved {result['moved']}"
-            f"{' PASS' if result['passed'] else ''}")
+            f"others {result['others']}, planted {result['caught']}/{result['plants']}{lag}, moved {result['moved']}, "
+            f"first check {result['first']}{' PASS' if result['passed'] else ''}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -180,13 +190,17 @@ def main(argv: list[str] | None = None) -> int:
     states = transcript_states(coverage, args.today, 1)
     print(f"{states['source_file'].nunique()} CLI transcripts in {states.groupby(STREAM).ngroups} streams")
     results = [judge(coverage, setting, args.today) for setting in GRID]
+    if SETTING not in GRID:
+        results.append(judge(coverage, SETTING, args.today))
     for result in results:
         print(f"  {line(result)}")
-    chosen = choose(results)
-    shipped = next(r for r in results if r["setting"] == SETTING) if SETTING in GRID else judge(coverage, SETTING, args.today)
-    print(f"{GATE}: {'PASS' if shipped['passed'] else 'FAIL'} at the shipped {line(shipped)}")
-    print(f"  the grid's pick: {chosen if chosen else 'none passes'}")
-    return 0 if shipped["passed"] else 1
+    shipped = next(r for r in results if r["setting"] == SETTING)
+    passed = stricter_pass(results, SETTING)
+    at_least = stricter(results, SETTING)
+    print(f"{GATE}: {'PASS' if passed else 'FAIL'} at the shipped {line(shipped)}")
+    print(f"  settings at least as strict as the shipped one: {sum(r['passed'] for r in at_least)} of {len(at_least)} pass")
+    print(f"  the grid: {sum(r['passed'] for r in results)} of {len(results)} pass")
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
