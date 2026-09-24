@@ -10,7 +10,7 @@ import json
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Iterable, Optional, Sequence
 
 import pandas as pd
 
@@ -107,6 +107,27 @@ def branch_projects(turns: pd.DataFrame) -> dict[str, int]:
 # The counts Price.charge takes, in its order.
 CHARGED_COUNTS = ("input_tokens", "cache_creation", "cache_read", "output_tokens")
 
+# The suffix cost-state puts on a model's 1M-context tier, a tier message.model never records.
+LONG_CONTEXT = "[1m]"
+
+
+def joined_prices(prices: dict[str, Price], recorded: Iterable[str]) -> dict[str, Price]:
+    """`prices` keyed as responses name their model. A cost-state key is the model's own
+    name, except that its 1M-context tier is keyed apart with LONG_CONTEXT, which
+    message.model never carries. A model whose cost records name only that tier is joined to
+    it: claude-opus-5-5, whose first record on 2026-09-24 was keyed claude-opus-5-5[1m] while
+    all 3,001 of its responses said claude-opus-5-5, so no response could ever be priced. A
+    model with a plain key in `recorded` (every model name the cost records carry) keeps the
+    plain price, or none when its fit was refused: its 1M tier is a price of its own, and a
+    response can't say which tier it ran on."""
+    names = set(recorded)
+    joined = dict(prices)
+    for key, price in prices.items():
+        plain = key[:-len(LONG_CONTEXT)]
+        if key.endswith(LONG_CONTEXT) and plain not in names:
+            joined[plain] = price
+    return joined
+
 
 def response_dollars(turns: pd.DataFrame, prices: dict[str, Price]) -> pd.Series:
     """What each response cost, NaN where its model has no price, so a bucket holding one
@@ -116,13 +137,13 @@ def response_dollars(turns: pd.DataFrame, prices: dict[str, Price]) -> pd.Series
         return out
     models = turns["model"].astype(str)
     for model, price in prices.items():
-        # The join is exact string equality, and stays exact. Measured over the owner's
-        # corpus on 2026-09-22: every one of 158,246 responses carries a message.model
-        # with a cost-state counterpart, dated aliases included, so normalising the two
-        # key spaces would buy nothing and could only join a response to a price that is
-        # not its own. The divergence runs the other way and cannot be repaired from here:
-        # cost-state keys claude-opus-5[1m] apart from claude-opus-5, a tier message.model
-        # never records, so 1m-context responses price at the plain rate. That
+        # The join is exact string equality on `prices` as joined_prices keys it. Measured
+        # over the owner's corpus on 2026-09-22: every one of 158,246 responses carried a
+        # message.model with a cost-state counterpart, dated aliases included, so any wider
+        # normalising could only join a response to a price that is not its own. The one
+        # exception arrived on 2026-09-24, a model keyed only by its 1M tier, and
+        # joined_prices handles it. A model with both keys still prices its 1M-context
+        # responses at the plain rate: message.model never records the tier, so that
         # understatement is real and is not measurable from the response side.
         rows = models == model
         if not rows.any():
@@ -280,7 +301,8 @@ def run_spend(source: Path, state_path: Path, days: Optional[int] = None, by: Op
     turns = spend_turns(tables.responses, today)
     window = sorted(turns["day"].astype(str).unique())[-(days or DEFAULT_DAYS):]
     turns = turns[turns["day"].astype(str).isin(window)]
-    prices = fit_prices(tables.model_usage)
+    usage = tables.model_usage
+    prices = joined_prices(fit_prices(usage), usage["model"].astype(str) if "model" in usage else ())
     dimensions = [by] if by else list(DEFAULT_ORDER)
     if as_json:
         # The default view's DEFAULT_ORDER never asks for project or branch, but the JSON
