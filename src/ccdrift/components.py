@@ -80,7 +80,7 @@ def _own_project_baseline(window: Sequence[str], baseline: Sequence[str]) -> Opt
 def compare_components(components: pd.DataFrame, window: Sequence[str],
                        baseline: Sequence[str]) -> Optional[dict[str, Any]]:
     """What changed between the sessions of `baseline` and those of `window`, given as
-    transcript paths, both narrowed to `window`'s own project first (_own_project_baseline).
+    transcript paths, with the baseline narrowed to `window`'s own project (_own_project_baseline).
     A part counts as logged on a side when more than half of that side's sessions logged
     it, and is compared over those sessions; otherwise it is `unknown`. A name is `added`
     when more than half of the window's sessions carry it and fewer than half of the
@@ -89,8 +89,8 @@ def compare_components(components: pd.DataFrame, window: Sequence[str],
     (baseline, window). Any move counts: within one project and version a part's size
     matched its group's median in all but 8 to 151 of the 47 to 1,055 sessions that logged
     it, measured on 2026-09-24, and those that didn't differed by thousands of characters.
-    None when no part is logged on both sides, such as sessions from before ccdrift kept
-    these rows, or when the baseline left after narrowing has too few of them."""
+    None when the window spans projects, no part is logged on both sides such as sessions
+    from before ccdrift kept these rows, or the baseline left after narrowing has too few of them."""
     if components.empty:
         return None
     baseline = _own_project_baseline(window, baseline)

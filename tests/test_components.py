@@ -331,7 +331,15 @@ def test_nothing_logged_having_changed_points_away_from_skills_agents_and_claude
     what = {"added": {}, "removed": {}, "sizes": {}, "unknown": ["tools"]}
     assert context_message(CHANGE, [], what).endswith(
         " Nothing ccdrift could compare of what Claude Code logs about a session's start changed, so the step is "
-        "in what it doesn't log or couldn't compare. Tool definitions wasn't logged in every session compared, "
+        "in what it doesn't log or couldn't compare. Tool definitions weren't logged in every session compared, "
+        "so ccdrift couldn't compare that part.")
+
+
+def test_a_single_unknown_singular_part_uses_singular_verb():
+    what = {"added": {}, "removed": {}, "sizes": {}, "unknown": ["system"]}
+    assert context_message(CHANGE, [], what).endswith(
+        " Nothing ccdrift could compare of what Claude Code logs about a session's start changed, so the step is "
+        "in what it doesn't log or couldn't compare. The system prompt wasn't logged in every session compared, "
         "so ccdrift couldn't compare that part.")
 
 

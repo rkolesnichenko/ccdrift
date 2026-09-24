@@ -463,6 +463,8 @@ COMPONENT_NOUNS = {"agents": ("agent type", "agent types"), "skills": ("skill", 
 COMPONENT_PARTS = {"skills": "the skills listing", "deferred": "the deferred tools", "agents": "the agent types",
                    "mcp": "MCP instructions", "claude_md": "CLAUDE.md files", "system": "the system prompt",
                    "tools": "tool definitions"}
+# Parts that are grammatically singular: only the skills listing and the system prompt.
+SINGULAR_PARTS = frozenset({"skills", "system"})
 
 
 def _joined(items: Sequence[str], last: str = "and") -> str:
@@ -508,7 +510,7 @@ def components_text(what: Optional[Mapping[str, Any]]) -> str:
     unknown = [COMPONENT_PARTS[part] for part in what["unknown"]]
     if unknown:
         joined = _joined(unknown, "or")
-        verb = "wasn't" if len(unknown) == 1 else "weren't"
+        verb = "wasn't" if len(unknown) == 1 and what["unknown"][0] in SINGULAR_PARTS else "weren't"
         text += (f" {joined[0].upper()}{joined[1:]} {verb} logged in every session compared, so ccdrift couldn't "
                  f"compare {'that part' if len(unknown) == 1 else 'those parts'}.")
     return text

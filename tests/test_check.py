@@ -555,8 +555,8 @@ def test_a_session_start_alert_names_no_addition_when_its_window_and_baseline_ar
     # -Users-me-a, whose sessions genuinely start with half the context. Each project has
     # too few sessions on its own for its own pass to judge it, so only the pooled pass
     # finds the step, and first_of_each keeps it: its window is -a's own three sessions,
-    # its baseline -b's, a different project entirely -- the shape the reviewer reproduced.
-    # Neither project's own skill or MCP server changed; the fix must say nothing changed
+    # its baseline -b's, a different project entirely.
+    # Neither project's own skill or MCP server changed; the alert must say nothing changed
     # rather than reading -b's as removed and -a's as added.
     def start(project, day, tokens, skill, mcp_tool, sid):
         write(tmp_path / "logs" / project / f"{sid}.jsonl", [
