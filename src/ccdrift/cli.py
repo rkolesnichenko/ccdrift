@@ -46,7 +46,7 @@ def _days(text: str) -> int:
     except ValueError:
         days = 0
     if days < 1:
-        raise argparse.ArgumentTypeError(f"expected a whole number of days, 1 or more, not {text!r}")
+        raise argparse.ArgumentTypeError(COMMAND_LINES["bad_days"].format(text=text))
     return days
 
 
@@ -54,7 +54,7 @@ def _day(text: str) -> str:
     try:
         return date.fromisoformat(text).isoformat()
     except ValueError:
-        raise argparse.ArgumentTypeError(f"expected a day like 2026-08-18, not {text!r}") from None
+        raise argparse.ArgumentTypeError(COMMAND_LINES["bad_day"].format(text=text)) from None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -275,4 +275,4 @@ def main(argv: Optional[list[str]] = None) -> int:
         return run_replay(_source(args), _state(args))
     if args.command == "schedule":
         return _schedule(args)
-    raise AssertionError(f"unhandled command: {args.command}")
+    raise AssertionError(COMMAND_LINES["unhandled"].format(command=args.command))

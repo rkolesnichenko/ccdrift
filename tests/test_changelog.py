@@ -2,7 +2,8 @@
 
 import pandas as pd
 
-from ccdrift.changelog import changelog_path, load_changelog, new_versions, note_lines, release_notes
+from ccdrift.changelog import changelog_path, load_changelog, new_versions, release_notes
+from ccdrift.texts import note_lines
 from tests.helpers import nth_day
 
 CHANGELOG = """# Changelog

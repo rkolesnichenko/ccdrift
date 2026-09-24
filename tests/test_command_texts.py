@@ -24,10 +24,11 @@ def sentences(node: ast.AST) -> list[str]:
     return found
 
 
-@pytest.mark.parametrize("module", ["cli.py", "status.py"])
+@pytest.mark.parametrize("module", ["cli.py", "status.py", "history.py"])
 def test_no_sentence_is_printed_raised_or_returned_from_where_it_is_written(module):
-    # Option help stays beside its option in cli.py; everything a command prints, the
-    # errors argparse raises for it and the lines status returns come from texts.py.
+    # Option help stays beside its option in cli.py, and history.py builds SQL where it runs
+    # it, so these are held to less than the modules below: everything they print, raise or
+    # return comes from texts.py.
     tree = ast.parse((SRC / module).read_text())
     written = []
     for node in ast.walk(tree):
@@ -37,6 +38,8 @@ def test_no_sentence_is_printed_raised_or_returned_from_where_it_is_written(modu
                 written += sentences(node)
         elif isinstance(node, ast.Return) and node.value is not None:
             written += sentences(node.value)
+        elif isinstance(node, ast.Raise) and node.exc is not None:
+            written += sentences(node.exc)
     assert written == []
 
 
@@ -52,14 +55,14 @@ def linked_tree(module: str) -> ast.AST:
 
 @pytest.mark.parametrize("module", ["cli.py", "status.py", "report.py", "spend.py", "schedule.py", "draft.py",
                                     "incidents.py", "replay.py", "page.py", "state.py", "notify.py", "check.py",
-                                    "logs.py"])
+                                    "logs.py", "history.py"])
 def test_every_line_a_command_uses_exists_and_gets_exactly_its_slots(module):
     # A line is looked up by name and filled by keyword, so a misspelt name or slot would
     # fail only when that line is printed, which some error paths rarely are.
     tables = {name: getattr(texts, name)
               for name in ("STATUS_LINES", "COMMAND_LINES", "REPORT_LINES", "COST_LINES", "SCHEDULE_LINES",
                            "DRAFT_LINES", "INCIDENT_LINES", "REPLAY_LINES", "PAGE_LINES", "STATE_LINES",
-                           "NOTIFY_LINES", "CHECK_LINES", "LOG_LINES")}
+                           "NOTIFY_LINES", "CHECK_LINES", "LOG_LINES", "HISTORY_LINES")}
     used = 0
     for node in ast.walk(linked_tree(module)):
         if not (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id in tables):
@@ -74,24 +77,29 @@ def test_every_line_a_command_uses_exists_and_gets_exactly_its_slots(module):
     assert used
 
 
-@pytest.mark.parametrize("module", ["status.py", "report.py", "spend.py", "settings.py", "sessions.py", "hooks.py",
-                                    "failures.py", "schedule.py", "draft.py", "incidents.py", "replay.py", "page.py",
-                                    "state.py", "notify.py", "check.py", "logs.py"])
+# Every module but texts.py itself, and the two the test above holds to less; a module
+# added later is held to this without anyone remembering to list it.
+STRICT = sorted(path.name for path in SRC.glob("*.py") if path.name not in ("texts.py", "cli.py", "history.py"))
+FORMATS = ("schedule.py", "page.py", "notify.py", "logs.py", "changelog.py")
+
+
+@pytest.mark.parametrize("module", STRICT)
 def test_modules_that_print_through_texts_write_no_words_of_their_own(module):
     # report and cost build their output into lists before printing it, so what they say
     # can't be told from the calls that print it: here no string but a docstring has words.
-    # Module constants in schedule.py, page.py, notify.py and logs.py are the exception: the
-    # crontab marker, the unit files and what launchctl and crontab print, the page's CSS, the
-    # AppleScript a notification runs and the banners Claude Code writes are formats other
-    # programs read or write, not ccdrift's words.
+    # Module constants in FORMATS are the exception: the crontab marker, the unit files and
+    # what launchctl and crontab print, the page's CSS, the AppleScript a notification runs,
+    # the banners Claude Code writes and the words release notes are searched for are text
+    # other programs read or write, not ccdrift's words.
     # So is markup in page.py: a piece of an f-string that is only tags once they are cut out.
     tree = ast.parse((SRC / module).read_text())
     allowed = {id(node.body[0].value) for node in ast.walk(tree)
                if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)) and node.body
                and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant)}
-    if module in ("schedule.py", "page.py", "notify.py", "logs.py"):
-        allowed |= {id(part) for node in tree.body if isinstance(node, ast.Assign)
-                    and all(isinstance(target, ast.Name) and target.id.isupper() for target in node.targets)
+    if module in FORMATS:
+        allowed |= {id(part) for node in tree.body if isinstance(node, (ast.Assign, ast.AnnAssign))
+                    and all(isinstance(target, ast.Name) and target.id.isupper()
+                            for target in (node.targets if isinstance(node, ast.Assign) else [node.target]))
                     for part in ast.walk(node.value)}
     words = [text for node in ast.walk(tree) if id(node) not in allowed for text in sentences(node)
              if isinstance(node, ast.Constant)]

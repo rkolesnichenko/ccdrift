@@ -21,6 +21,7 @@ from ccdrift.logs import (ATTRIBUTION_FIELDS, MAX_TIME, MIN_TIME, SDK_ENTRYPOINT
                           USAGE_COUNTS, ParsedFile, Tables, census_frame, compaction_frame, duration_frame,
                           failure_frame, frame, hook_frame, jsonl_files, parse_all, parse_file, usage_frame)
 from ccdrift.state import make_private
+from ccdrift.texts import HISTORY_LINES
 
 HISTORY_FILE = "history.sqlite"
 SCHEMA_VERSION = 6
@@ -111,10 +112,8 @@ def _unusable(path: Path, exc: Exception) -> HistoryError:
     # SQLite's words for a store another connection held past the wait: nothing is wrong
     # with it, and moving it aside would drop the rows of transcripts already deleted.
     if isinstance(exc, sqlite3.OperationalError) and str(exc).endswith("is locked"):
-        return HistoryError(f"Can't use the history store {path}: {exc}. Another ccdrift command is using it; "
-                            "try again once it has finished.")
-    return HistoryError(f"Can't use the history store {path}: {exc}. Move it aside to rebuild it "
-                        "from the transcripts still on disk.")
+        return HistoryError(HISTORY_LINES["busy"].format(path=path, error=exc))
+    return HistoryError(HISTORY_LINES["unusable"].format(path=path, error=exc))
 
 
 def row_key(text: str) -> int:
@@ -132,15 +131,18 @@ def _count(value: Any) -> Optional[int]:
     return None if value is None else round(value)
 
 
+UPSERT = ("INSERT INTO {table} ({names}) VALUES ({marks}) "
+          "ON CONFLICT (key) DO UPDATE SET {updates} "
+          "WHERE (SELECT path FROM files WHERE id = excluded.file_id) "
+          "< (SELECT path FROM files WHERE id = {table}.file_id)")
+
+
 def _upsert(table: str, columns: tuple[str, ...]) -> str:
     """Insert a row; a key already stored stays with the transcript whose path sorts
     first, the rule parse_source follows."""
     names = ("key", "file_id", "ts") + columns
     updates = ", ".join(f"{name} = excluded.{name}" for name in names[1:])
-    return (f"INSERT INTO {table} ({', '.join(names)}) VALUES ({', '.join('?' * len(names))}) "
-            f"ON CONFLICT (key) DO UPDATE SET {updates} "
-            f"WHERE (SELECT path FROM files WHERE id = excluded.file_id) "
-            f"< (SELECT path FROM files WHERE id = {table}.file_id)")
+    return UPSERT.format(table=table, names=", ".join(names), marks=", ".join("?" * len(names)), updates=updates)
 
 
 # The microsecond times a row can hold. ccdrift 0.3.0 stored times pandas can't, and
@@ -178,11 +180,9 @@ class History:
     def __init__(self, path: Path):
         self._days: Optional[list[tuple[int, Optional[str], int, int]]] = None
         if sqlite3.sqlite_version_info < (3, 24, 0):
-            raise HistoryError(f"ccdrift needs SQLite 3.24 or newer for its history store; this Python has "
-                               f"SQLite {sqlite3.sqlite_version}.")
+            raise HistoryError(HISTORY_LINES["old_sqlite"].format(version=sqlite3.sqlite_version))
         if path.is_dir():
-            raise HistoryError(f"Can't use the history store {path}: it is a folder. Move it aside to "
-                               "rebuild it from the transcripts still on disk.")
+            raise HistoryError(HISTORY_LINES["folder"].format(path=path))
         self.path = path
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -192,7 +192,7 @@ class History:
             self.db = sqlite3.connect(path, timeout=30)
         except (OSError, sqlite3.Error) as exc:
             # Nothing is wrong with the store itself, so moving it aside wouldn't help.
-            raise HistoryError(f"Can't open the history store {path}: {exc}") from exc
+            raise HistoryError(HISTORY_LINES["cant_open"].format(path=path, error=exc)) from exc
         try:
             has_meta = self.db.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").fetchone()
@@ -208,11 +208,10 @@ class History:
             schema_version = int(stored)
         except (TypeError, ValueError) as exc:
             self.db.close()
-            raise _unusable(path, ValueError(f"its schema version {stored!r} isn't a number")) from exc
+            raise _unusable(path, ValueError(HISTORY_LINES["bad_schema"].format(stored=stored))) from exc
         if schema_version > SCHEMA_VERSION:
             self.db.close()
-            raise HistoryError(f"The history store {path} was written by a newer ccdrift. Upgrade ccdrift, "
-                               "or move the store aside to rebuild it from the transcripts still on disk.")
+            raise HistoryError(HISTORY_LINES["newer"].format(path=path))
         try:
             if has_meta and schema_version < SCHEMA_VERSION:
                 self._migrate(schema_version)
@@ -413,7 +412,8 @@ class History:
         if since is not None:
             query += " WHERE t.ts >= ?"
             params = (_day_start(since),)
-        return pd.read_sql_query(query + " ORDER BY f.path, t.ts", self.db, params=params)
+        query += " ORDER BY f.path, t.ts"
+        return pd.read_sql_query(query, self.db, params=params)
 
     def durations(self, since: Optional[str] = None) -> pd.DataFrame:
         """Every stored turn duration, or those from `since`, as the table parse_durations returns."""
@@ -464,7 +464,7 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
         with History(path) as history:
             built_from = history.built_from()
             if built_from is not None and built_from != str(source.expanduser().resolve()):
-                print(f"Not using ccdrift's history in {path}: it was built from {built_from}.", file=sys.stderr)
+                print(HISTORY_LINES["other_source"].format(path=path, built_from=built_from), file=sys.stderr)
                 return parse_all(source)
             if built_from is None and not claim:
                 return parse_all(source)

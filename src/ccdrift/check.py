@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from ccdrift.changelog import (TOPIC_OF, changelog_path, days_before, load_changelog, note_lines, note_versions,
+from ccdrift.changelog import (TOPIC_OF, changelog_path, days_before, load_changelog, note_versions,
                                release_notes)
 from ccdrift.detector import DetectorConfig
 from ccdrift.digest import digest_due, digest_week, weekly_digest
@@ -33,7 +33,7 @@ from ccdrift.state import (CONTEXT_RULE, LOG_FILE, ccdrift_home, load_state, mak
                            save_state, state_lock)
 from ccdrift.texts import (ALERT_TITLES, CHECK_LINES, blank_cache_message, change_message, context_dropped_message,
                            context_message, cut_short_message, early_message, gap_message, history_message,
-                           hook_failure_message, loop_message, new_fields_message, no_transcripts_message,
+                           hook_failure_message, loop_message, new_fields_message, no_transcripts_message, note_lines,
                            requests_message, state_unreadable)
 
 # kind, title, message, and lines for the log only
