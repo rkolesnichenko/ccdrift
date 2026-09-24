@@ -115,8 +115,3 @@ def release_notes(changelog: dict[str, list[str]], versions: Sequence[str],
             if len(found) == limit:
                 return found
     return found
-
-
-def note_lines(notes: Sequence[tuple[str, str]]) -> list[str]:
-    """Log lines for an alert."""
-    return [f"release notes {version}: {text}" for version, text in notes]

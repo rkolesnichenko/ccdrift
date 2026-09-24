@@ -614,7 +614,10 @@ COMMAND_LINES = {"no_scheduler": "ccdrift can't set up a scheduled job on this s
                  "state_unreadable": "Can't read the state file {path}: {error}",
                  "unchanged": "Nothing changed: {error}",
                  "added": "Added {metric} {start}..{end}. `ccdrift incident list` shows what it cost.",
-                 "html_by_version": "--html draws the day view; drop --by version"}
+                 "html_by_version": "--html draws the day view; drop --by version",
+                 "bad_days": "expected a whole number of days, 1 or more, not {text!r}",
+                 "bad_day": "expected a day like 2026-08-18, not {text!r}",
+                 "unhandled": "unhandled command: {command}"}
 
 
 # ---------------------------------------------------------------------------
@@ -1070,6 +1073,30 @@ LOG_LINES = {"unreadable": "  ! could not read {path}: {error}",
              "peek_fields": "\n# resolved fields:"}
 
 
+def note_lines(notes: Sequence[tuple[str, str]]) -> list[str]:
+    """An alert's release notes as log lines, one per note."""
+    return [f"release notes {version}: {text}" for version, text in notes]
+
+
 def no_transcripts_message(source: Any) -> str:
     return (f"No Claude Code transcripts found in {source}. Pass --source DIR, or set "
             "CLAUDE_CONFIG_DIR if Claude Code keeps its files somewhere else.")
+
+
+# ---------------------------------------------------------------------------
+# The history store
+# ---------------------------------------------------------------------------
+
+HISTORY_LINES = {"busy": "Can't use the history store {path}: {error}. Another ccdrift command is using it; "
+                         "try again once it has finished.",
+                 "unusable": "Can't use the history store {path}: {error}. Move it aside to rebuild it from the "
+                             "transcripts still on disk.",
+                 "old_sqlite": "ccdrift needs SQLite 3.24 or newer for its history store; this Python has "
+                               "SQLite {version}.",
+                 "folder": "Can't use the history store {path}: it is a folder. Move it aside to rebuild it from "
+                           "the transcripts still on disk.",
+                 "cant_open": "Can't open the history store {path}: {error}",
+                 "bad_schema": "its schema version {stored!r} isn't a number",
+                 "newer": "The history store {path} was written by a newer ccdrift. Upgrade ccdrift, or move the "
+                          "store aside to rebuild it from the transcripts still on disk.",
+                 "other_source": "Not using ccdrift's history in {path}: it was built from {built_from}."}
