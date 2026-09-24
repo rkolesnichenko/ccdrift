@@ -14,6 +14,7 @@ import pandas as pd
 
 from ccdrift.changelog import (TOPIC_OF, changelog_path, days_before, load_changelog, note_versions,
                                release_notes)
+from ccdrift.components import compare_components
 from ccdrift.detector import DetectorConfig
 from ccdrift.digest import digest_due, digest_week, weekly_digest
 from ccdrift.early import early_warning
@@ -27,14 +28,14 @@ from ccdrift.logs import judged_turns
 from ccdrift.loops import STREAMS, loop_counts, loop_warning
 from ccdrift.notify import notify, run_exec
 from ccdrift.replay import REPLAY_SOURCE, first_run, replay_incidents
-from ccdrift.sessions import context_alerts, rejudged, session_starts
+from ccdrift.sessions import context_found, rejudged, session_starts
 from ccdrift.settings import setting_changes
 from ccdrift.state import (CONTEXT_RULE, LOG_FILE, load_state, make_stream_private, record_run,
                            save_state, state_lock)
-from ccdrift.texts import (ALERT_TITLES, CHECK_LINES, blank_cache_message, change_message, context_dropped_message,
-                           context_message, cut_short_message, early_message, gap_message, history_message,
-                           hook_failure_message, loop_message, new_fields_message, no_transcripts_message, note_lines,
-                           requests_message, state_unreadable)
+from ccdrift.texts import (ALERT_TITLES, CHECK_LINES, blank_cache_message, change_message, component_lines,
+                           context_dropped_message, context_message, cut_short_message, early_message, gap_message,
+                           history_message, hook_failure_message, loop_message, new_fields_message,
+                           no_transcripts_message, note_lines, requests_message, state_unreadable)
 
 # kind, title, message, and lines for the log only
 Alert = tuple[str, str, str, list[str]]
@@ -204,9 +205,13 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
         versions, notes = _change_notes(turns, changelog, change, TOPIC_OF[change["setting"]])
         alerts.append(("setting", ALERT_TITLES["setting"], change_message(change, versions), notes))
     starts = session_starts(df)
-    for change in context_alerts(starts, state, today):
+    for change, found in context_found(starts, state, today):
         versions, notes = _change_notes(turns, changelog, change, "context")
-        alerts.append(("context", ALERT_TITLES["context"], context_message(change, versions), notes))
+        # What the sessions started with goes in the message as counts; the names, which
+        # may be private, go to the log alone.
+        what = compare_components(tables.components, found.window_files, found.baseline_files)
+        alerts.append(("context", ALERT_TITLES["context"], context_message(change, versions, what),
+                       component_lines(what) + notes))
     # A state written before the rule judged each project against itself may hold changes
     # that were only a move between projects. They are re-judged once, and the run says so
     # in its log without alerting: nothing changed for the owner to act on.

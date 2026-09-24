@@ -5,9 +5,11 @@ import json
 import sqlite3
 
 import ccdrift.history
+from ccdrift.components import compare_components
 from ccdrift.history import History, load_history
-from ccdrift.logs import COMPONENT_COLUMNS, parse_all, parse_file
+from ccdrift.logs import COMPONENT_COLUMNS, components_frame, new_components, parse_all, parse_file
 from ccdrift.state import new_state, save_state
+from ccdrift.texts import component_lines, context_message
 from tests.helpers import (PRIVATE_PATH, PRIVATE_TEXT, agent_listing, api_error, at, attachment, deferred_tools,
                            instructions, line, mcp_instructions, prompt, prompt_snapshot, skill_listing, text,
                            tool_result, write)
@@ -188,3 +190,133 @@ def test_a_store_from_before_components_gains_the_table_and_reads_every_transcri
         assert history.meta["schema_version"] == str(ccdrift.history.SCHEMA_VERSION) == "7"
         assert history.update(tmp_path / "logs") == 1
         assert history.components()["skills"].tolist() == [["review"]]
+
+
+def rows(prefix, count, **values):
+    """`count` component rows of transcripts `<prefix>0.jsonl` onwards, each with `values`
+    and everything else as a session start on 2.1.250 logs it: skills, deferred tools and
+    agent types, no CLAUDE.md, system prompt or tool definitions."""
+    base = {"skills": ["review"], "skills_chars": 1000, "deferred": ["Read"], "deferred_chars": 20,
+            "agents": ["Plan"], "agents_chars": 30}
+    return [{**new_components(f"{prefix}{i}.jsonl"), **base, **values} for i in range(count)]
+
+
+def compared(window, baseline):
+    table = components_frame(window + baseline)
+    return compare_components(table, [row["source_file"] for row in window], [row["source_file"] for row in baseline])
+
+
+def test_a_name_in_most_of_the_window_and_under_half_the_baseline_is_added():
+    window = rows("w", 2, agents=["Plan", "Explore"]) + rows("x", 1)
+    baseline = rows("b", 4, agents=["Plan", "Explore"]) + rows("c", 6)
+    assert compared(window, baseline)["added"] == {"agents": ["Explore"]}
+
+
+def test_a_name_in_one_window_session_is_a_one_off_not_an_addition():
+    assert compared(rows("w", 1, agents=["Plan", "Explore"]) + rows("x", 2), rows("b", 10))["added"] == {}
+
+
+def test_a_name_in_half_the_baseline_is_not_counted_either_way():
+    window = rows("w", 3, skills=["review", "new"])
+    assert compared(window, rows("b", 5, skills=["review", "new"]) + rows("c", 5))["added"] == {}
+
+
+def test_a_name_in_most_of_the_baseline_and_under_half_the_window_is_removed():
+    window = rows("w", 2, skills=[]) + rows("x", 1)
+    assert compared(window, rows("b", 10))["removed"] == {"skills": ["review"]}
+
+
+def test_mcp_tools_are_grouped_by_their_server_and_built_in_deferred_tools_kept_apart():
+    window = rows("w", 3, deferred=["Read", "Monitor", "mcp__gh__pr", "mcp__gh__issue", "mcp__jira__get"])
+    assert compared(window, rows("b", 10))["added"] == {
+        "mcp_tools": {"gh": ["mcp__gh__issue", "mcp__gh__pr"], "jira": ["mcp__jira__get"]}, "deferred": ["Monitor"]}
+
+
+def test_a_size_that_moved_is_compared_by_its_medians():
+    window = rows("w", 2, skills_chars=1300) + rows("x", 1, skills_chars=900)
+    assert compared(window, rows("b", 10))["sizes"] == {"skills": (1000.0, 1300.0)}
+
+
+def test_a_part_logged_in_half_of_one_sides_sessions_or_fewer_is_unknown_and_left_out():
+    window = rows("w", 3, claude_md_files=1, claude_md_chars=5000)
+    baseline = rows("b", 5, claude_md_files=1, claude_md_chars=1000) + rows("c", 5)
+    what = compared(window, baseline)
+    assert "claude_md" in what["unknown"] and "claude_md" not in what["sizes"]
+    assert what["unknown"] == ["claude_md", "system", "tools"]
+
+
+def test_mcp_instructions_count_as_none_wherever_the_deferred_tools_are_logged():
+    what = compared(rows("w", 3, mcp=["gh"], mcp_chars=500), rows("b", 10))
+    assert what["added"] == {"mcp": ["gh"]} and what["sizes"] == {"mcp": (0.0, 500.0)}
+    assert "mcp" not in what["unknown"]
+
+
+def test_a_session_without_a_row_counts_as_unknown_on_every_part():
+    window = rows("w", 3)
+    what = compare_components(components_frame(window + rows("b", 3)), [r["source_file"] for r in window],
+                              ["gone0.jsonl", "gone1.jsonl", "gone2.jsonl", "b0.jsonl", "b1.jsonl", "b2.jsonl"])
+    assert what is None
+
+
+def test_nothing_to_compare_when_no_part_is_logged_on_both_sides():
+    empty = [new_components(f"w{i}.jsonl") for i in range(3)]
+    assert compared(empty, rows("b", 10)) is None
+    assert compare_components(components_frame([]), ["w0.jsonl"], ["b0.jsonl"]) is None
+
+
+CHANGE = {"since": "2026-08-27", "from": 106_031.0, "to": 128_699.0, "days": ["2026-08-27", "2026-08-29"],
+          "projects": ["-Users-me-app"], "of_projects": 1, "new_version": False}
+STEP = {"added": {"agents": [f"agent-{i}" for i in range(11)], "skills": ["a", "b", "c", "d"],
+                  "mcp_tools": {"srv-one": [f"mcp__srv-one__t{i}" for i in range(9)],
+                                "srv-two": ["mcp__srv-two__a", "mcp__srv-two__b"]}},
+        "removed": {}, "sizes": {"skills": (21_077.0, 22_976.0), "agents": (1_900.0, 3_100.0)},
+        "unknown": ["claude_md", "system", "tools"]}
+
+
+def test_the_alert_counts_what_changed_and_names_none_of_it():
+    message = context_message(CHANGE, [], STEP)
+    assert message.startswith(context_message(CHANGE, []))
+    assert message.endswith(
+        " Of what Claude Code logs about a session's start, 11 agent types, 4 skills and 11 MCP tools were added, "
+        "about 3.1k more characters, though the logs can't say how many of the tokens that is. Claude Code didn't "
+        "log CLAUDE.md files, the system prompt or tool definitions in every session compared, so ccdrift couldn't "
+        "compare those parts.")
+    assert not any(name in message for name in ("agent-0", "srv-one", "srv-two", "mcp__"))
+
+
+def test_the_detail_lines_name_what_changed():
+    assert component_lines(STEP) == [
+        "agent types added: " + ", ".join(f"agent-{i}" for i in range(11)),
+        "skills added: a, b, c, d",
+        "MCP tools added: srv-one (9), srv-two (2)",
+        "the skills listing: 21,077 -> 22,976 characters",
+        "the agent types: 1,900 -> 3,100 characters",
+    ]
+
+
+def test_a_removal_and_a_single_addition_read_as_one_sentence():
+    what = {"added": {"skills": ["a"]}, "removed": {"agents": ["x", "y"]}, "sizes": {"skills": (100.0, 90.0)},
+            "unknown": []}
+    assert context_message(CHANGE, [], what).endswith(
+        " Of what Claude Code logs about a session's start, 1 skill was added and 2 agent types removed, "
+        "about 10 fewer characters, though the logs can't say how many of the tokens that is.")
+    assert component_lines(what)[:2] == ["skills added: a", "agent types removed: x, y"]
+
+
+def test_a_size_that_moved_with_no_name_added_or_removed_is_still_said():
+    what = {"added": {}, "removed": {}, "sizes": {"system": (4_500.0, 6_000.0)}, "unknown": []}
+    assert context_message(CHANGE, [], what).endswith(
+        " Of what Claude Code logs about a session's start, only the system prompt changed, about 1.5k more "
+        "characters, though the logs can't say how many of the tokens that is.")
+
+
+def test_nothing_logged_having_changed_points_away_from_skills_agents_and_claude_md():
+    what = {"added": {}, "removed": {}, "sizes": {}, "unknown": ["tools"]}
+    assert context_message(CHANGE, [], what).endswith(
+        " Nothing Claude Code logs about a session's start changed, so the step is in what it doesn't log. Claude "
+        "Code didn't log tool definitions in every session compared, so ccdrift couldn't compare that part.")
+
+
+def test_the_alert_says_nothing_more_when_there_was_nothing_to_compare():
+    assert context_message(CHANGE, [], None) == context_message(CHANGE, [])
+    assert component_lines(None) == []

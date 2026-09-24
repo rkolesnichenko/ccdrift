@@ -454,6 +454,80 @@ def history_message(found: Sequence[dict[str, Any]], first_day: str) -> str:
             "details; `ccdrift incident dismiss` puts a false alarm's days back in the baseline.")
 
 
+# What Claude Code logs about a session's start, as the session-start alert counts and
+# names it: each kind of name by its singular and plural, and each part by what it is.
+COMPONENT_NOUNS = {"agents": ("agent type", "agent types"), "skills": ("skill", "skills"),
+                   "mcp_tools": ("MCP tool", "MCP tools"), "deferred": ("deferred tool", "deferred tools"),
+                   "mcp": ("MCP server with instructions", "MCP servers with instructions"),
+                   "tools": ("tool definition", "tool definitions")}
+COMPONENT_PARTS = {"skills": "the skills listing", "deferred": "the deferred tools", "agents": "the agent types",
+                   "mcp": "MCP instructions", "claude_md": "CLAUDE.md files", "system": "the system prompt",
+                   "tools": "tool definitions"}
+
+
+def _joined(items: Sequence[str], last: str = "and") -> str:
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} {last} {items[-1]}"
+
+
+def _name_count(names: Any) -> int:
+    """How many names one kind of change holds; MCP tools come grouped by server."""
+    return sum(len(tools) for tools in names.values()) if isinstance(names, Mapping) else len(names)
+
+
+def _counted(changes: Mapping[str, Any]) -> list[str]:
+    counts = [(kind, _name_count(changes.get(kind) or [])) for kind in COMPONENT_NOUNS]
+    return [f"{n} {COMPONENT_NOUNS[kind][n != 1]}" for kind, n in counts if n]
+
+
+def _were(items: Sequence[str]) -> str:
+    return "was" if len(items) == 1 and items[0].startswith("1 ") else "were"
+
+
+def components_text(what: Optional[Mapping[str, Any]]) -> str:
+    """What the session-start alert adds about what Claude Code logged of the sessions'
+    starts (components.compare_components): counts and characters, never a name, since
+    the message reaches notifications and --exec. Empty when there was nothing to compare."""
+    if what is None:
+        return ""
+    added, removed, sizes = _counted(what["added"]), _counted(what["removed"]), what["sizes"]
+    if added and removed:
+        changed = f"{_joined(added)} {_were(added)} added and {_joined(removed)} removed"
+    elif added or removed:
+        changed = f"{_joined(added or removed)} {_were(added or removed)} {'added' if added else 'removed'}"
+    elif sizes:
+        changed = f"only {_joined([COMPONENT_PARTS[part] for part in sizes])} changed"
+    else:
+        changed = ""
+    moved = sum(after - before for before, after in sizes.values())
+    size = (f", about {approx(moved)} more characters" if moved > 0 else
+            f", about {approx(-moved)} fewer characters" if moved < 0 else "")
+    text = (f" Of what Claude Code logs about a session's start, {changed}{size}, though the logs can't say how many "
+            "of the tokens that is." if changed else
+            " Nothing Claude Code logs about a session's start changed, so the step is in what it doesn't log.")
+    unknown = [COMPONENT_PARTS[part] for part in what["unknown"]]
+    if unknown:
+        text += (f" Claude Code didn't log {_joined(unknown, 'or')} in every session compared, so ccdrift couldn't "
+                 f"compare {'that part' if len(unknown) == 1 else 'those parts'}.")
+    return text
+
+
+def component_lines(what: Optional[Mapping[str, Any]]) -> list[str]:
+    """The session-start alert's lines for the check's log alone: what was added and
+    removed, by name, and each part whose size moved."""
+    if what is None:
+        return []
+    lines = []
+    for changes, word in ((what["added"], "added"), (what["removed"], "removed")):
+        for kind, (_, plural) in COMPONENT_NOUNS.items():
+            names = changes.get(kind)
+            if names:
+                listed = (", ".join(f"{server} ({len(tools)})" for server, tools in names.items())
+                          if isinstance(names, Mapping) else ", ".join(names))
+                lines.append(f"{plural} {word}: {listed}")
+    return lines + [f"{COMPONENT_PARTS[part]}: {before:,.0f} -> {after:,.0f} characters"
+                    for part, (before, after) in what["sizes"].items()]
+
+
 def _context_where(change: dict[str, Any], new_version: bool) -> str:
     """Which projects a change reached, and what that says about its cause; "" when no
     project had the sessions each side to be compared with itself. Every branch counts the
@@ -495,13 +569,14 @@ def _context_where(change: dict[str, Any], new_version: bool) -> str:
             "look at your global configuration in ~/.claude.")
 
 
-def context_message(change: dict[str, Any], versions: Sequence[str]) -> str:
+def context_message(change: dict[str, Any], versions: Sequence[str],
+                    components: Optional[Mapping[str, Any]] = None) -> str:
     on = f", on Claude Code {', '.join(versions)}" if versions else ""
     direction = "down" if change["to"] < change["from"] else "up"
     where = _context_where(change, bool(change.get("new_version", False)))
     tail = where or ". Your MCP servers, plugins or CLAUDE.md can change this too."
     return (f"New sessions start with ~{approx(change['to'])} tokens of context from {change['since']}{on}, "
-            f"{direction} from ~{approx(change['from'])}{tail}")
+            f"{direction} from ~{approx(change['from'])}{tail}{components_text(components)}")
 
 
 def change_message(change: dict[str, Any], versions: list[str]) -> str:
