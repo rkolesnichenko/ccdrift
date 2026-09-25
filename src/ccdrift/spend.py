@@ -159,15 +159,18 @@ def response_dollars(turns: pd.DataFrame, prices: dict[str, Price]) -> pd.Series
 def record_write_tiers(usage: pd.DataFrame, responses: pd.DataFrame) -> pd.DataFrame:
     """`usage` (History.model_usage) with `cache_1h`, how many of each cost record's cache
     writes were at the one-hour tier. A record logs only the total; its session's responses
-    of the same model log the tiers, so the record takes their one-hour share. Its 1M-tier key
-    is its model's plain name to a response, as in joined_prices. A record whose session
-    logged no tiered write for its model is taken to have written at five minutes, as every
-    record was fitted before."""
+    of the same model log the tiers, so the record takes the one-hour share of all their
+    writes, counting any that logged no tier at five minutes, as response_dollars charges
+    them. A record whose session wrote nothing for its model is taken to have written at five
+    minutes, as every record was fitted before. Its 1M-tier key is its model's plain name to
+    a response, as in joined_prices, so a session holding records under both keys gives both
+    one pooled share: a record can't say which thread it ran on. On 2026-09-25 one session
+    of the owner's did, and taking its 1M tier as the main thread's instead fitted worse."""
     if usage.empty:
         return usage.assign(cache_1h=pd.Series(dtype="float64"))
     tiers = (responses.assign(model=responses["model"].astype(str))
-             .groupby(["session_id", "model"])[[HOUR_WRITES, "cache_5m"]].sum())
-    share = (tiers[HOUR_WRITES] / (tiers[HOUR_WRITES] + tiers["cache_5m"])).rename("share")
+             .groupby(["session_id", "model"])[[HOUR_WRITES, "cache_creation"]].sum())
+    share = (tiers[HOUR_WRITES] / tiers["cache_creation"]).rename("share")
     model = usage["model"].astype(str)
     plain = model.where(~model.str.endswith(LONG_CONTEXT), model.str[:-len(LONG_CONTEXT)])
     keys = pd.MultiIndex.from_arrays([usage["session_id"], plain])

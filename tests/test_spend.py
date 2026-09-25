@@ -507,10 +507,23 @@ def test_a_cost_records_one_hour_writes_come_from_its_own_sessions_responses_of_
     usage = pd.DataFrame([{"session_id": "s1", "model": "claude-opus-5-5[1m]", "cache_creation": 800.0},
                           {"session_id": "s1", "model": "claude-haiku-4-5", "cache_creation": 400.0},
                           {"session_id": "s2", "model": "claude-opus-5-5", "cache_creation": 500.0}])
-    responses = pd.DataFrame([{"session_id": "s1", "model": "claude-opus-5-5", "cache_1h": 300.0, "cache_5m": 100.0},
-                              {"session_id": "s1", "model": "claude-haiku-4-5", "cache_1h": 0.0, "cache_5m": 50.0},
-                              {"session_id": "s3", "model": "claude-opus-5-5", "cache_1h": 900.0, "cache_5m": 0.0}])
+    responses = pd.DataFrame([
+        {"session_id": "s1", "model": "claude-opus-5-5", "cache_creation": 400.0, "cache_1h": 300.0, "cache_5m": 100.0},
+        {"session_id": "s1", "model": "claude-haiku-4-5", "cache_creation": 50.0, "cache_1h": 0.0, "cache_5m": 50.0},
+        {"session_id": "s3", "model": "claude-opus-5-5", "cache_creation": 900.0, "cache_1h": 900.0, "cache_5m": 0.0}])
     assert record_write_tiers(usage, responses)["cache_1h"].tolist() == [600.0, 0.0, 0.0]
+
+
+def test_a_cost_records_one_hour_share_counts_its_sessions_untiered_writes_at_five_minutes():
+    # response_dollars charges a response that logged no tier at five minutes, so the record
+    # its session wrote is fitted the same way: 300 of the session's 800 written tokens were
+    # at one hour, not 300 of the 400 that logged a tier. Found in review on 2026-09-25; the
+    # owner's store then held no response with untiered writes, so it changed no price.
+    usage = pd.DataFrame([{"session_id": "s1", "model": "claude-opus-5-5", "cache_creation": 1000.0}])
+    responses = pd.DataFrame([
+        {"session_id": "s1", "model": "claude-opus-5-5", "cache_creation": 400.0, "cache_1h": 300.0, "cache_5m": 100.0},
+        {"session_id": "s1", "model": "claude-opus-5-5", "cache_creation": 400.0, "cache_1h": 0.0, "cache_5m": 0.0}])
+    assert record_write_tiers(usage, responses)["cache_1h"].tolist() == [375.0]
 
 
 def test_a_response_is_charged_for_its_own_one_hour_writes_and_one_logging_no_tier_at_five_minutes(tmp_path):
