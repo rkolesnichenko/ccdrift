@@ -326,7 +326,8 @@ ALERT_TITLES = {"flag": "ccdrift flag", "recovered": "ccdrift: back to normal",
                 "cut_short": "ccdrift: responses cut short", "fields": "ccdrift: Claude Code stopped logging a field",
                 "new_fields": "ccdrift: Claude Code logs a field ccdrift doesn't read",
                 "blank_cache": "ccdrift can't compute the cache metric", "digest": "ccdrift: weekly summary",
-                "failed": "ccdrift check failed"}
+                "unreadable": "ccdrift couldn't read a transcript",
+                "no_responses": "ccdrift found transcripts without responses", "failed": "ccdrift check failed"}
 
 
 def incident_message(kind: str, incident: dict[str, Any], named: Sequence[str], z: Sequence[float],
@@ -357,6 +358,29 @@ def blank_cache_message(blank: dict[str, Any]) -> str:
     return (f"no usable cache values on {blank['days']} active days from {blank['first']} "
             f"({blank['responses']} responses, {blank['prompts']} prompts recognised). "
             "Claude Code's log format may have changed; run `ccdrift peek`.")
+
+
+def _transcripts(n: int) -> str:
+    return f"{n} transcript{'' if n == 1 else 's'}"
+
+
+def unreadable_message(episode: dict[str, Any], errors: Sequence[str]) -> str:
+    return (f"the parser failed on {_transcripts(episode['transcripts'])} ({', '.join(errors)}), so their "
+            "responses are missing from every check until it reads them. Claude Code's log format may have "
+            "changed; the check's log names them.")
+
+
+def no_responses_message(episode: dict[str, Any], lines: int) -> str:
+    n = episode["transcripts"]
+    return (f"{_transcripts(n)} of {lines} lines or more {'holds' if n == 1 else 'hold'} no response ccdrift "
+            "recognises, so their days read as unused. Claude Code's log format may have changed; "
+            "run `ccdrift peek`.")
+
+
+def unread_lines(found: Sequence[tuple[str, Any]], lines: bool) -> list[str]:
+    """The transcripts behind an unreadable or no-responses alert, for the log alone:
+    their paths name project folders."""
+    return [f"{path}: {what} lines" if lines else f"{path}: {what}" for path, what in found]
 
 
 def state_unreadable(path: Any, exc: Exception) -> str:

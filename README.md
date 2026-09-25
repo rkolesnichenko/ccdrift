@@ -111,13 +111,16 @@ set this in `~/.claude/settings.json`:
 | **ccdrift: responses cut short** | At least 5 responses stopped at the token limit (or were refused) on a day, on at least 0.5% of that day's main-thread responses and 3 times the worst share of the judged days before, a clean fortnight counting as 0.1%. The comparison leaves out the days of the same run, so a regression that starts on a quiet day is still reported. | A Claude Code update may have changed the output limit. `ccdrift report --by version` compares versions. |
 | **ccdrift: Claude Code stopped logging a field** | A new Claude Code version logs a field ccdrift reads on under 10% of responses. | `ccdrift peek` shows what it reads. Please open an issue. |
 | **ccdrift: Claude Code logs a field ccdrift doesn't read** | A Claude Code version first seen in the last 2 weeks carries a field on 90% or more of its responses that under 10% of the responses in the 2 weeks before it carried. It goes to the log, the weekly summary and `ccdrift status`, never a notification: a field arriving breaks nothing. | Nothing. Please open an issue if ccdrift should read it. |
-| **ccdrift can't compute the cache metric** | 3 busy days had no usable cache values. Claude Code's log format has most likely changed. | `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it, with text, ids and paths shown only as their length, and each content block as its type and the size of the rest. Please open an issue with what it prints. |
+| **ccdrift can't compute the cache metric** | 3 busy days had no response with cache token counts, or no prompt ccdrift recognised. Claude Code's log format has most likely changed. | `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it, with text, ids and paths shown only as their length, and each content block as its type and the size of the rest. Please open an issue with what it prints. |
+| **ccdrift couldn't read a transcript** | The parser failed on a transcript, so its responses are missing from every check until it reads them. It is tried again on each run. None ever has in the owner's logs. | The check's log names the transcript and the error. Please open an issue with the error, not the transcript. |
+| **ccdrift found transcripts without responses** | A transcript of 40 lines or more held no response ccdrift recognises, so its days read as days you didn't use Claude Code. Claude Code's log format has most likely changed. Of 2,389 transcripts in the owner's logs, none that long did. | As for the cache metric: `ccdrift peek`, and an issue with what it prints. |
 | **ccdrift: weekly summary** | A one-line summary of the week before, from the first run after Monday 09:00 once that week's Sunday has also ended in UTC, since days are counted in UTC. | Nothing. `--no-digest` turns it off. |
 | **ccdrift check failed** | The check itself stopped with an error. | `~/.ccdrift/check.log` has the details. |
 
 Each alert is sent once, except responses cut short: a run that deepens to 3 times the
 share last reported is sent again, naming the level it escalated from, and a regression
-that simply lasts is repeated about once a fortnight. A failing check is logged on every
+that simply lasts is repeated about once a fortnight. A transcript that can't be read, or
+holds no response, alerts again only once a week has passed without one. A failing check is logged on every
 run and notifies at most once in 20 hours. Claude Code's documentation says the transcript
 format "is internal to Claude Code and changes between versions, so scripts that parse
 these files directly can break on any release", which is why the cache-metric alert
@@ -175,7 +178,7 @@ requests and responses cut short.
 `--exec` runs a command through the shell for each alert, with `CCDRIFT_ALERT` (`flag`,
 `recovered`, `persistent`, `history`, `early`, `loop`, `subagent_loop`, `setting`,
 `context`, `hooks`, `hook_coverage`, `failed_requests`, `cut_short`, `fields`, `blank_cache`,
-`digest` or
+`unreadable`, `no_responses`, `digest` or
 `failed`), `CCDRIFT_TITLE` and `CCDRIFT_MESSAGE` set. The `new_fields` and
 `context_dropped` alerts go to the log only and never run `--exec`. For example, to send
 alerts to [ntfy](https://ntfy.sh):

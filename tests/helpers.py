@@ -422,9 +422,11 @@ def tool_loop_days(path, days, per_day=100, misses=0, subagent=False):
 
 
 def hook_days_logs(path, failing_days, days, per_day=10):
-    """`per_day` stop-hook summaries a day from Sep 1 in one transcript; on the day
-    indexes in `failing_days` every hook reports an error."""
-    records = [stop_hook_summary(at(d * DAY + 300 + k), 1, durations=(400,), uuid=f"hook-{d}-{k}",
-                                 errors=("exit 1",) if d in failing_days else ())
-               for d in range(days) for k in range(per_day)]
+    """`per_day` stop-hook summaries a day from Sep 1 in one transcript, after the response
+    a stop hook follows; on the day indexes in `failing_days` every hook reports an error."""
+    records = [line("hooked", text(40), ts=at(200), cache_read=900, cache_creation=100, version="2.1.226",
+                    entrypoint="cli")]
+    records += [stop_hook_summary(at(d * DAY + 300 + k), 1, durations=(400,), uuid=f"hook-{d}-{k}",
+                                  errors=("exit 1",) if d in failing_days else ())
+                for d in range(days) for k in range(per_day)]
     write(path / "hooks.jsonl", records)

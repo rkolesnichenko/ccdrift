@@ -867,6 +867,23 @@ class Tables:
     model_usage: pd.DataFrame = field(default_factory=pd.DataFrame)
     components: pd.DataFrame = field(default_factory=pd.DataFrame)
     hook_coverage: pd.DataFrame = field(default_factory=pd.DataFrame)
+    # Transcripts read this time that the parser failed on, with the exception's type,
+    # and those that hold no response (see holds_no_response), with their line count.
+    skipped: list[tuple[str, str]] = field(default_factory=list)
+    no_responses: list[tuple[str, int]] = field(default_factory=list)
+
+
+# A transcript this long holds a response. Of 2,389 transcripts on 2026-09-25, 8 held
+# none, the longest 19 lines; 72% reach 40 lines, so a record type Claude Code renames
+# shows up in most of the transcripts written after it.
+NO_RESPONSE_LINES = 40
+
+
+def holds_no_response(parsed: ParsedFile) -> bool:
+    """Whether a transcript of at least NO_RESPONSE_LINES lines yielded no response:
+    what a change to how Claude Code logs responses leaves, since every other guard
+    needs responses to judge."""
+    return parsed.lines >= NO_RESPONSE_LINES and not parsed.responses
 
 
 def parse_all(source: Path) -> Tables:
@@ -876,11 +893,14 @@ def parse_all(source: Path) -> Tables:
     census: dict[tuple[str, str, str], int] = {}
     days: dict[tuple[str, str], int] = {}
     components, coverage = [], []
+    no_responses: list[tuple[str, int]] = []
     for fp, rel in jsonl_files(source):
         try:
             parsed = parse_file(fp, rel)
         except OSError:
             continue
+        if holds_no_response(parsed):
+            no_responses.append((rel, parsed.lines))
         for kind, rows in kinds.items():
             for key, row in getattr(parsed, kind).items():
                 rows.setdefault(key, row)
@@ -899,7 +919,7 @@ def parse_all(source: Path) -> Tables:
                   failure_frame(list(kinds["failures"].values())),
                   census_frame(census, days),
                   usage_frame(list(kinds["model_usage"].values())), components_frame(components),
-                  coverage_frame(coverage))
+                  coverage_frame(coverage), no_responses=no_responses)
 
 
 def parse_durations(source: Path) -> pd.DataFrame:

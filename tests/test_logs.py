@@ -7,9 +7,31 @@ import pandas as pd
 import pytest
 
 from ccdrift.detector import bin_metrics
-from ccdrift.logs import frame, judged_turns, outside_sdk, parse_all, parse_durations, parse_file, parse_source
+from ccdrift.logs import (NO_RESPONSE_LINES, frame, holds_no_response, judged_turns, outside_sdk, parse_all,
+                         parse_durations, parse_file, parse_source)
 from tests.helpers import (DAY, at, compact_boundary, cost_state, decode_limit, deep_line, line, prompt, response, stop_hook_summary, text,
                            thinking, tool_result, turn_duration, write)
+
+
+@pytest.mark.parametrize("lines, found", [(NO_RESPONSE_LINES - 1, False), (NO_RESPONSE_LINES, True)])
+def test_a_transcript_holds_no_response_from_its_line_count_on(tmp_path, lines, found):
+    records = [prompt(at(k)) for k in range(lines)]
+    (tmp_path / "s.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+    assert holds_no_response(parse_file(tmp_path / "s.jsonl", "s.jsonl")) is found
+
+
+def test_a_transcript_with_a_response_is_never_one_without(tmp_path):
+    records = [prompt(at(k)) for k in range(NO_RESPONSE_LINES)] + [line("m1", text(10), ts=at(99))]
+    (tmp_path / "s.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+    assert not holds_no_response(parse_file(tmp_path / "s.jsonl", "s.jsonl"))
+
+
+def test_reading_every_transcript_names_those_without_a_response(tmp_path):
+    records = [prompt(at(k)) for k in range(NO_RESPONSE_LINES)]
+    (tmp_path / "p").mkdir()
+    (tmp_path / "p" / "s.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+    (tmp_path / "p" / "t.jsonl").write_text(json.dumps(line("m1", text(10), ts=at(0))) + "\n")
+    assert parse_all(tmp_path).no_responses == [("p/s.jsonl", NO_RESPONSE_LINES)]
 
 
 def test_split_lines_of_one_response_become_one_turn(tmp_path):
