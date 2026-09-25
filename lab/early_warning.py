@@ -5,7 +5,9 @@ new-prompt turns it takes to catch a planted 5% miss rate, and when it would hav
 alarmed on the real regression. The gate passes when some h raises false alarms no
 faster than MAX_FALSE_PER_WEEK, catches the planted change within a median of 150
 turns, and alarmed on the real regression within 5 days of its start (for August 2026:
-before Aug 21 00:00 UTC, a day before the daily check's alert).
+before Aug 21 00:00 UTC, a day before the daily check's alert). The verdict is on the h
+ccdrift ships, early.THRESHOLD, with the usual rate taken over the days and turns the
+check takes it over; the other thresholds are measured beside it.
 
 The false alarm condition used to be a count: no false alarm at all on the clean days.
 No threshold has a zero rate, so that asked whether the corpus happened to be short
@@ -38,14 +40,11 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from ccdrift.early import miss_cusum, prompt_turns
+from ccdrift.early import BASE_DAYS, MIN_BASE_TURNS, THRESHOLD, WINDOW_DAYS, miss_cusum, prompt_turns
 from ccdrift.logs import default_source, parse_source
 from lab.harness import date_range
 
 H_GRID = (2, 3, 4, 5, 6, 8)
-BASE_DAYS = 14
-WINDOW_DAYS = 7
-MIN_BASE_TURNS = 100
 PLANT_RATE = 0.05
 STARTS = 10
 SEEDS = 5
@@ -168,6 +167,19 @@ def evaluate(df: pd.DataFrame, incident: tuple[str, str]) -> pd.DataFrame:
                                        "planted_caught", "planted_runs", "real_alarm", "passes"])
 
 
+def verdict(table: pd.DataFrame, h: Optional[float]) -> str:
+    """The gate's verdict on the threshold ccdrift ships, `h`: a pass only when its own row
+    passes. Which others pass is reported beside it, since that is what a change would pick
+    from; a threshold the grid didn't measure fails."""
+    passing = ", ".join(f"h={row:g}" for row in table.loc[table["passes"], "h"]) or "none"
+    if h is None:
+        return f"G3: none ships (passing: {passing})"
+    row = table[table["h"] == h]
+    if len(row) and bool(row["passes"].iloc[0]):
+        return f"G3: PASS h={h:g}"
+    return f"G3: FAIL h={h:g} (passing: {passing})"
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="G3: an early warning on cache misses, measured")
     ap.add_argument("--source", default=None, help="folder of Claude Code transcripts (default: as ccdrift)")
@@ -182,11 +194,7 @@ def main(argv: Optional[list[str]] = None) -> int:
               f"planted: median {row.planted_median:>6} turns, "
               f"caught {row.planted_caught}/{row.planted_runs}  real regression: {alarm}  "
               f"{'pass' if row.passes else 'fail'}")
-    passing = table[table["passes"]]
-    if len(passing):
-        print(f"G3: PASS h={passing['h'].iloc[0]}")
-    else:
-        print("G3: FAIL")
+    print(verdict(table, THRESHOLD))
     return 0
 
 

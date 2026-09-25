@@ -7,7 +7,7 @@ import pytest
 
 from ccdrift.early import MIN_P0
 from ccdrift.loops import LoopSetting, loop_turns, qualifying_alarms
-from lab.loop_cache import COLUMNS, base_rate, choose, evaluate, false_alarms
+from lab.loop_cache import COLUMNS, base_rate, choose, evaluate, false_alarms, verdict
 from tests.helpers import nth_day
 
 
@@ -86,3 +86,26 @@ def test_the_spike_picks_the_fastest_passing_combination_then_one_session_then_t
     ])
     assert choose(table, "main") == LoopSetting(p1=0.05, h=4.0, min_sessions=1)
     assert choose(table, "subagent") is None
+
+
+def settings_table(passing):
+    return pd.DataFrame([{"stream": "main", "p1": p1, "h": h, "min_sessions": sessions, "planted_median": median,
+                          "passes": (p1, h, sessions) in passing}
+                         for p1, h, sessions, median in ((0.02, 3, 2, 400.0), (0.02, 3, 1, 80.0), (0.05, 4, 1, 60.0))])
+
+
+def test_the_gate_passes_only_when_the_shipped_setting_does():
+    # It used to print the fastest passing combination as a PASS, whatever shipped.
+    shipped = LoopSetting(p1=0.02, h=3.0, min_sessions=1)
+    assert verdict(settings_table({(0.02, 3, 1), (0.05, 4, 1)}), "main", shipped) == "G8: PASS p1=0.02 h=3 sessions=1"
+    assert verdict(settings_table({(0.02, 3, 2), (0.05, 4, 1)}), "main", shipped) == (
+        "G8: FAIL p1=0.02 h=3 sessions=1 (fastest passing: p1=0.05 h=4 sessions=1)")
+    assert verdict(settings_table(set()), "main", shipped) == (
+        "G8: FAIL p1=0.02 h=3 sessions=1 (fastest passing: none)")
+
+
+def test_the_gate_fails_a_setting_it_didnt_measure_and_names_a_stream_that_ships_none():
+    table = settings_table({(0.02, 3, 1)})
+    assert verdict(table, "main", LoopSetting(p1=0.02, h=9.0, min_sessions=1)) == (
+        "G8: FAIL p1=0.02 h=9 sessions=1 (fastest passing: p1=0.02 h=3 sessions=1)")
+    assert verdict(table, "main", None) == "G8: none ships (fastest passing: p1=0.02 h=3 sessions=1)"

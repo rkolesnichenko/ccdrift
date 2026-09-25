@@ -125,6 +125,14 @@ A review found three ways the check could lose responses without saying so. Meas
 
 These counts come from a one-off measurement with no in-repo reproduction path.
 
+## Gates judged on the shipped setting, 2026-09-25
+
+G3, G8 and G9 used to print the best setting they found as a pass, whatever ccdrift shipped: on 2026-09-21 G3 printed "PASS h=5" while the shipped h = 4 failed, and the entry above records it as a pass at h = 5. Each now judges the setting that ships, reporting the others beside it. G3 also kept its own copy of the usual rate's floor, 100 turns against the check's 200, so it measured a check looser than the one that runs; it now takes the check's floor, days and window. Re-run over the logs through 2026-09-24.
+
+- **G3 holds at h = 4 on the check's own floor.** 0.144 false alarms a week against a bar of 0.167, one on the 4.2 weeks judged; a planted 5% miss rate caught in 49 of 50 runs in a median 41 turns; the real regression alarmed at 2026-08-18 21:55 UTC, inside the deadline. h = 5, 6 and 8 pass as well; h = 2 and 3 don't.
+- **G8 holds.** 18,856 main-thread tool-loop turns (11 misses, 37 days): p1 = 0.02, h = 3, one session raises no false alarm over 17 days judged and catches 50 of 50 in a median 75 turns.
+- **G9 fails on the shipped setting, and nothing passes.** 64,302 subagent tool-loop turns (127 misses, 33 days): p1 = 0.02, h = 8, one session still raises no false alarm over 16 days, but a planted 2% miss rate now takes a median 359 turns to catch, past the bar of 300; on 2026-09-24 it took 262. Of the 36 combinations none passes: those that catch within 300 turns raise 1 to 57 false alarms. With nothing passing, the subagent stream now ships no setting and gets no warning; its tool-loop misses stay in `ccdrift report` and the weekly summary, and the daily verdict was already the main signal there.
+
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
 
 Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).

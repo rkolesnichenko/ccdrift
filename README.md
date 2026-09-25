@@ -12,8 +12,8 @@ your usage limits:
   Code resends the conversation more often. ccdrift caught a real regression this way
   (Claude Code 2.1.233–2.1.258, August 2026) and follows such a regression until it's
   fixed.
-- **Tool-loop turns start missing the cache** on the main thread and in subagents: each
-  miss writes the whole conversation to the cache again.
+- **Tool-loop turns start missing the cache** on the main thread: each miss writes the
+  whole conversation to the cache again. Subagents' misses are reported, not warned about.
 - **Haiku appears on the main thread**, where your chosen model normally answers.
 - **A setting Claude Code picks changes:** the main thread moves between the 1-hour
   and 5-minute prompt cache, or its effort level changes.
@@ -101,7 +101,7 @@ set this in `~/.claude/settings.json`:
 | **ccdrift: past incidents found** | The first check replayed the history on disk day by day and found incidents ccdrift would have followed. They're recorded as if it had run all along, and one still going is flagged as well, so it arrives as what it is rather than as history. | `ccdrift incident list` shows them; `ccdrift incident dismiss` for a false alarm. |
 | **ccdrift: cache misses rising** | Several of the latest new-prompt turns missed the cache, far above your usual rate, within the last day. | Nothing yet. The daily verdict follows within a few days; `ccdrift report` shows the days. |
 | **ccdrift: tool-loop cache misses rising** | Several of the latest main-thread turns inside the tool loop missed the cache, far above your usual rate, within the last day. | Nothing yet. `ccdrift report` shows loop misses per day; the weekly summary shows whether it lasts. |
-| **ccdrift: subagent cache misses rising** | The same, for turns inside subagents. | Nothing yet. `ccdrift report` shows subagent misses per day; the weekly summary shows whether it lasts. |
+| **ccdrift: subagent cache misses rising** | The same, for turns inside subagents. Not sent at present: on the owner's logs no setting caught a planted rise quickly enough without false alarms (G9, 2026-09-25), so subagents get no warning. | Nothing yet. `ccdrift report` shows subagent misses per day; the weekly summary shows whether it lasts. |
 | **ccdrift: setting changed** | The cache tier or effort level a model usually gets on the main thread changed, 2 days in a row. | If you didn't change it, Claude Code's default did. |
 | **ccdrift: session start changed** | Sessions start with at least 25% more or less context than the 10 before them, on 3 in a row. Each session is measured against its own project's recent level, so moving between projects is not a change; the alert then counts the projects ccdrift could compare, those with at least 3 sessions each side of the change, and says whether every one of them moved (Claude Code, or your global config when no new version arrived) or only some did (those projects' CLAUDE.md, MCP servers or skills; when a Claude Code version new to those sessions arrived as well, it names that too rather than choosing between them). It also counts what changed in what Claude Code logged about how the sessions started: agent types, skills and MCP tools added or removed, and how many characters that came to. The names go to the check's log only, never to a notification or `--exec`. The logs can't say how many of the step's tokens those characters are, and the alert says so. | `ccdrift report` names each project's typical session start; `ccdrift report --by version` compares versions. |
 | **ccdrift: a recorded session-start change was dropped** | Once, after an upgrade that changed how session starts are judged: a change recorded under the old rule isn't one under the new. It goes to the log only, never a notification. | Nothing. |

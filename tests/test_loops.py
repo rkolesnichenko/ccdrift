@@ -139,3 +139,11 @@ def test_the_message_says_one_session_and_leaves_out_unknown_versions():
     assert loop_message(warning, NOW) == (
         "1 of the last 3 subagent tool-loop turns missed the cache (usually 0.18%), since 09-20 23:40, in 1 session, "
         "rewriting ~180k tokens. `ccdrift report` shows whether it lasts.")
+
+
+def test_subagents_get_no_tool_loop_warning_while_no_setting_passes_g9():
+    # G9 failed on 2026-09-25 with none of its 36 combinations passing, so the subagent
+    # stream ships no setting: a rise the shipped setting would catch there goes unwarned.
+    frame = loop_frame(RISING, stream="subagent")
+    assert loop_warning(frame, "subagent", new_state(), NOW, SETTING) is not None
+    assert loop_warning(frame, "subagent", new_state(), NOW) is None
