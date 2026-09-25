@@ -1,6 +1,6 @@
 """The hook coverage rule: when the hooks configured for tool calls stop or start running."""
 
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 
@@ -222,6 +222,20 @@ def test_a_separate_earlier_step_seen_late_is_still_news():
     state = new_state()
     assert [a["since"] for a in alerts_on(frame, state, date(2026, 10, 4))] == [nth_day(30)]
     assert [a["since"] for a in alerts_on(frame, state, date(2026, 10, 6))] == [nth_day(10)]
+
+
+def test_a_quiet_streams_wide_gap_doesnt_hide_a_separate_later_step():
+    # -s stops around day 10 and is reported. -q sat idle from day 9 to day 30, so its stop is
+    # only known to lie somewhere in those three weeks: too wide to place a step. -p stops
+    # between days 24 and 25, a separate step two weeks after -s's, and must still be reported.
+    frame = coverage(transcripts("-s", [True] * 10 + [False] * 3),
+                     transcripts("-q", [True] * 10), transcripts("-q", [False] * 3, first_day=30),
+                     transcripts("-p", [True] * 10, first_day=15), transcripts("-p", [False], first_day=25),
+                     transcripts("-p", [False] * 2, first_day=34))
+    state = new_state()
+    found = [alert["since"] for day in range(12, 45)
+             for alert in alerts_on(frame, state, date(2026, 9, 1) + timedelta(days=day))]
+    assert found == [nth_day(10), nth_day(25)]
 
 
 def test_a_stream_that_flips_back_doesnt_bring_its_old_change_back():
