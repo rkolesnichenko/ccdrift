@@ -89,6 +89,11 @@ CANDIDATES: dict[str, list[str]] = {
     "instruction_files": ["attachment.files"],
     "system_prompt":     ["attachment.systemPrompt"],
     "tool_definitions":  ["attachment.tools"],
+    # A hook run on a tool call. hookName ("PreToolUse:Bash") carries the event too, and is
+    # read only when hookEvent is missing.
+    "hook_event":        ["attachment.hookEvent"],
+    "hook_name":         ["attachment.hookName"],
+    "tool_use_id":       ["attachment.toolUseID"],
 }
 
 
@@ -330,12 +335,54 @@ def read_attachment(row: dict, obj: dict, started: bool) -> None:
             row["system_chars"] = size
 
 
+# The hook events whose runs are matched to tool calls, and the attachment kinds that
+# mean a hook ran, whether it succeeded or not. Measured on 2026-09-24 over the owner's
+# corpus: 127,647 hook_success records and 12 errors, 120,402 of them on these two events.
+HOOK_EVENTS = ("PreToolUse", "PostToolUse")
+HOOK_RAN = frozenset({"hook_success", "hook_non_blocking_error", "hook_blocking_error"})
+COVERAGE_COLUMNS = ("source_file", "session_id", "day", "version", "entrypoint", "is_sidechain", "event", "tool",
+                    "calls", "hooked")
+
+
+def tool_uses(content: Any) -> list[tuple[str, str]]:
+    """The id and name of each tool call in one line's content."""
+    if not isinstance(content, list):
+        return []
+    return [(block["id"], block["name"]) for block in content
+            if isinstance(block, dict) and block.get("type") == "tool_use"
+            and isinstance(block.get("id"), str) and isinstance(block.get("name"), str)]
+
+
+def hook_tool(name: str) -> Optional[str]:
+    """A tool as hook coverage counts it: a built-in tool by its name, an MCP tool by its
+    server, as mcp__<server>, since a hook matches a server's tools alike."""
+    clean = _text(name)
+    if clean is None or not clean.startswith("mcp__"):
+        return clean
+    return "mcp__" + clean[len("mcp__"):].split("__", 1)[0]
+
+
+def read_hook(hooked: dict[str, set[str]], obj: dict) -> None:
+    """Note the tool call a hook ran on, by event. Only its event and the tool call's id
+    are read, never its command, output or content, which can name private paths."""
+    if field_get(obj, "attachment_type") not in HOOK_RAN:
+        return
+    event = field_get(obj, "hook_event")
+    if not isinstance(event, str):
+        name = field_get(obj, "hook_name")
+        event = name.split(":", 1)[0] if isinstance(name, str) else None
+    tool_id = field_get(obj, "tool_use_id")
+    if event in hooked and isinstance(tool_id, str):
+        hooked[event].add(tool_id)
+
+
 @dataclass
 class ParsedFile:
     """One transcript's responses, turn durations, hook runs, compactions and per-model
     cost records by key, the transcript's first session id, line counts for --verbose,
     the key census (field_census, field_days) of its responses, and what its session
-    started with (components, one row)."""
+    started with (components, one row), and hook coverage (hook_coverage: for each day,
+    version, entrypoint, thread, hook event and tool, [tool calls, calls a hook ran on])."""
     responses: dict[str, dict] = field(default_factory=dict)
     durations: dict[str, dict] = field(default_factory=dict)
     hook_runs: dict[str, dict] = field(default_factory=dict)
@@ -345,6 +392,7 @@ class ParsedFile:
     field_days: dict[tuple[str, str], int] = field(default_factory=dict)
     model_usage: dict[str, dict] = field(default_factory=dict)
     components: dict = field(default_factory=dict)
+    hook_coverage: dict[tuple, list[int]] = field(default_factory=dict)
     session_id: Optional[str] = None
     lines: int = 0
     bad_json: int = 0
@@ -435,6 +483,10 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
     # a new turn, and a compaction rewrites the conversation.
     prompt_pending = compact_pending = False
     main_thread_seen = False
+    # Each tool call's response key and tool, and the calls each hook event ran on,
+    # matched once the whole transcript is read: a hook's record follows its call.
+    tool_calls: dict[str, tuple[str, str]] = {}
+    hooked: dict[str, set[str]] = {event: set() for event in HOOK_EVENTS}
     with fp.open("r", encoding="utf-8", errors="replace") as fh:
         for line_no, line in enumerate(fh):
             line = line.strip()
@@ -452,6 +504,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                 parsed.session_id = _text(field_get(obj, "session_id"))
             role = field_get(obj, "role")
             if role == "attachment":
+                read_hook(hooked, obj)
                 if not field_get(obj, "is_sidechain", default=False):
                     read_attachment(parsed.components, obj, main_thread_seen)
                 continue
@@ -588,6 +641,8 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
             if logged is not None:
                 row["thinking_logged"] = max(row["thinking_logged"] or 0.0, _num(logged))
             content = field_get(obj, "content")
+            for tool_id, name in tool_uses(content):
+                tool_calls.setdefault(tool_id, (key, name))
             signature, visible = content_chars(content)
             row["signature_chars"] += signature
             row["visible_chars"] += visible
@@ -611,6 +666,18 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                 continue
             key = (day, version, clean)
             parsed.field_census[key] = parsed.field_census.get(key, 0) + 1
+    # Every tool call counts once per hook event, hooked or not, under the day, version,
+    # entrypoint and thread of the response that made it.
+    for tool_id, (key, name) in tool_calls.items():
+        row, tool = parsed.responses.get(key), hook_tool(name)
+        if row is None or row["timestamp"] is None or tool is None:
+            continue
+        day = row["timestamp"].astimezone(timezone.utc).date().isoformat()
+        for event in HOOK_EVENTS:
+            counts = parsed.hook_coverage.setdefault(
+                (day, row["version"], row["entrypoint"], row["is_sidechain"], event, tool), [0, 0])
+            counts[0] += 1
+            counts[1] += tool_id in hooked[event]
     # A transcript is one session, even when a resumed session's lines carry
     # another id. Every record kind is backfilled, including the cost records, so a table
     # read straight from the transcripts has the columns the store's own read of it does.
@@ -757,6 +824,24 @@ def census_frame(census: Mapping[tuple[str, str, str], int],
     return df.sort_values(["day", "version", "path"], kind="stable").reset_index(drop=True)
 
 
+def coverage_frame(rows) -> pd.DataFrame:
+    """Hook coverage, one row per transcript, day, version, entrypoint, thread, hook event
+    and tool, sorted so two runs over one history read the same."""
+    df = pd.DataFrame(list(rows), columns=list(COVERAGE_COLUMNS))
+    for col in ("calls", "hooked"):
+        df[col] = df[col].astype(int)
+    df["is_sidechain"] = df["is_sidechain"].astype(bool)
+    return df.sort_values(["source_file", "day", "is_sidechain", "event", "tool"], kind="stable").reset_index(drop=True)
+
+
+def coverage_rows(parsed: ParsedFile, rel: str) -> list[dict]:
+    """A parsed transcript's hook coverage as rows for coverage_frame."""
+    session = parsed.session_id or Path(rel).stem
+    return [{"source_file": rel, "session_id": session, "day": day, "version": version, "entrypoint": entrypoint,
+             "is_sidechain": bool(sidechain), "event": event, "tool": tool, "calls": calls, "hooked": hooked}
+            for (day, version, entrypoint, sidechain, event, tool), (calls, hooked) in parsed.hook_coverage.items()]
+
+
 def components_frame(rows) -> pd.DataFrame:
     """What each session started with, one row per transcript, sorted by its path. A size
     Claude Code didn't log is NaN, not 0."""
@@ -772,7 +857,7 @@ def components_frame(rows) -> pd.DataFrame:
 class Tables:
     """Everything ccdrift reads from transcripts, one table per record kind, plus the
     key census (field_census), per-model usage and cost (model_usage) and what each
-    session started with (components)."""
+    session started with (components) and hook coverage (hook_coverage)."""
     responses: pd.DataFrame
     durations: pd.DataFrame
     hook_runs: pd.DataFrame
@@ -781,6 +866,7 @@ class Tables:
     field_census: pd.DataFrame = field(default_factory=pd.DataFrame)
     model_usage: pd.DataFrame = field(default_factory=pd.DataFrame)
     components: pd.DataFrame = field(default_factory=pd.DataFrame)
+    hook_coverage: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def parse_all(source: Path) -> Tables:
@@ -789,7 +875,7 @@ def parse_all(source: Path) -> Tables:
     kinds = {"responses": {}, "durations": {}, "hook_runs": {}, "compactions": {}, "failures": {}, "model_usage": {}}
     census: dict[tuple[str, str, str], int] = {}
     days: dict[tuple[str, str], int] = {}
-    components = []
+    components, coverage = [], []
     for fp, rel in jsonl_files(source):
         try:
             parsed = parse_file(fp, rel)
@@ -806,12 +892,14 @@ def parse_all(source: Path) -> Tables:
         for day_key, count in parsed.field_days.items():
             days[day_key] = days.get(day_key, 0) + count
         components.append(parsed.components)
+        coverage += coverage_rows(parsed, rel)
     return Tables(frame(list(kinds["responses"].values())), duration_frame(list(kinds["durations"].values())),
                   hook_frame(list(kinds["hook_runs"].values())),
                   compaction_frame(list(kinds["compactions"].values())),
                   failure_frame(list(kinds["failures"].values())),
                   census_frame(census, days),
-                  usage_frame(list(kinds["model_usage"].values())), components_frame(components))
+                  usage_frame(list(kinds["model_usage"].values())), components_frame(components),
+                  coverage_frame(coverage))
 
 
 def parse_durations(source: Path) -> pd.DataFrame:
