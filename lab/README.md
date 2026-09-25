@@ -60,6 +60,10 @@ uv run --group lab python -m lab.components --with-sdk
 uv run --group lab python -m lab.hook_coverage
 ```
 
+Each gate's last line is its verdict on the setting ccdrift ships (`G3: PASS h=4`, or
+`FAIL` with the settings that did pass beside it), so a sweep whose best setting passes
+while the shipped one fails reads as the failure it is.
+
 `--help` lists every option, including `--main-thread-only`, `--since`, `--until` and
 the detector settings, and for `lab.failures`, `lab.context`, `lab.components` and `lab.hook_coverage`, `--today`, before which
 the days read count as complete (default: today).

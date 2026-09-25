@@ -4,8 +4,10 @@ import random
 
 import pandas as pd
 
+from ccdrift import early
+from lab import early_warning
 from lab.early_warning import (MAX_FALSE_PER_WEEK, base_rate, evaluate, false_alarm_rate,
-                               prompt_turns, rate_sweep)
+                               prompt_turns, rate_sweep, verdict)
 from tests.helpers import nth_day
 
 
@@ -60,3 +62,25 @@ def test_the_bar_separates_the_shipped_threshold_from_the_noisy_ones():
     sweep = rate_sweep().set_index("h")
     assert (sweep.loc[4] <= MAX_FALSE_PER_WEEK).all()
     assert (sweep.loc[3] > MAX_FALSE_PER_WEEK).all()
+
+
+def test_the_gate_measures_the_usual_rate_over_the_days_and_turns_the_check_uses():
+    # A copy of MIN_BASE_TURNS at 100 against the shipped 200 once had the gate judge a
+    # looser check than the one that runs.
+    assert (early_warning.BASE_DAYS, early_warning.WINDOW_DAYS, early_warning.MIN_BASE_TURNS) == (
+        early.BASE_DAYS, early.WINDOW_DAYS, early.MIN_BASE_TURNS)
+
+
+def verdict_table(passing):
+    return pd.DataFrame({"h": [3, 4, 5], "passes": [h in passing for h in (3, 4, 5)]})
+
+
+def test_the_gate_passes_only_when_the_shipped_threshold_does():
+    # On 2026-09-21 it printed "PASS h=5" while the shipped h = 4 failed.
+    assert verdict(verdict_table({4, 5}), 4.0) == "G3: PASS h=4"
+    assert verdict(verdict_table({5}), 4.0) == "G3: FAIL h=4 (passing: h=5)"
+    assert verdict(verdict_table(set()), 4.0) == "G3: FAIL h=4 (passing: none)"
+
+
+def test_the_gate_fails_a_threshold_it_didnt_measure():
+    assert verdict(verdict_table({3, 4, 5}), 7.0) == "G3: FAIL h=7 (passing: h=3, h=4, h=5)"

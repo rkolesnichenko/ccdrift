@@ -7,7 +7,9 @@ most sensitive rate the check can run at; and how many tool-loop turns it takes 
 catch a planted 2% miss rate against the measured usual rate, which catches it more
 slowly. A stream passes when some combination has no false alarms over the days judged
 and catches the planted rate in 90% of runs within a median of 300 turns. No real
-tool-loop regression is known, so nothing checks an alarm against one.
+tool-loop regression is known, so nothing checks an alarm against one. The verdict is on
+the setting ccdrift ships for each stream, loops.LOOP_SETTINGS; the fastest passing
+combination is reported beside it.
 
 Run from the repo root:
 
@@ -31,7 +33,7 @@ import pandas as pd
 
 from ccdrift.early import MIN_P0
 from ccdrift.logs import default_source, parse_source
-from ccdrift.loops import (BASE_DAYS, MIN_BASE_TURNS, STREAMS, WINDOW_DAYS, LoopSetting, loop_turns,
+from ccdrift.loops import (BASE_DAYS, LOOP_SETTINGS, MIN_BASE_TURNS, STREAMS, WINDOW_DAYS, LoopSetting, loop_turns,
                            qualifying_alarms)
 from lab.harness import date_range
 
@@ -146,6 +148,24 @@ def choose(table: pd.DataFrame, stream: str) -> Optional[LoopSetting]:
     return LoopSetting(float(best["p1"]), float(best["h"]), int(best["min_sessions"]))
 
 
+def _named(setting: Optional[LoopSetting]) -> str:
+    return "none" if setting is None else f"p1={setting.p1:g} h={setting.h:g} sessions={setting.min_sessions}"
+
+
+def verdict(table: pd.DataFrame, stream: str, setting: Optional[LoopSetting]) -> str:
+    """The gate's verdict on the setting ccdrift ships for `stream`: a pass only when its
+    own row passes, with the combination choose() would pick beside it. A setting the
+    grid didn't measure fails."""
+    gate, best = GATES[stream], _named(choose(table, stream))
+    if setting is None:
+        return f"{gate}: none ships (fastest passing: {best})"
+    row = table[(table["stream"] == stream) & (table["p1"] == setting.p1) & (table["h"] == setting.h)
+                & (table["min_sessions"] == setting.min_sessions)]
+    if len(row) and bool(row["passes"].iloc[0]):
+        return f"{gate}: PASS {_named(setting)}"
+    return f"{gate}: FAIL {_named(setting)} (fastest passing: {best})"
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="G8 and G9: an early warning on tool-loop cache misses, measured")
     ap.add_argument("--source", default=None, help="folder of Claude Code transcripts (default: as ccdrift)")
@@ -168,9 +188,7 @@ def main(argv: Optional[list[str]] = None) -> int:
               f"{row.days_judged} days  planted: median {row.planted_median:>6} turns, "
               f"caught {row.planted_caught}/{row.planted_runs}  {'pass' if row.passes else 'fail'}")
     for stream in STREAMS:
-        setting = choose(table, stream)
-        print(f"{GATES[stream]}: PASS p1={setting.p1:g} h={setting.h:g} sessions={setting.min_sessions}"
-              if setting else f"{GATES[stream]}: FAIL")
+        print(verdict(table, stream, LOOP_SETTINGS[stream]))
     return 0
 
 
