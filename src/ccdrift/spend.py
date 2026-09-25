@@ -104,8 +104,9 @@ def branch_projects(turns: pd.DataFrame) -> dict[str, int]:
     return {str(name): int(count) for name, count in frame.groupby("branch")["project"].nunique().items()}
 
 
-# The counts Price.charge takes, in its order.
+# The counts Price.charge takes, in its order, and the one it takes by keyword.
 CHARGED_COUNTS = ("input_tokens", "cache_creation", "cache_read", "output_tokens")
+HOUR_WRITES = "cache_1h"
 
 # The suffix cost-state puts on a model's 1M-context tier, a tier message.model never records.
 LONG_CONTEXT = "[1m]"
@@ -148,8 +149,33 @@ def response_dollars(turns: pd.DataFrame, prices: dict[str, Price]) -> pd.Series
         rows = models == model
         if not rows.any():
             continue
-        out.loc[rows] = price.charge(*(turns.loc[rows, name].fillna(0) for name in CHARGED_COUNTS))
+        # The parser reads a tier Claude Code did not log as zero, so a response from before
+        # the tiers were logged is charged at five minutes, as every write was billed before.
+        out.loc[rows] = price.charge(*(turns.loc[rows, name].fillna(0) for name in CHARGED_COUNTS),
+                                     cache_1h=turns.loc[rows, HOUR_WRITES].fillna(0))
     return out
+
+
+def record_write_tiers(usage: pd.DataFrame, responses: pd.DataFrame) -> pd.DataFrame:
+    """`usage` (History.model_usage) with `cache_1h`, how many of each cost record's cache
+    writes were at the one-hour tier. A record logs only the total; its session's responses
+    of the same model log the tiers, so the record takes the one-hour share of all their
+    writes, counting any that logged no tier at five minutes, as response_dollars charges
+    them. A record whose session wrote nothing for its model is taken to have written at five
+    minutes, as every record was fitted before. Its 1M-tier key is its model's plain name to
+    a response, as in joined_prices, so a session holding records under both keys gives both
+    one pooled share: a record can't say which thread it ran on. On 2026-09-25 one session
+    of the owner's did, and taking its 1M tier as the main thread's instead fitted worse."""
+    if usage.empty:
+        return usage.assign(cache_1h=pd.Series(dtype="float64"))
+    tiers = (responses.assign(model=responses["model"].astype(str))
+             .groupby(["session_id", "model"])[[HOUR_WRITES, "cache_creation"]].sum())
+    share = (tiers[HOUR_WRITES] / tiers["cache_creation"]).rename("share")
+    model = usage["model"].astype(str)
+    plain = model.where(~model.str.endswith(LONG_CONTEXT), model.str[:-len(LONG_CONTEXT)])
+    keys = pd.MultiIndex.from_arrays([usage["session_id"], plain])
+    found = share.reindex(keys).fillna(0).to_numpy()
+    return usage.assign(cache_1h=usage["cache_creation"].to_numpy(dtype=float) * found)
 
 
 def spend_rows(turns: pd.DataFrame, dimension: str, prices: dict[str, Price]) -> pd.DataFrame:
@@ -311,7 +337,7 @@ def run_spend(source: Path, state_path: Path, days: Optional[int] = None, by: Op
     turns = spend_turns(tables.responses, today)
     window = sorted(turns["day"].astype(str).unique())[-(days or DEFAULT_DAYS):]
     turns = turns[turns["day"].astype(str).isin(window)]
-    usage = tables.model_usage
+    usage = record_write_tiers(tables.model_usage, tables.responses)
     prices = joined_prices(fit_prices(usage), usage["model"].astype(str) if "model" in usage else ())
     dimensions = [by] if by else list(DEFAULT_ORDER)
     if as_json:

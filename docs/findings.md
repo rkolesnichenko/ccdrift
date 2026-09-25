@@ -103,6 +103,18 @@ Three things the logs carry that ccdrift doesn't read, measured read-only over e
 
 These counts come from a one-off measurement with no in-repo reproduction path: nothing here ships, and nothing in the repository re-derives them.
 
+## Cache writes by tier, 2026-09-25
+
+The "guarded only in part" entry above said a wrong cache-write ratio could hide inside `MAX_RESIDUAL`. For the Opus 5 models it did. Measured read-only on a copy of the owner's store on 2026-09-25.
+
+- **The main thread writes for an hour, subagents for five minutes.** Responses log their cache writes per tier. `claude-opus-5` wrote 57% of its cache tokens at the one-hour tier (120.6M of 212.0M) and `claude-opus-5-5` 59% (15.4M of 26.0M); over the 30 days to 2026-09-23 both wrote every main-thread token at one hour and every subagent token at five minutes. `claude-haiku-4-5-20251001`, `claude-opus-4-7` and `claude-sonnet-5` wrote only at five minutes, which is why the three fits the 1.25x ratio was measured on were exact.
+- **A cost record doesn't log the tiers, but its session's responses do.** A record's cache writes matched those of its session's responses of the same model at a median 0.966 for `claude-opus-5-5`'s six records. At its list price ($4 in, $20 out, reads at 0.05x) those records miss by 5.51% with every write at 1.25x, and by 0.11% with each record's writes split by its session's one-hour share and that share billed at 2x.
+- **The fit had absorbed the difference into output.** Every write at 1.25x, it priced `claude-opus-5-5` at $3.55 in, reads at 0.054x and $37.16 out, at a residual of 0.37%, inside the 1% bound. With the tiers it gives $4.02, 0.050x and $18.90 at 0.02%. `ccdrift cost` now charges each response's writes at its own tier and fits each record on its session's share; a record whose session logged no tiered write for its model is fitted at five minutes as before, which covers all but 9 of `claude-haiku-4-5-20251001`'s 386 records and leaves its fit exact.
+- **What it moves.** The working tree against 0.15.0 on the same store copy, 30 days to 2026-09-24: the total from $10,649.46 to $10,761.03, so it had been 1.04% low; the main thread from $5,486.00 to $5,687.47 and subagents from $5,163.46 to $5,073.56; `claude-opus-5` from $7,998.63 to $8,094.68 and `claude-opus-5-5` from $631.38 to $646.90. The other models are unchanged.
+- **What it doesn't settle: Opus 5 still fits oddly.** With the tiers, `claude-opus-5`'s 6 plain records fit at $3.98 in, reads at 0.126x and $36.28 out (0.22%, from 0.63%), and its 25 `[1m]` records at $4.45, 0.113x and $25.71 (0.51%, from 0.72%). Neither agrees with the other or with a read ratio of 0.1, so some cost component of those records is still not modelled. Both stay inside the bound, which is the same weakness this entry records, one level down.
+
+These counts come from a one-off measurement with no in-repo reproduction path.
+
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
 
 Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).

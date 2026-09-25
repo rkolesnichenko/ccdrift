@@ -14,20 +14,28 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-# Cache writes cost 1.25x input. It is the one ratio still fixed rather than fitted, and it
-# is measured: on the owner's corpus on 2026-09-23 a free fit, solving for write and read
-# rates beside input and output, recovers exactly 1.25x on every model whose free fit is
-# well determined, claude-opus-4-7 at 6.25/5.00 per Mtok over 168 records, claude-sonnet-5
-# at 2.50/2.00 over 10 and claude-haiku-4-5-20251001 at 1.25/1.00 over 197. Fixing it is
-# what keeps the fit well posed: free, it returns -$11.58 per Mtok of input for
-# claude-opus-5 over 6 records and -$15.05 for claude-opus-5[1m] over 24. It is also an
-# assumption the residual bound guards only in part. A model charging another write ratio
-# is refused once the mismatch moves its residual past MAX_RESIDUAL, as cache reads fixed at
-# 0.05x did on every model priced on that corpus. Where writes are a small share of what its
-# records cost, the fit can instead absorb the mismatch into its other rates within the
-# bound: found in review on 2026-09-23, records made at 2.0x and fitted at 1.25x priced at a
-# 0.36% residual, billing each written token 39% under.
+# Cache writes cost 1.25x input at the five-minute tier. It is the one ratio still fixed
+# rather than fitted, and it is measured: on the owner's corpus on 2026-09-23 a free fit,
+# solving for write and read rates beside input and output, recovers exactly 1.25x on every
+# model whose free fit is well determined, claude-opus-4-7 at 6.25/5.00 per Mtok over 168
+# records, claude-sonnet-5 at 2.50/2.00 over 10 and claude-haiku-4-5-20251001 at 1.25/1.00
+# over 197, all three writing only at that tier. Fixing it is what keeps the fit well posed:
+# free, it returns -$11.58 per Mtok of input for claude-opus-5 over 6 records and -$15.05 for
+# claude-opus-5[1m] over 24. It is also an assumption the residual bound guards only in
+# part: where writes are a small share of what a model's records cost, the fit can absorb a
+# wrong write ratio into its other rates within the bound. That is what happened to the
+# writes below.
 CACHE_WRITE_RATE = 1.25
+
+# Cache writes at the one-hour tier cost 2x input. A response logs its writes per tier; a
+# cost record logs only their total, so the fit takes a record's one-hour share from its
+# session's responses. Measured on the owner's corpus on 2026-09-25: claude-opus-5 and
+# claude-opus-5-5 write every main-thread token at this tier and every subagent one at five
+# minutes, 59% of claude-opus-5-5's writes in all. At its list price, $4 in, $20 out and
+# reads at 0.05x, its six records missed by 5.51% with every write at 1.25x and by 0.11%
+# with each session's own share at 2x. Fitted at 1.25x it had been priced at $3.55 in and
+# $37.16 out, at a residual of 0.37%; with the tiers, $4.02 and $18.90 at 0.02%.
+CACHE_WRITE_1H_RATE = 2.0
 
 # A fit must reproduce the costs it was fitted to this closely to be trusted. This is not a
 # detection cutoff, and it is not fitted to a corpus's noise: Claude Code recorded the answer,
@@ -47,12 +55,13 @@ MAX_RESIDUAL = 0.01
 MIN_EXTRA_ROWS = 1
 
 
-def input_billed_tokens(input_tokens: pd.Series, cache_creation: pd.Series) -> pd.Series:
+def input_billed_tokens(input_tokens: pd.Series, cache_creation: pd.Series, cache_1h: pd.Series) -> pd.Series:
     """The tokens of a response or a cost record charged at the input rate: its input, and
-    its cache writes at CACHE_WRITE_RATE. Cache reads are not among them, since they carry a
-    rate of their own. The one place this expression lives, so what the fit solves for and
-    what Price.charge bills can never drift apart."""
-    return input_tokens + CACHE_WRITE_RATE * cache_creation
+    its cache writes, `cache_1h` of them at CACHE_WRITE_1H_RATE and the rest at
+    CACHE_WRITE_RATE. Cache reads are not among them, since they carry a rate of their own.
+    The one place this expression lives, so what the fit solves for and what Price.charge
+    bills can never drift apart."""
+    return input_tokens + CACHE_WRITE_RATE * (cache_creation - cache_1h) + CACHE_WRITE_1H_RATE * cache_1h
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -61,7 +70,7 @@ class Price:
     Built by keyword only: five of its fields are floats of a similar size, and a positional
     call that shifted one into another's place would price every response wrong without an
     error."""
-    input_rate: float        # per token, also charged on cache writes at CACHE_WRITE_RATE
+    input_rate: float        # per token, also charged on cache writes at their tier's rate
     cache_read_rate: float   # per token read from the cache, fitted rather than a fixed share of input
     output_rate: float       # per token
     # Per request, 0.0 when the model never searched. Nothing charges a response with it:
@@ -73,16 +82,19 @@ class Price:
     rows: int
 
     def charge(self, input_tokens: pd.Series, cache_creation: pd.Series, cache_read: pd.Series,
-               output_tokens: pd.Series) -> pd.Series:
+               output_tokens: pd.Series, *, cache_1h: pd.Series) -> pd.Series:
         """What responses or records with these counts cost at this price: the one place a
-        count becomes money. Web searches are left out, since a response carries no count of
-        its own. The counts must have no gaps: a NaN count makes a NaN charge."""
-        return (input_billed_tokens(input_tokens, cache_creation) * self.input_rate
+        count becomes money. `cache_1h` is how many of the cache writes were at the one-hour
+        tier, by keyword, since it is one more count of a similar size. Web searches are left
+        out, since a response carries no count of its own. The counts must have no gaps: a
+        NaN count makes a NaN charge."""
+        return (input_billed_tokens(input_tokens, cache_creation, cache_1h) * self.input_rate
                 + cache_read * self.cache_read_rate + output_tokens * self.output_rate)
 
 
 def fit_prices(usage: pd.DataFrame) -> dict[str, Price]:
-    """A price per model, from the per-model cost records in `usage` (History.model_usage).
+    """A price per model, from the per-model cost records in `usage` (History.model_usage
+    with the `cache_1h` column spend.record_write_tiers adds).
     A model with too few records, a rank-deficient fit, a negative rate or a residual over
     MAX_RESIDUAL is left out: an absent price reads as "not priced", a wrong one reads as
     money. A model whose records never read the cache is rank-deficient on that column and
@@ -101,7 +113,7 @@ def fit_prices(usage: pd.DataFrame) -> dict[str, Price]:
         # over MAX_RESIDUAL, so no fixed ratio could price both; solved for, the ratio comes
         # back 0.100x on claude-opus-4-7, claude-sonnet-5 and claude-haiku-4-5-20251001.
         searches = rows["web_searches"].to_numpy(dtype=float)
-        columns = [input_billed_tokens(rows["input_tokens"], rows["cache_creation"]).to_numpy(dtype=float),
+        columns = [input_billed_tokens(rows["input_tokens"], rows["cache_creation"], rows["cache_1h"]).to_numpy(dtype=float),
                    rows["cache_read"].to_numpy(dtype=float), rows["output_tokens"].to_numpy(dtype=float)]
         # An all-zero column is rank-deficient, and most models never search.
         if searches.any():
