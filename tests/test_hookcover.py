@@ -255,6 +255,15 @@ def test_the_first_check_after_upgrading_is_quiet_about_a_step_every_stream_slep
     assert alerts_on(frame, new_state(), date(2026, 10, 16)) == []
 
 
+def test_the_first_check_after_upgrading_is_quiet_about_a_narrow_stream_over_an_old_wide_ones_step():
+    # -a slept across the step (a 17-day gap) and its change has aged out; -b placed the same
+    # step within two days and its window filled recently. Both start 2026-09-27: one step.
+    frame = coverage(transcripts("-a", [True] * 10), transcripts("-a", [False] * 3, first_day=26),
+                     transcripts("-b", [True] * 10, first_day=15), transcripts("-b", [False], first_day=26),
+                     transcripts("-b", [False] * 2, first_day=40))
+    assert alerts_on(frame, new_state(), date(2026, 10, 14)) == []
+
+
 def test_a_stream_that_flips_back_doesnt_bring_its_old_change_back():
     state = new_state()
     stopped = coverage(transcripts("-p", [True] * 10 + [False] * 10))

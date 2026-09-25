@@ -148,7 +148,8 @@ def hook_coverage_alerts(coverage: pd.DataFrame, state: dict[str, Any], today: d
     doesn't chain through silent records; overlapping gaps can, so staggered idle streams
     can hide a separate change. Changes that ended before the last RECENT_DAYS days count
     as recorded before, whether or not a check saw them, so on the first check after
-    upgrading a step's quieter streams are no news when their gaps overlap. A stream whose
+    upgrading a step's quieter streams are no news when their gaps overlap, however wide
+    the aged-out one's. A stream whose
     last transcript before the step came after another stream's first after it doesn't
     overlap, and is reported."""
     cutoff = (today - timedelta(days=RECENT_DAYS)).isoformat()
@@ -166,7 +167,8 @@ def hook_coverage_alerts(coverage: pd.DataFrame, state: dict[str, Any], today: d
                   "alerted": False}
         recorded.append(record)
         new.append((change, record))
-    known = before + [record for change, record in new if change["until"] < cutoff]
+    backfilled = [record for change, record in new if change["until"] < cutoff]
+    known = before + backfilled
     fresh = []
     for change, record in new:
         if change["until"] < cutoff:
@@ -174,8 +176,8 @@ def hook_coverage_alerts(coverage: pd.DataFrame, state: dict[str, Any], today: d
         same = [r for r in known if r.get("thread") == change["thread"] and r["direction"] == change["direction"]]
         # One step when the two gaps overlap: a record's own `since` is only its stream's first
         # transcript after the step, which can come after this stream's.
-        if any((_places_step(r) or not _places_step(change)) and change["after"] <= r["since"]
-               and r.get("after", r["since"]) <= change["since"] for r in same):
+        if any((_places_step(r) or not _places_step(change) or any(r is b for b in backfilled))
+               and change["after"] <= r["since"] and r.get("after", r["since"]) <= change["since"] for r in same):
             continue
         if any(r.get("alerted") and _near(r["since"], change["since"]) for r in same):
             continue
