@@ -132,8 +132,8 @@ def hook_coverage_alerts(coverage: pd.DataFrame, state: dict[str, Any], today: d
     each with `after`, `since` and whether it `alerted`; a stream's change is new only
     once the stream turns the other way, after the latest change recorded for it. A new
     change alerts when its window ends within the last RECENT_DAYS days, unless a change
-    in the same thread and direction, recorded before, started between its `after` and
-    its `since` (the same step, seen first in another stream), or one that alerted
+    in the same thread and direction, recorded before, has a gap from `after` to `since`
+    that overlaps its own (the same step, seen in another stream), or one that alerted
     started within MERGE_DAYS of it (one update reaching each stream on its own day).
     Only changes that alerted fold others in, so silent records don't chain. Changes that
     ended before the last RECENT_DAYS days count as recorded before, whether or not a
@@ -160,7 +160,9 @@ def hook_coverage_alerts(coverage: pd.DataFrame, state: dict[str, Any], today: d
         if change["until"] < cutoff:
             continue
         same = [r for r in known if r.get("thread") == change["thread"] and r["direction"] == change["direction"]]
-        if any(change["after"] <= r["since"] <= change["since"] for r in same):
+        # One step when the two gaps overlap: a record's own `since` is only its stream's first
+        # transcript after the step, which can come after this stream's.
+        if any(change["after"] <= r["since"] and r.get("after", r["since"]) <= change["since"] for r in same):
             continue
         if any(r.get("alerted") and _near(r["since"], change["since"]) for r in same):
             continue

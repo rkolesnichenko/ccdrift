@@ -15,7 +15,7 @@ see each day the morning after, and asks five things of a setting:
   the lag in days: 0 when the alert comes the morning after the day the hooks stopped;
 - work moving from a hooked project to an unhooked one is no change;
 - the first check after upgrading, on an empty state on the gate's --today, reports
-  nothing: a change the logs already hold isn't news, however late its streams filled.
+  nothing: a change the logs already hold isn't news.
 
 The grid tries each window, baseline, agreement and minimum number of calls in GRID. The
 gate checks the shipped setting and every setting in the grid at least as strict as it

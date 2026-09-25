@@ -202,6 +202,28 @@ def test_the_first_check_after_upgrading_doesnt_report_a_step_whose_busiest_stre
                                                                                                 ("-b", False)]
 
 
+def test_a_quieter_stream_that_saw_the_step_first_is_still_the_same_step():
+    # -b's first transcript after the step came a day before -a's, then -b sat idle until its
+    # window filled two weeks later. -a's first transcript after the step falls outside -b's
+    # gap, but the two gaps overlap: one step, and no news on a first check.
+    frame = coverage(transcripts("-a", [False] * 10 + [True] * 3, first_day=1),
+                     transcripts("-b", [False] * 10 + [True]), transcripts("-b", [True] * 2, first_day=25))
+    state = new_state()
+    assert alerts_on(frame, state, date(2026, 9, 29)) == []
+    gaps = sorted((r["stream"].split("|")[0], r["after"], r["since"]) for r in state["hook_changes"])
+    assert gaps == [("-a", nth_day(10), nth_day(11)), ("-b", nth_day(9), nth_day(10))]
+
+
+def test_a_separate_earlier_step_seen_late_is_still_news():
+    # -b stopped around day 10 and sat idle; -a stopped at day 30 and was reported. -b's window
+    # fills after that, but its gap ended 20 days before -a's began: a different step.
+    frame = coverage(transcripts("-a", [True] * 30 + [False] * 3),
+                     transcripts("-b", [True] * 10 + [False]), transcripts("-b", [False] * 2, first_day=33))
+    state = new_state()
+    assert [a["since"] for a in alerts_on(frame, state, date(2026, 10, 4))] == [nth_day(30)]
+    assert [a["since"] for a in alerts_on(frame, state, date(2026, 10, 6))] == [nth_day(10)]
+
+
 def test_a_stream_that_flips_back_doesnt_bring_its_old_change_back():
     state = new_state()
     stopped = coverage(transcripts("-p", [True] * 10 + [False] * 10))
