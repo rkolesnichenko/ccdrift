@@ -238,6 +238,23 @@ def test_a_quiet_streams_wide_gap_doesnt_hide_a_separate_later_step():
     assert found == [nth_day(10), nth_day(25)]
 
 
+def test_a_break_of_more_than_two_weeks_across_one_step_is_reported_once():
+    # Every stream sat idle across the step, from day 9 to day 26: -a is back on day 26 and
+    # reported; -b is back 16 days later, over the same step, and is no news.
+    frame = coverage(transcripts("-a", [True] * 10), transcripts("-a", [False] * 3, first_day=26),
+                     transcripts("-b", [True] * 10), transcripts("-b", [False] * 3, first_day=42))
+    state = new_state()
+    found = [alert["since"] for day in range(12, 75)
+             for alert in alerts_on(frame, state, date(2026, 9, 1) + timedelta(days=day))]
+    assert found == [nth_day(26)]
+
+
+def test_the_first_check_after_upgrading_is_quiet_about_a_step_every_stream_slept_through():
+    frame = coverage(transcripts("-a", [True] * 10), transcripts("-a", [False] * 3, first_day=27),
+                     transcripts("-b", [True] * 10), transcripts("-b", [False] * 3, first_day=40))
+    assert alerts_on(frame, new_state(), date(2026, 10, 16)) == []
+
+
 def test_a_stream_that_flips_back_doesnt_bring_its_old_change_back():
     state = new_state()
     stopped = coverage(transcripts("-p", [True] * 10 + [False] * 10))

@@ -129,7 +129,7 @@ def _near(one: str, other: str) -> bool:
 def _places_step(record: dict[str, Any]) -> bool:
     """Whether a record's gap is narrow enough to say when its step happened. A stream that
     sat idle across a step only knows it lies somewhere in weeks, and such a gap would
-    swallow any later step it overlaps."""
+    swallow any narrower step it overlaps."""
     return _near(record.get("after", record["since"]), record["since"])
 
 
@@ -140,14 +140,16 @@ def hook_coverage_alerts(coverage: pd.DataFrame, state: dict[str, Any], today: d
     once the stream turns the other way, after the latest change recorded for it. A new
     change alerts when its window ends within the last RECENT_DAYS days, unless a change
     in the same thread and direction, recorded before, has a gap from `after` to `since`
-    no wider than MERGE_DAYS that overlaps its own (the same step, seen in another
-    stream), or one that alerted started within MERGE_DAYS of it (one update reaching
-    each stream on its own day). A wide gap places no step, so it folds nothing in, and
-    only changes that alerted fold others in by date, so silent records don't chain.
-    Changes that ended before the last RECENT_DAYS days count as recorded before, whether
-    or not a check saw them, so on the first check after upgrading a step's quieter
-    streams are no news when their gaps overlap a narrow one. A stream whose last
-    transcript before the step came after another stream's first after it doesn't
+    that overlaps its own (the same step, seen in another stream), or one that alerted
+    started within MERGE_DAYS of it (one update reaching each stream on its own day). A
+    gap wider than MERGE_DAYS, a stream idle across the step, can't say when it happened:
+    it folds in only changes as wide as itself, never a narrower one, which may be a
+    separate step. Only changes that alerted fold others in by date, so the 14-day fold
+    doesn't chain through silent records; overlapping gaps can, so staggered idle streams
+    can hide a separate change. Changes that ended before the last RECENT_DAYS days count
+    as recorded before, whether or not a check saw them, so on the first check after
+    upgrading a step's quieter streams are no news when their gaps overlap. A stream whose
+    last transcript before the step came after another stream's first after it doesn't
     overlap, and is reported."""
     cutoff = (today - timedelta(days=RECENT_DAYS)).isoformat()
     recorded = state["hook_changes"]
@@ -172,8 +174,8 @@ def hook_coverage_alerts(coverage: pd.DataFrame, state: dict[str, Any], today: d
         same = [r for r in known if r.get("thread") == change["thread"] and r["direction"] == change["direction"]]
         # One step when the two gaps overlap: a record's own `since` is only its stream's first
         # transcript after the step, which can come after this stream's.
-        if any(_places_step(r) and change["after"] <= r["since"] and r.get("after", r["since"]) <= change["since"]
-               for r in same):
+        if any((_places_step(r) or not _places_step(change)) and change["after"] <= r["since"]
+               and r.get("after", r["since"]) <= change["since"] for r in same):
             continue
         if any(r.get("alerted") and _near(r["since"], change["since"]) for r in same):
             continue
