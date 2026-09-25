@@ -25,7 +25,7 @@ from ccdrift.hookcover import hook_coverage_alerts
 from ccdrift.hooks import hook_failures, judged_hook_runs
 from ccdrift.incidents import (RECOVERY_BINS, describe, incident_cost, incident_versions, update_incidents,
                                versions_text)
-from ccdrift.logs import judged_turns
+from ccdrift.logs import NO_RESPONSE_LINES, judged_turns
 from ccdrift.loops import STREAMS, loop_counts, loop_warning
 from ccdrift.notify import notify, run_exec
 from ccdrift.replay import REPLAY_SOURCE, first_run, replay_incidents
@@ -36,8 +36,9 @@ from ccdrift.state import (CONTEXT_RULE, LOG_FILE, load_state, make_stream_priva
 from ccdrift.texts import (ALERT_TITLES, CHECK_LINES, blank_cache_message, change_message, component_lines,
                            context_dropped_message, context_message, cut_short_message, early_message, gap_message,
                            history_message, hook_coverage_lines, hook_coverage_message, hook_failure_message,
-                           loop_message, new_fields_message, no_transcripts_message, note_lines, requests_message,
-                           state_unreadable)
+                           loop_message, new_fields_message, no_responses_message, no_transcripts_message, note_lines,
+                           requests_message, state_unreadable, unread_lines, unreadable_message)
+from ccdrift.unread import unread_episode
 
 # kind, title, message, and lines for the log only
 Alert = tuple[str, str, str, list[str]]
@@ -54,7 +55,8 @@ LOOP_KINDS = {"main": "loop", "subagent": "subagent_loop"}
 # A stretch of active days without usable cache values means the cache metric
 # can't be computed, most likely because Claude Code's log format changed: it
 # goes blank when prompts aren't recognised, and reads as all misses when cache
-# usage isn't read.
+# usage isn't read. Over the 37 active days to 2026-09-24, the fewest prompts
+# recognised on one was 4 and the smallest share of responses with cache counts 0.999.
 CHECK_BLANK_DAYS = 3
 CHECK_ACTIVE_RESPONSES = 50  # main-thread responses; the quietest of 29 real days had 81
 
@@ -63,15 +65,18 @@ def blank_cache_stretch(turns: pd.DataFrame, state: dict[str, Any],
                         days: int = CHECK_BLANK_DAYS,
                         active: int = CHECK_ACTIVE_RESPONSES) -> Optional[dict[str, Any]]:
     """The latest run of active days (at least `active` judged responses) on which no
-    new-prompt turn has cache token counts, once it is `days` long and wasn't
-    reported before; it is recorded in state["blank_cache"], and its last day in
-    state["blank_cache_seen"]. Every Claude Code response reads or writes the prompt
-    cache, so such days mean the parser has lost track of it."""
-    usable = turns["prompt_within_ttl"].astype(bool) & ((turns["cache_read"] + turns["cache_creation"]) > 0)
+    response has cache token counts or no prompt was recognised, once it is `days` long
+    and wasn't reported before; it is recorded in state["blank_cache"], and its last day
+    in state["blank_cache_seen"]. Every Claude Code response reads or writes the prompt
+    cache, and every turn starts with a prompt, so such days mean the parser has lost
+    track of one or the other. Prompts recognised but none within the cache's hour of
+    the last is how someone who starts a session per task works, not a log format."""
+    cached = (turns["cache_read"] + turns["cache_creation"]) > 0
     per_day = pd.DataFrame({"responses": turns.groupby("day").size(),
-                            "usable": usable.groupby(turns["day"]).sum()})
+                            "cached": cached.groupby(turns["day"]).sum(),
+                            "prompts": turns["new_prompt"].astype(bool).groupby(turns["day"]).sum()})
     per_day = per_day[per_day["responses"] >= active]
-    blank = (per_day["usable"] == 0).to_numpy()
+    blank = ((per_day["cached"] == 0) | (per_day["prompts"] == 0)).to_numpy()
     if len(blank) < days or not blank[-days:].all():
         return None
     start = len(blank) - days
@@ -243,6 +248,15 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     blank = blank_cache_stretch(turns, state)
     if blank:
         alerts.append(("blank_cache", ALERT_TITLES["blank_cache"], blank_cache_message(blank), []))
+    episode = unread_episode(state["unreadable"], tables.skipped, today)
+    if episode:
+        errors = sorted({error for _, error in tables.skipped})
+        alerts.append(("unreadable", ALERT_TITLES["unreadable"], unreadable_message(episode, errors),
+                       unread_lines(tables.skipped, lines=False)))
+    episode = unread_episode(state["no_responses"], tables.no_responses, today)
+    if episode:
+        alerts.append(("no_responses", ALERT_TITLES["no_responses"], no_responses_message(episode, NO_RESPONSE_LINES),
+                       unread_lines(tables.no_responses, lines=True)))
     week_start = digest_due(state, now) if digest else None
     if week_start is not None:
         state["digest_week"] = digest_week(now)

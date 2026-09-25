@@ -67,8 +67,8 @@ def make_stream_private(stream: TextIO, only: Optional[Path] = None) -> None:
 def new_state() -> dict[str, Any]:
     return {"version": STATE_VERSION, "incidents": [], "settings": [], "blank_cache": [], "reported": {},
             "field_gaps": [], "new_fields": [], "hook_failures": [], "context_changes": [], "early_warnings": [],
-            "loop_warnings": [], "failed_requests": [], "cut_short": [], "hook_changes": [],
-            "context_rule": CONTEXT_RULE, "runs": []}
+            "loop_warnings": [], "failed_requests": [], "cut_short": [], "hook_changes": [], "unreadable": [],
+            "no_responses": [], "context_rule": CONTEXT_RULE, "runs": []}
 
 
 def load_state(path: Path) -> dict[str, Any]:

@@ -21,7 +21,7 @@ import pandas as pd
 from ccdrift.logs import (ATTRIBUTION_FIELDS, COMPONENT_SETS, COMPONENT_SIZES, MAX_TIME, MIN_TIME, SDK_ENTRYPOINT_PREFIX,
                           SETTING_FIELDS, TOKEN_FIELDS, USAGE_COUNTS, ParsedFile, Tables, census_frame, compaction_frame,
                           components_frame, coverage_frame, coverage_rows, duration_frame, failure_frame, frame, hook_frame,
-                          jsonl_files, parse_all, parse_file, usage_frame)
+                          holds_no_response, jsonl_files, parse_all, parse_file, usage_frame)
 from ccdrift.state import make_private
 from ccdrift.texts import HISTORY_LINES
 
@@ -193,6 +193,9 @@ class History:
 
     def __init__(self, path: Path):
         self._days: Optional[list[tuple[int, Optional[str], int, int]]] = None
+        # What the last update couldn't read, as Tables.skipped and Tables.no_responses.
+        self.skipped: list[tuple[str, str]] = []
+        self.no_responses: list[tuple[str, int]] = []
         if sqlite3.sqlite_version_info < (3, 24, 0):
             raise HistoryError(HISTORY_LINES["old_sqlite"].format(version=sqlite3.sqlite_version))
         if path.is_dir():
@@ -306,6 +309,7 @@ class History:
         reread = self.meta.get("parser_version") != str(PARSER_VERSION)
         read = 0
         failed: list[Exception] = []
+        self.skipped, self.no_responses = [], []
         for fp, rel in jsonl_files(source):
             try:
                 stat = fp.stat()
@@ -323,6 +327,8 @@ class History:
             except (OverflowError, ValueError, TypeError) as exc:  # a value SQLite can't store
                 self._skip(rel, known, exc, failed)
                 continue
+            if holds_no_response(parsed):
+                self.no_responses.append((rel, parsed.lines))
             read += 1
         if len(failed) > 1 and not read:
             raise failed[0]
@@ -342,6 +348,7 @@ class History:
         """Leave out a transcript that failed, saying so, and try it again next time."""
         print(HISTORY_LINES["skipped"].format(path=rel, error=f"{type(exc).__name__}: {exc}"), file=sys.stderr)
         failed.append(exc)
+        self.skipped.append((rel, type(exc).__name__))
         self._retry(rel, known)
 
     def _replace(self, rel: str, size: int, mtime_ns: int, parsed: ParsedFile) -> None:
@@ -556,7 +563,8 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
                 since = None if active_start is None else min(since, active_start)
             return Tables(history.responses(since), history.durations(since), history.hook_runs(since),
                           history.compactions(since), history.failures(since), history.field_census(since),
-                          history.model_usage(since), history.components(since), history.hook_coverage(since))
+                          history.model_usage(since), history.components(since), history.hook_coverage(since),
+                          history.skipped, history.no_responses)
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc
     except pd.errors.DatabaseError as exc:

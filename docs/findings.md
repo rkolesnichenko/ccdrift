@@ -115,6 +115,16 @@ The "guarded only in part" entry above said a wrong cache-write ratio could hide
 
 These counts come from a one-off measurement with no in-repo reproduction path.
 
+## Transcripts the check couldn't read, 2026-09-25
+
+A review found three ways the check could lose responses without saying so. Measured read-only over every transcript on disk on 2026-09-25 (2,389 files) and the main-thread CLI turns of the 37 active days to 2026-09-24.
+
+- **A parser failure went unreported whenever any other transcript read.** The store raises only when two or more transcripts fail and none reads, so a format change that tripped the parser on main-thread transcripts while subagent ones still read left the check reporting nothing. The parser raised on none of the 2,389 transcripts, and the live check's log holds no skipped transcript, so one failure is news: the check now alerts on it, once until a week passes without one.
+- **A record type renamed would hide every response, and nothing noticed.** Each guard that the parser has lost track (the blank cache, a field that stops being logged) needs responses to judge, so a day without them read as a day off. 8 of the 2,389 transcripts held no response, the longest 19 lines; 72% of transcripts reach 40 lines. The check now alerts on a transcript of 40 lines or more with no response, once until a week passes without one.
+- **The blank-cache alert blamed the log format for how someone works.** It counted a day as blank when no prompt came within the cache's hour of the one before, which a session per task never does, though every response logged its cache. It now asks whether any response logged cache token counts and whether any prompt was recognised. Over the 37 active days the fewest prompts recognised on one was 4 and the smallest share of responses with cache counts 0.999, so neither rule, old or new, fires on these logs.
+
+These counts come from a one-off measurement with no in-repo reproduction path.
+
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
 
 Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).

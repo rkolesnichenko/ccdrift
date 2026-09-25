@@ -73,6 +73,86 @@ def test_check_alerts_about_unusable_cache_values_once(tmp_path, sent):
     assert sent == ["ccdrift can't compute the cache metric"]
 
 
+def test_check_doesnt_blame_the_log_format_when_no_session_gets_a_second_prompt_within_the_hour(tmp_path, sent):
+    # Someone who starts a fresh session for every task never has a prompt the cache
+    # metric can judge, but every response still logs its cache: the parser is fine.
+    for d in range(3):
+        for s in range(3):
+            sid, base = f"s{d}-{s}", d * DAY + s * 7200
+            write(tmp_path / "logs" / f"{sid}.jsonl",
+                  [prompt(at(base), sid=sid)] + [line(f"m{d}-{s}-{k}", text(40), ts=at(base + 60 * k), sid=sid,
+                                                      cache_read=900, cache_creation=100) for k in range(20)])
+    check_logs(tmp_path)
+    assert sent == []
+
+
+def trip_parser_on(monkeypatch, rel):
+    """parse_file, raising for the transcript at `rel` as a format change would."""
+    real = ccdrift.history.parse_file
+
+    def parse(fp, name):
+        if name == rel:
+            raise KeyError("a record ccdrift can't read")
+        return real(fp, name)
+
+    monkeypatch.setattr(ccdrift.history, "parse_file", parse)
+    return real
+
+
+def test_check_alerts_once_when_the_parser_fails_on_a_transcript_while_others_read(tmp_path, sent, monkeypatch,
+                                                                                    capsys):
+    # A format change that tripped the parser on the main thread's transcripts left the
+    # subagents' reading, and the check said nothing while those days went missing.
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    ran_before(tmp_path)
+    trip_parser_on(monkeypatch, "s2.jsonl")
+    for today in (date(2026, 9, 4), date(2026, 9, 10), date(2026, 9, 16)):
+        check_logs(tmp_path, today=today)
+    assert sent == ["ccdrift couldn't read a transcript"]
+    out = capsys.readouterr().out
+    assert "the parser failed on 1 transcript (KeyError)" in out
+    assert "    s2.jsonl: KeyError" in out  # the path goes to the log alone
+
+
+def test_a_transcript_the_parser_fails_on_again_after_a_quiet_week_is_reported_again(tmp_path, sent, monkeypatch):
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    ran_before(tmp_path)
+    real = trip_parser_on(monkeypatch, "s2.jsonl")
+    check_logs(tmp_path, today=date(2026, 9, 4))
+    monkeypatch.setattr(ccdrift.history, "parse_file", real)
+    check_logs(tmp_path, today=date(2026, 9, 5))
+    trip_parser_on(monkeypatch, "s2.jsonl")
+    (tmp_path / "logs" / "s2.jsonl").write_text((tmp_path / "logs" / "s2.jsonl").read_text() + "\n")
+    check_logs(tmp_path, today=date(2026, 9, 12))
+    assert sent == ["ccdrift couldn't read a transcript"] * 2
+
+
+def unrecognised_session(path, day, responses):
+    """A session whose assistant records carry a type ccdrift doesn't know, as a renamed
+    record type would leave it: a prompt and a response a minute apart, 2 lines each."""
+    records = []
+    for k in range(responses):
+        ts = at(day * DAY + 60 * k)
+        record = line(f"r{day}-{k}", text(40), ts=ts, sid=f"r{day}", cache_read=900, cache_creation=100)
+        records += [prompt(ts, sid=f"r{day}"), {**record, "type": "assistant_turn"}]
+    write(path / f"r{day}.jsonl", records)
+
+
+def test_check_alerts_once_when_a_long_transcript_holds_no_response_it_recognises(tmp_path, sent, capsys):
+    # A renamed record type hides every response, and a day without responses reads as
+    # a day off: only the transcript's lines say otherwise.
+    main_thread_days(tmp_path / "logs", [{}] * 3)
+    ran_before(tmp_path)
+    unrecognised_session(tmp_path / "logs", 3, responses=20)
+    check_logs(tmp_path)
+    unrecognised_session(tmp_path / "logs", 3, responses=30)  # the session goes on
+    check_logs(tmp_path, today=date(2026, 9, 5))
+    assert sent == ["ccdrift found transcripts without responses"]
+    out = capsys.readouterr().out
+    assert "1 transcript of 40 lines or more holds no response ccdrift recognises" in out
+    assert "    r3.jsonl: 40 lines" in out
+
+
 def test_check_ignores_quiet_days_without_cache_values(tmp_path, sent):
     # A quick question a day can leave no new-prompt turn to measure. The quietest
     # of 29 real days still had 81 main-thread responses and 3 cache values.
