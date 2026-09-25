@@ -145,6 +145,33 @@ def test_status_lists_other_changes_of_the_last_30_days(tmp_path, capsys):
     ]
 
 
+def hook_change(stream, thread, direction, since, reported_on, alerted=True):
+    return {"stream": stream, "thread": thread, "direction": direction, "after": "2026-09-01", "since": since,
+            "reported_on": reported_on, "alerted": alerted}
+
+
+def test_status_lists_each_hook_coverage_alert_of_the_last_30_days_without_naming_a_project_or_server(tmp_path, capsys):
+    # One alert folded two streams; a stream recorded without an alert, and an alert more
+    # than 30 days old, aren't listed.
+    path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00", hook_changes=[
+        hook_change("-Users-me-app|subagent|PreToolUse|mcp__tracker__add", "subagent", "started", "2026-09-06",
+                    "2026-09-08"),
+        hook_change("-Users-me-web|subagent|PostToolUse|Bash", "subagent", "started", "2026-09-05", "2026-09-08"),
+        hook_change("-Users-me-cli|subagent|PreToolUse|Bash", "subagent", "started", "2026-09-07", "2026-09-10",
+                    alerted=False),
+        hook_change("-Users-me-app|main|PreToolUse|Bash", "main", "stopped", "2026-09-15", "2026-09-17"),
+        hook_change("-Users-me-app|main|PreToolUse|Read", "main", "stopped", "2026-08-01", "2026-08-03")])
+    run_status(path, now=NOW)
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert lines[lines.index("Other changes in the last 30 days:"):] == [
+        "Other changes in the last 30 days:",
+        "  hooks started running on subagent tool calls from 2026-09-05",
+        "  hooks stopped running on main-thread tool calls from 2026-09-15",
+    ]
+    assert "Users" not in out and "tracker" not in out
+
+
 def test_status_lists_a_new_field_under_other_changes():
     state = new_state()
     state["last_run"] = {"started": "2026-09-19T10:00:00", "ok": True, "error": None}

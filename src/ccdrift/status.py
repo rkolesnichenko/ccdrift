@@ -12,7 +12,7 @@ from typing import Any, Optional
 from ccdrift.state import load_state
 from ccdrift.texts import (COMMAND_LINES, LIVE_NAMES, LOOP_NAMES, STATUS_LINES, change_line, clock_text,
                            context_change_line, cut_short_line, early_warning_line, failure_line, field_gap_line,
-                           hook_failure_line, incident_line, loop_warning_line, new_field_line)
+                           hook_change_line, hook_failure_line, incident_line, loop_warning_line, new_field_line)
 
 STALE_DAYS = 3
 HOOK_DAYS = 3
@@ -68,6 +68,19 @@ def _section(title: str, items: list[str]) -> list[str]:
     return [STATUS_LINES["section"].format(title=title)] + [f"  {item}" for item in items]
 
 
+def _hook_changes(records: list[dict[str, Any]], since: str) -> list[str]:
+    """The hook coverage alerts reported from `since` on, one line each: the records of
+    the streams an alert folded together share its thread, direction and day reported,
+    and the line gives the earliest start. Never a record's `stream`, which names the
+    project and tool, and an MCP server's among them."""
+    alerts: dict[tuple[str, str, str], str] = {}
+    for record in records:
+        if record.get("alerted") and record["reported_on"] >= since:
+            key = (record["reported_on"], record["thread"], record["direction"])
+            alerts[key] = min(alerts.get(key, record["since"]), record["since"])
+    return [hook_change_line(thread, direction, first) for (_, thread, direction), first in sorted(alerts.items())]
+
+
 def status_report(state: dict[str, Any], now: datetime) -> str:
     last = state.get("last_run")
     if last is None:
@@ -85,6 +98,7 @@ def status_report(state: dict[str, Any], now: datetime) -> str:
                       [change_line(c) for c in state["settings"] if c["reported_on"] >= since])
     other = ([context_change_line(c) for c in state.get("context_changes", []) if c["reported_on"] >= since]
              + [hook_failure_line(f) for f in state.get("hook_failures", []) if f["reported_on"] >= since]
+             + _hook_changes(state.get("hook_changes", []), since)
              + [field_gap_line(g) for g in state.get("field_gaps", []) if g["reported_on"] >= since]
              + [new_field_line(r) for r in state.get("new_fields", []) if r["reported_on"] >= since]
              + [early_warning_line(w) for w in state.get("early_warnings", []) if w["reported_on"] >= since]

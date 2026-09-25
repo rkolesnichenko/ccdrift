@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-- Tests: `uv run --group dev --group lab pytest` (860 tests, ~45s). `testpaths = ["tests", "lab"]`, so a bare `pytest` runs both suites.
+- Tests: `uv run --group dev --group lab pytest` (910 tests, ~45s). `testpaths = ["tests", "lab"]`, so a bare `pytest` runs both suites.
 - Single test: `uv run --group dev --group lab pytest tests/test_check.py::test_name`, or `-k <substring>`. No install step is needed; `pythonpath = [".", "src"]` is set in pyproject.toml.
 - The `lab` group is required even when running only `tests/`: lab collection imports matplotlib.
 - Build: `uv build`. There is no lint, format or type-check step, by design (see Style).
@@ -58,5 +58,5 @@ First check that anything ships: `git diff --stat v<previous>..HEAD -- src tests
 ## Layout
 
 - src/ccdrift/ is the shipped package: flat, no subpackages.
-- lab/ is the research harness, with its own numbered gate tests (G2, G3, G7-G12, G14) matching the entries in docs/findings.md; G13 has no test and runs only through `python -m lab.failures`. It is not installed; run it from a clone, for example `uv run --group lab python lab/harness.py --synthetic --out ./out`. See lab/README.md for the full list.
+- lab/ is the research harness, with its own numbered gate tests (G2, G3, G7-G12, G14, G15) matching the entries in docs/findings.md; G13 has no test and runs only through `python -m lab.failures`. It is not installed; run it from a clone, for example `uv run --group lab python lab/harness.py --synthetic --out ./out`. See lab/README.md for the full list.
 - Optional env vars, none required: `CCDRIFT_HOME` (default ~/.ccdrift), `CLAUDE_CONFIG_DIR` (default ~/.claude; transcripts are read from its projects/), `XDG_CONFIG_HOME` (systemd user unit dir).

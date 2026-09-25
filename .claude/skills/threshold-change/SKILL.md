@@ -7,7 +7,7 @@ Every shipped cutoff is a measurement, not a preference. The rule is: re-run the
 
 ## 1. Find the gate that backs it
 
-docs/findings.md records one entry per numbered gate (G2, G3, G7-G14) and names the sweep behind it. Match the constant to its gate before touching anything. The sweeps live in lab/: `lab/harness.py`, `lab/early_warning.py`, `lab/loop_cache.py`, `lab/subagent_models.py`, `lab/failures.py`, `lab/context.py`, `lab/session_start.py`, `lab/components.py`. G13 has no gate test; `lab.failures` runs it.
+docs/findings.md records one entry per numbered gate (G2, G3, G7-G15) and names the sweep behind it. Match the constant to its gate before touching anything. The sweeps live in lab/: `lab/harness.py`, `lab/early_warning.py`, `lab/loop_cache.py`, `lab/subagent_models.py`, `lab/failures.py`, `lab/context.py`, `lab/session_start.py`, `lab/components.py`, `lab/hook_coverage.py`. G13 has no gate test; `lab.failures` runs it.
 
 ## 2. Re-run the sweep
 
@@ -20,6 +20,7 @@ uv run --group lab python -m lab.subagent_models
 uv run --group lab python -m lab.failures
 uv run --group lab python -m lab.context
 uv run --group lab python -m lab.session_start
+uv run --group lab python -m lab.hook_coverage
 uv run --group lab python lab/harness.py --synthetic --out ./out
 ```
 
