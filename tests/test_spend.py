@@ -10,8 +10,8 @@ from ccdrift.history import load_history
 from ccdrift.logs import parse_source
 from ccdrift.prices import Price
 from ccdrift.spend import (DEFAULT_ORDER, DIMENSIONS, MATERIAL_SHARE, PRIVATE_DIMENSIONS, TOKEN_COLUMNS,
-                           branch_projects, priced_total, run_spend, spend_json, spend_rows, spend_turns,
-                           total_tokens)
+                           branch_projects, priced_total, record_write_tiers, response_dollars, run_spend,
+                           spend_json, spend_rows, spend_turns, total_tokens)
 from ccdrift.state import new_state, save_state
 from ccdrift.texts import DIMENSION_NAMES
 from tests.helpers import at, cost_state, line, text, write
@@ -459,6 +459,70 @@ def test_the_dollars_printed_are_the_ones_claude_codes_own_cost_records_imply(tm
     assert payload["dollars"] == pytest.approx(25.00005 + 11.00001)
     dollars = {row["bucket"]: row["dollars"] for row in payload["dimensions"]["model"]}
     assert dollars == {"claude-opus-5": pytest.approx(25.00005), "claude-haiku-4-5": pytest.approx(11.00001)}
+
+
+def write_tier_corpus(tmp_path):
+    """One session of claude-opus-5-5 at its list price, $4 in, $20 out and reads at 0.05x,
+    writing as Claude Code does: a million tokens for an hour on the main thread and a
+    million for five minutes in a subagent, so half the session's writes are at each tier.
+    Its four cost records, keyed by the 1M tier as Claude Code keys this model, carry no
+    tiers of their own and are billed at that half.
+
+    main thread: 10 input + 1,000,000 written at 2x + 100 output = $8.00204.
+    subagent:    10 input + 1,000,000 written at 1.25x + 100 output = $5.00204."""
+    responses = [line("m1", text(40), ts=at(0), entrypoint="cli", model="claude-opus-5-5",
+                      cache_creation=1_000_000, cache_1h=1_000_000, cache_5m=0),
+                 line("a1", text(40), ts=at(60), entrypoint="cli", sidechain=True, model="claude-opus-5-5",
+                      cache_creation=1_000_000, cache_1h=0, cache_5m=1_000_000)]
+    counts = [{"input": 1_000, "output": 50, "cache_creation": 200, "cache_read": 9_000},
+              {"input": 3_000, "output": 700, "cache_creation": 10, "cache_read": 100},
+              {"input": 50, "output": 5_000, "cache_creation": 900, "cache_read": 40},
+              {"input": 7_000, "output": 20, "cache_creation": 5, "cache_read": 60_000}]
+    records = []
+    for i, one in enumerate(counts):
+        written = 0.5 * 1.25 * one["cache_creation"] + 0.5 * 2 * one["cache_creation"]
+        cost = (one["input"] + written) * 4e-6 + one["cache_read"] * 0.2e-6 + one["output"] * 20e-6
+        records.append(cost_state(at(600 * i), {"claude-opus-5-5[1m]": {**one, "costUSD": cost}}, start=i + 1))
+    write(tmp_path / "proj-a" / "s1.jsonl", responses + records)
+
+
+def test_the_dollars_printed_charge_each_cache_write_at_its_own_tier(tmp_path, capsys):
+    # Measured on 2026-09-25: claude-opus-5-5 writes its main-thread cache for an hour, at 2x
+    # input, and its subagent cache for five minutes, at 1.25x. Every write billed at 1.25x
+    # had the fit move the difference into output, $37.16 per Mtok against a list price of $20.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    write_tier_corpus(tmp_path / "logs")
+    load_history(tmp_path / "logs", state, claim=True)
+    assert run_spend(tmp_path / "logs", state, today=TODAY) == 0
+    out = capsys.readouterr().out
+    assert "$13.00" in out.splitlines()[0]                     # 8.00204 + 5.00204
+    assert "$8.00" in bucket_line(out, "main thread") and "$5.00" in bucket_line(out, "subagent")
+
+
+def test_a_cost_records_one_hour_writes_come_from_its_own_sessions_responses_of_its_model():
+    # A record logs only how much it wrote; its session's responses say at which tier. The
+    # record's 1M-tier key is its model's plain name to a response, another model's writes in
+    # the same session are not its own, and nor are the same model's in another session.
+    usage = pd.DataFrame([{"session_id": "s1", "model": "claude-opus-5-5[1m]", "cache_creation": 800.0},
+                          {"session_id": "s1", "model": "claude-haiku-4-5", "cache_creation": 400.0},
+                          {"session_id": "s2", "model": "claude-opus-5-5", "cache_creation": 500.0}])
+    responses = pd.DataFrame([{"session_id": "s1", "model": "claude-opus-5-5", "cache_1h": 300.0, "cache_5m": 100.0},
+                              {"session_id": "s1", "model": "claude-haiku-4-5", "cache_1h": 0.0, "cache_5m": 50.0},
+                              {"session_id": "s3", "model": "claude-opus-5-5", "cache_1h": 900.0, "cache_5m": 0.0}])
+    assert record_write_tiers(usage, responses)["cache_1h"].tolist() == [600.0, 0.0, 0.0]
+
+
+def test_a_response_is_charged_for_its_own_one_hour_writes_and_one_logging_no_tier_at_five_minutes(tmp_path):
+    # A response that logs no tier, as a Claude Code too old to log them wrote, is charged at
+    # five minutes, which is how every write was billed before.
+    write(tmp_path / "p" / "s1.jsonl", [
+        line("m1", text(40), ts=at(0), entrypoint="cli", model="claude-opus-5-5", cache_creation=1_000_000,
+             cache_1h=1_000_000, cache_5m=0),
+        line("m2", text(40), ts=at(60), entrypoint="cli", model="claude-opus-5-5", cache_creation=1_000_000)])
+    turns = spend_turns(parse_source(tmp_path / "p"), TODAY)
+    dollars = response_dollars(turns, {"claude-opus-5-5": price(4e-6, 20e-6, read_ratio=0.05)})
+    assert dollars.tolist() == [pytest.approx(8.00204), pytest.approx(5.00204)]
 
 
 def test_two_models_reading_the_cache_at_different_ratios_are_each_charged_at_their_own(tmp_path, capsys):

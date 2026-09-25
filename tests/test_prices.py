@@ -17,17 +17,19 @@ RECORDS = [{"input_tokens": 1000, "output_tokens": 50, "cache_creation": 200, "c
 
 def usage(rows, model="claude-opus-5"):
     """Cost records as the store returns them: one dict per record, counts and cost."""
-    base = {"input_tokens": 0.0, "output_tokens": 0.0, "cache_creation": 0.0, "cache_read": 0.0,
+    base = {"input_tokens": 0.0, "output_tokens": 0.0, "cache_creation": 0.0, "cache_read": 0.0, "cache_1h": 0.0,
             "thinking_tokens": 0.0, "web_searches": 0.0, "cost_usd": 0.0, "model": model}
     return pd.DataFrame([{**base, **row} for row in rows])
 
 
 def priced(rows, rate_in=5e-6, rate_out=25e-6, read_ratio=0.1, rate_web=0.0):
     """`rows` with each cost filled in at the given rates, as Claude Code would record:
-    cache writes at 1.25x input and cache reads at `read_ratio` of it."""
+    cache writes at 1.25x input, or 2x for those at the one-hour tier, and cache reads at
+    `read_ratio` of it."""
     out = []
     for row in rows:
-        cost = ((row.get("input_tokens", 0) + 1.25 * row.get("cache_creation", 0)) * rate_in
+        hour = row.get("cache_1h", 0)
+        cost = ((row.get("input_tokens", 0) + 1.25 * (row.get("cache_creation", 0) - hour) + 2 * hour) * rate_in
                 + row.get("cache_read", 0) * rate_in * read_ratio
                 + row.get("output_tokens", 0) * rate_out + row.get("web_searches", 0) * rate_web)
         out.append({**row, "cost_usd": cost})
@@ -167,7 +169,7 @@ def test_a_fit_reports_how_far_off_it_was():
     records = usage(rows)
     price = fit_prices(records)["claude-opus-5"]
     charged = price.charge(records["input_tokens"], records["cache_creation"], records["cache_read"],
-                           records["output_tokens"])
+                           records["output_tokens"], cache_1h=records["cache_1h"])
     missed = float((charged - records["cost_usd"]).abs().sum() / records["cost_usd"].sum())
     assert 0 < price.residual <= MAX_RESIDUAL
     assert price.residual == pytest.approx(missed)
@@ -177,11 +179,38 @@ def test_a_cache_write_is_billed_at_its_ratio_and_a_cache_read_at_the_models_own
     # 1000 input + 1.25 * 400 written = 1500 input-priced tokens. The read rate here is
     # 0.05x input, not 0.1x, so a charge that fell back to a shared ratio would bill the
     # 10,000 reads at $0.005 rather than $0.0025 and come to $0.015.
-    assert input_billed_tokens(pd.Series([1000.0]), pd.Series([400.0])).tolist() == [1500.0]
+    assert input_billed_tokens(pd.Series([1000.0]), pd.Series([400.0]), pd.Series([0.0])).tolist() == [1500.0]
     price = Price(input_rate=5e-6, cache_read_rate=0.25e-6, output_rate=25e-6, web_search_rate=0.0,
                   residual=0.0, rows=4)
-    charged = price.charge(pd.Series([1000.0]), pd.Series([400.0]), pd.Series([10000.0]), pd.Series([100.0]))
+    charged = price.charge(pd.Series([1000.0]), pd.Series([400.0]), pd.Series([10000.0]), pd.Series([100.0]),
+                           cache_1h=pd.Series([0.0]))
     assert charged.tolist() == [pytest.approx(0.0125)]
+
+
+def test_a_cache_write_at_the_one_hour_tier_is_billed_at_twice_the_input_rate():
+    # 1000 input + 1.25 * 300 written for five minutes + 2 * 100 written for an hour = 1575.
+    # Billed all at 1.25x, as every write was before, it would be 1500.
+    assert input_billed_tokens(pd.Series([1000.0]), pd.Series([400.0]), pd.Series([100.0])).tolist() == [1575.0]
+    price = Price(input_rate=4e-6, cache_read_rate=0.2e-6, output_rate=20e-6, web_search_rate=0.0,
+                  residual=0.0, rows=4)
+    charged = price.charge(pd.Series([1000.0]), pd.Series([400.0]), pd.Series([0.0]), pd.Series([0.0]),
+                           cache_1h=pd.Series([100.0]))
+    assert charged.tolist() == [pytest.approx(0.0063)]
+
+
+def test_a_model_writing_part_of_its_cache_for_an_hour_is_recovered_at_its_list_price():
+    # claude-opus-5-5 on the main thread writes its cache at the one-hour tier, 2x input, and
+    # in subagents at the five-minute one, 1.25x. Fitted with every write at 1.25x, its six
+    # real records on 2026-09-25 came back at $3.55 in and $37.16 out against a list price of
+    # $4 and $20, inside MAX_RESIDUAL: the fit moved the writes it underbilled into output.
+    rows = [{**row, "cache_1h": row["cache_creation"] * share}
+            for row, share in zip(RECORDS, (1.0, 0.0, 0.8, 0.5, 0.3))]
+    rows = priced(rows, rate_in=4e-6, rate_out=20e-6, read_ratio=0.05)
+    price = fit_prices(usage(rows, model="claude-opus-5-5"))["claude-opus-5-5"]
+    assert round(price.input_rate * 1e6, 3) == 4.0
+    assert round(price.cache_read_rate * 1e6, 3) == 0.2
+    assert round(price.output_rate * 1e6, 3) == 20.0
+    assert price.residual < 1e-9
 
 
 def test_charging_a_record_at_its_own_fitted_price_reproduces_what_claude_code_recorded():
@@ -190,7 +219,7 @@ def test_charging_a_record_at_its_own_fitted_price_reproduces_what_claude_code_r
     records = usage(rows, model="claude-opus-5-5")
     price = fit_prices(records)["claude-opus-5-5"]
     charged = price.charge(records["input_tokens"], records["cache_creation"], records["cache_read"],
-                           records["output_tokens"])
+                           records["output_tokens"], cache_1h=records["cache_1h"])
     assert charged.tolist() == pytest.approx(records["cost_usd"].tolist())
 
 
