@@ -14,6 +14,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         python: ["3.10", "3.13"]
+        include:  # the versions between, on one OS
+          - {os: ubuntu-latest, python: "3.11"}
+          - {os: ubuntu-latest, python: "3.12"}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,3 +40,27 @@ jobs:
           ccdrift schedule status
           ccdrift schedule remove
           ccdrift schedule status | grep -qx "not installed"
+
+  # uv.lock pins the latest pandas and numpy, so nothing else tests the floors pyproject.toml
+  # declares. Only on 3.10: numpy 1.23 has no wheels for 3.12 on.
+  floors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.10"
+          version-file: uv.lock
+      - name: Tests on the lowest pandas and numpy pyproject.toml allows
+        run: |
+          uv venv --python 3.10
+          uv pip install --resolution lowest-direct -e .
+          floors=$(uv pip freeze | grep -E '^(pandas|numpy)==')
+          echo "$floors"
+          # Installed after, since lowest-direct would take their oldest releases too, and
+          # checked, so a test tool that pulls a newer numpy can't quietly move the floor.
+          uv pip install pytest matplotlib
+          test "$floors" = "$(uv pip freeze | grep -E '^(pandas|numpy)==')"
+          .venv/bin/python -m pytest -q
