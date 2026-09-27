@@ -64,6 +64,26 @@ def make_stream_private(stream: TextIO, only: Optional[Path] = None) -> None:
         pass
 
 
+def open_private(path: Path) -> TextIO:
+    """`path` opened for writing as a file only its owner can read: created that way when
+    it is missing, and narrowed before it is emptied when it isn't. Unlike
+    make_stream_private this raises OSError when it can't, since what is written to it
+    names private folders; the file is then left as it was. A folder fails to open before
+    its own permissions are touched, and a terminal or a pipe is written to as it is."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        info = os.fstat(fd)
+        if stat.S_ISREG(info.st_mode):
+            mode = stat.S_IMODE(info.st_mode)
+            if mode & 0o077 and hasattr(os, "fchmod"):  # no os.fchmod on Windows before 3.13
+                os.fchmod(fd, mode & 0o700)
+            os.ftruncate(fd, 0)
+        return os.fdopen(fd, "w", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def new_state() -> dict[str, Any]:
     return {"version": STATE_VERSION, "incidents": [], "settings": [], "blank_cache": [], "reported": {},
             "field_gaps": [], "new_fields": [], "hook_failures": [], "context_changes": [], "early_warnings": [],

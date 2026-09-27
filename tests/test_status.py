@@ -87,6 +87,21 @@ def test_run_status_short_never_fails_on_a_malformed_state(tmp_path, capsys):
     assert capsys.readouterr().out == "ccdrift: can't read state\n"
 
 
+@pytest.mark.parametrize("state", [
+    {**ran(), "incidents": None},  # parses, but not the list the check writes
+    {"last_run": {"ok": True, "started": "not a time"}},
+    {**ran(), "settings": [{"reported_on": "2026-09-19"}]},  # a setting change missing its fields
+])
+def test_the_long_status_reports_a_malformed_state_as_unreadable_rather_than_failing(tmp_path, capsys, state):
+    # --short already did; the long form caught only a file it couldn't read or parse.
+    # Found in the audit of 2026-09-25.
+    path = state_file(tmp_path, **state)
+    assert run_status(path, now=NOW) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith(f"Can't read the state file {path}: ")
+
+
 def test_short_status_prints_nothing_when_all_is_well(tmp_path, capsys):
     path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00")
     assert run_status(path, short=True, now=NOW) == 0

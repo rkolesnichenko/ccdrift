@@ -928,6 +928,8 @@ SCHEDULE_LINES = {"exited": "`{command}` exited with {code}",
                   "restored_disabled": "{error}. The job installed before is back in place but couldn't be "
                                        "enabled; `ccdrift schedule status` shows it.",
                   "not_installed": "not installed",
+                  "loaded_without_plist": "loaded, but its plist {plist} is gone; `ccdrift schedule remove` unloads it",
+                  "unwritable": "Can't write {path}: {error}",
                   "bad_plist": "{plist} isn't a readable plist: {error}. Run `ccdrift schedule install` again.",
                   "launchd_installed": "installed: launchd agent {label}, {schedule}",
                   "not_loaded": "not loaded; run `ccdrift schedule install` again",

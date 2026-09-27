@@ -2,6 +2,7 @@
 
 import json
 import os
+import stat
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -62,6 +63,21 @@ def test_saving_replaces_the_state_file_in_one_step(tmp_path, monkeypatch):
         [(True, "state.json")]
     assert load_state(path)["blank_cache"] == ["2026-09-01"]
     assert [p.name for p in tmp_path.iterdir()] == ["state.json"]
+
+
+def test_only_the_owner_can_read_the_state_even_one_saved_over_a_file_others_could(tmp_path):
+    # The state names versions, incidents and hook streams, which name projects and tools.
+    # It is private because the temporary file it is written through is created that way;
+    # nothing tested it, found in the audit of 2026-09-25.
+    path = tmp_path / "state.json"
+    path.write_text("{}")
+    path.chmod(0o644)
+    umask = os.umask(0o022)
+    try:
+        save_state(path, new_state())
+    finally:
+        os.umask(umask)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_two_saves_at_once_dont_share_a_temporary_file(tmp_path, monkeypatch):
