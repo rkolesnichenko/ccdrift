@@ -20,14 +20,16 @@ from ccdrift import __version__
 from ccdrift.changelog import (TOPIC_OF, changelog_path, days_before, load_changelog, note_versions,
                                release_notes)
 from ccdrift.detector import DetectorConfig, baseline_bins
+from ccdrift.failures import (ACTIVE_RESPONSES, CUT_FLOOR, CUT_RATIO, CUT_SHARE, CUT_USUAL, MIN_BEFORE_DAYS,
+                              cut_shares, failure_counts, judged_failures)
 from ccdrift.history import HistoryError, load_history
-from ccdrift.incidents import OPEN_END, RECOVERY_BINS, exclusions, incident_cost, incident_versions
+from ccdrift.incidents import OPEN_END, RECOVERY_BINS, exclusions, incident_cost, incident_versions, versions_text
 from ccdrift.logs import LOOP_GAP_SECONDS, LOOP_MISS_SHARE, Tables, judged_turns, outside_sdk
 from ccdrift.loops import BASE_DAYS, LOOP_SETTINGS, WINDOW_DAYS, loop_turns
 from ccdrift.report import reason_counts
 from ccdrift.state import load_state
-from ccdrift.texts import (ALERT_NAMES, COMMAND_LINES, DRAFT_LINES, DRAFT_SETTINGS, SHORT_NAMES, draft_text,
-                           no_transcripts_message, version_key)
+from ccdrift.texts import (ALERT_NAMES, BEFORE_DAYS, COMMAND_LINES, DRAFT_LINES, DRAFT_SETTINGS, SHORT_NAMES,
+                           draft_text, no_transcripts_message, version_key)
 
 AFTER_DAYS = 14  # judged days after an incident that the draft compares with
 PAUSE_BOUNDS = (60, 300, 900, 3600)  # seconds before the prompt: the upper bound of each bucket
@@ -265,7 +267,43 @@ def _loop_facts(tables: Tables, warning: dict[str, Any], today: date) -> Optiona
             "notes_from": (warning["versions"], days_before(warning["since"][:10], 7), warning["at"][:10])}
 
 
-ALERT_FACTS = {"loop_warnings": _loop_facts}
+def _cut_facts(tables: Tables, episode: dict[str, Any], today: date) -> Optional[dict[str, Any]]:
+    """What a cut-short draft says, over main-thread responses on active days: the
+    BEFORE_DAYS before the episode's day that it was compared with, the run it opened (its
+    day and each active day after it still at or above CUT_SHARE, unbroken) and up to
+    AFTER_DAYS active days after the run. None when the history no longer holds its day."""
+    turns = judged_turns(tables.responses, today)
+    counts = failure_counts(judged_failures(tables.failures, today), turns)
+    active = counts[counts["responses"] >= ACTIVE_RESPONSES].reset_index(drop=True)
+    days, since = active["day"].astype(str), episode["since"]
+    if since not in set(days):
+        return None
+    earliest = (date.fromisoformat(since) - timedelta(days=BEFORE_DAYS)).isoformat()
+    run = []
+    for day, share in zip(days[days >= since], cut_shares(active[days >= since])):
+        if share < CUT_SHARE:
+            break
+        run.append(day)
+    periods = {"before": sorted(days[(days < since) & (days >= earliest)]), "during": run,
+               "after": sorted(days[days > run[-1]])[:AFTER_DAYS]}
+    stop = turns["stop_reason"].astype("string")
+    marked = turns.assign(cut=stop.isin(["max_tokens", "refusal"]).fillna(False))
+    frames = {name: _on_days(marked, periods[name]) for name in PERIODS}
+    by_day = active.set_index(days)
+    counts_of = {name: (int(by_day.loc[periods[name], ["truncated", "refused"]].to_numpy().sum()),
+                        int(by_day.loc[periods[name], "responses"].sum())) for name in PERIODS}
+    stops = {name: (int(by_day.loc[periods[name], "truncated"].sum()), int(by_day.loc[periods[name], "refused"].sum()))
+             for name in PERIODS}
+    return {"counts": counts_of, "periods": periods, "stops": stops,
+            "span": title_versions(frames["during"]["version"]), "versions": _version_rows(frames, "cut"),
+            "environment_rows": frames["during"], "thread": "main", "topic": "errors",
+            "method": {"kind": "cut_short", "floor": CUT_FLOOR, "share": CUT_SHARE, "ratio": CUT_RATIO,
+                       "usual": CUT_USUAL, "active": ACTIVE_RESPONSES, "days": BEFORE_DAYS,
+                       "min_days": MIN_BEFORE_DAYS},
+            "notes_from": (versions_text(turns, episode["days"]), days_before(since, 7), episode["days"][-1])}
+
+
+ALERT_FACTS = {"loop_warnings": _loop_facts, "cut_short": _cut_facts}
 
 
 def alert_facts(tables: Tables, kind: str, alert: dict[str, Any], changelog: dict[str, list[str]],

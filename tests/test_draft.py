@@ -15,11 +15,13 @@ from ccdrift.cli import main
 from ccdrift.detector import DetectorConfig
 from ccdrift.draft import (alert_facts, draft_markdown, draft_periods, find_alert, find_incident, os_text, run_draft,
                           title_versions)
+from ccdrift.failures import cut_short, failure_counts, judged_failures
 from ccdrift.logs import judged_turns, parse_all, parse_source
 from ccdrift.loops import LoopSetting, loop_warning
 from ccdrift.state import new_state, save_state
 from ccdrift.texts import draft_text, version_span
-from tests.helpers import DAY, at, busy_days, line, main_thread_days, nth_day, prompt, text, tool_loop_days, write
+from tests.helpers import (DAY, at, busy_days, failure_days, line, main_thread_days, nth_day, prompt, text,
+                           tool_loop_days, write)
 
 
 BASELINE_NOTE = ("Before is the baseline ccdrift judged the incident against: the days it compared with, which skip "
@@ -560,3 +562,126 @@ def test_the_draft_command_takes_an_alert_kind(tmp_path, capsys):
     assert main(["incident", "draft", "tool-loop", "2026-09-22", "--source", str(tmp_path / "logs"),
                  "--state", str(tmp_path / "state.json")]) == 0
     assert capsys.readouterr().out.startswith("Tool-loop turns on the main thread miss the prompt cache")
+
+
+CUT_NOTES = {"2.1.280": ["Lowered the output limit for long responses", "Added a theme picker"]}
+
+
+def cut_episodes(path, spec, per_day=200, days=range(15, 19)):
+    """The main-thread responses of `spec` (failure_days) and the cut-short episodes the
+    check recorded over them, running each morning of `days` (days after Sep 1) through the
+    shipped rule."""
+    failure_days(path / "logs", spec, per_day=per_day)
+    tables = parse_all(path / "logs")
+    state = new_state()
+    for d in days:
+        today = date(2026, 9, d + 1)
+        cut_short(failure_counts(judged_failures(tables.failures, today), judged_turns(tables.responses, today)),
+                  state, today)
+    return tables, state["cut_short"]
+
+
+CUT_SPEC = ([{"version": "2.1.279"}] * 14 + [{"version": "2.1.280", "truncated": 5, "refused": 1}] * 3
+            + [{"version": "2.1.281"}] * 4)
+
+
+def test_a_cut_short_draft_holds_the_run_the_check_reported_and_how_the_responses_stopped(tmp_path):
+    tables, episodes = cut_episodes(tmp_path, CUT_SPEC)
+    # One run, one episode: its first day, as the check reported it.
+    assert [(e["since"], e["cut"], e["responses"]) for e in episodes] == [("2026-09-15", 6, 200)]
+    facts = alert_facts(tables, "cut_short", episodes[0], CUT_NOTES, date(2026, 9, 22), "macOS 26.5.2")
+    assert draft_text(facts) == (
+        "Main-thread responses stop at the token limit or refuse 3.00% of the time on Claude Code 2.1.280 "
+        "(usually 0.00%)\n\n"
+        "### What happened\n\n"
+        "From 2026-09-15 to 2026-09-17, 18 of 600 main-thread responses (3.00%) stopped at the token limit or "
+        "refused, against 0 of 2,800 (0.00%) on the 14 days before and 0 of 800 (0.00%) on the 4 days after.\n\n"
+        "### Before, during and after\n\n"
+        "Before is the active days the check compared the first day with; during is that day and each day after it "
+        "that stayed as high.\n\n"
+        "|  | Days | Responses | Cut short | Share |\n"
+        "|---|---|---|---|---|\n"
+        "| Before (09-01..09-14) | 14 | 2,800 | 0 | 0.00% |\n"
+        "| During (09-15..09-17) | 3 | 600 | 18 | 3.00% |\n"
+        "| After (09-18..09-21) | 4 | 800 | 0 | 0.00% |\n\n"
+        "### By Claude Code version\n\n"
+        "| Version | Period | Responses | Cut short | Share |\n"
+        "|---|---|---|---|---|\n"
+        "| 2.1.279 | before | 2,800 | 0 | 0.00% |\n"
+        "| 2.1.280 | during | 600 | 18 | 3.00% |\n"
+        "| 2.1.281 | after | 800 | 0 | 0.00% |\n\n"
+        "### How they stopped\n\n"
+        "|  | At the token limit | Refused |\n"
+        "|---|---|---|\n"
+        "| Before | 0 | 0 |\n"
+        "| During | 15 | 3 |\n"
+        "| After | 0 | 0 |\n\n"
+        "### Release notes that may be related\n\n"
+        "- 2.1.280: Lowered the output limit for long responses\n\n"
+        "### Environment\n\n"
+        "- Claude Code: 2.1.280 (entrypoint cli)\n"
+        "- Models during: claude-opus-5 (100.00% of responses)\n"
+        "- Main thread: cache tier 1h on 100.00% of responses that write to the cache, effort xhigh on 100.00% of "
+        "responses\n"
+        "- OS: macOS 26.5.2\n"
+        f"- Measured with ccdrift {__version__} from local session transcripts (aggregates only)\n\n"
+        "### How this was measured\n\n"
+        "ccdrift reads Claude Code's local session transcripts. It counts main-thread responses outside Agent SDK "
+        "sessions, and those that stopped at the token limit or refused, on UTC days with at least 50 of them. A day "
+        "is reported when at least 5 did, on at least 0.5% of its responses and 3 times the worst share of the days "
+        "in the 14 before it that stand for the usual level, a clean day counting as 0.1% and the days of its own run "
+        "left out; it needs 5 such days to compare with. A run is reported once, and again when a day stands 3 times "
+        "above what was last reported of it.\n")
+
+
+def test_a_cut_short_run_ends_at_the_first_day_under_the_share_and_only_truncation_says_so(tmp_path):
+    # Sep 17 stays at 0.5% exactly and belongs to the run; Sep 18 at 0.4% ends it, and the
+    # days after it are after however high they climb again.
+    spec = ([{"version": "2.1.279"}] * 14 + [{"version": "2.1.280", "truncated": 6}] * 2
+            + [{"version": "2.1.280", "truncated": 1}, {"version": "2.1.280", "truncated": 0}]
+            + [{"version": "2.1.281", "truncated": 6}])
+    tables, episodes = cut_episodes(tmp_path, spec, days=range(15, 16))
+    facts = alert_facts(tables, "cut_short", episodes[0], {}, date(2026, 9, 25), "macOS 26.5.2")
+    assert facts["periods"]["during"] == ["2026-09-15", "2026-09-16", "2026-09-17"]
+    assert facts["periods"]["after"] == ["2026-09-18", "2026-09-19"]
+    text = draft_text(facts)
+    assert text.startswith("Main-thread responses stop at the token limit 2.17% of the time")
+    assert "responses (2.17%) stopped at the token limit, against" in text
+
+
+def test_a_cut_short_draft_of_a_run_that_deepened_says_what_was_reported_before(tmp_path):
+    spec = ([{"version": "2.1.279"}] * 14 + [{"version": "2.1.280", "truncated": 5}]
+            + [{"version": "2.1.280", "truncated": 16}] + [{"version": "2.1.281"}] * 2)
+    tables, episodes = cut_episodes(tmp_path, spec, per_day=400, days=range(15, 17))
+    assert [(e["since"], e.get("worse_than")) for e in episodes] == [
+        ("2026-09-15", None), ("2026-09-16", {"share": 0.0125, "since": "2026-09-15"})]
+    text = draft_text(alert_facts(tables, "cut_short", episodes[1], {}, date(2026, 9, 19), "macOS 26.5.2"))
+    assert ("On 2026-09-16, 16 of 400 main-thread responses (4.00%) stopped at the token limit, against 5 of 5,600 "
+            "(0.09%) on the 14 days before and 0 of 800 (0.00%) on the 2 days after. The check had reported this run "
+            "at 1.25% on 2026-09-15; this day stood 3 times above it.") in text
+
+
+def test_the_draft_command_takes_a_cut_short_alert(tmp_path, capsys):
+    tables, episodes = cut_episodes(tmp_path, CUT_SPEC)
+    save_state(tmp_path / "state.json", {**new_state(), "cut_short": episodes})
+    assert main(["incident", "draft", "cut-short", "--source", str(tmp_path / "logs"),
+                 "--state", str(tmp_path / "state.json")]) == 0
+    assert capsys.readouterr().out.startswith("Main-thread responses stop at the token limit or refuse 3.00%")
+    save_state(tmp_path / "state.json", {**new_state(), "cut_short": [{**episodes[0], "since": "2026-10-02",
+                                                                      "days": ["2026-10-02"]}]})
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "cut_short", today=date(2026, 10, 5)) == 2
+    assert capsys.readouterr().err == "The history no longer holds the cut-short alert from 2026-10-02.\n"
+
+
+def test_an_alert_drafts_after_is_at_most_14_days(tmp_path):
+    tool_loop_days(tmp_path / "loops", 40, misses=8, miss_day=21)
+    loops = parse_all(tmp_path / "loops")
+    warning = next(w for hour in range(24) for w in [loop_warning(loops.responses, "main", new_state(),
+                                                                  datetime(2026, 9, 22, hour, 59, tzinfo=timezone.utc))]
+                   if w)
+    facts = alert_facts(loops, "loop_warnings", warning, {}, date(2026, 10, 15), "macOS 26.5.2")
+    assert (facts["periods"]["after"][0], len(facts["periods"]["after"])) == ("2026-09-23", 14)
+    spec = [{}] * 14 + [{"truncated": 6}] + [{}] * 16
+    cuts, episodes = cut_episodes(tmp_path / "cut", spec, per_day=60, days=range(15, 16))
+    facts = alert_facts(cuts, "cut_short", episodes[0], {}, date(2026, 10, 15), "macOS 26.5.2")
+    assert (facts["periods"]["after"][0], len(facts["periods"]["after"])) == ("2026-09-16", 14)

@@ -374,12 +374,20 @@ def main_thread_days(path, days, per_day=60, first_day=0):
         write(path / f"s{d}.jsonl", records)
 
 
+def stop_reason(k, spec):
+    """The stop reason of a day's `k`th response in failure_days: its first `truncated`
+    stop at the token limit, the `refused` after them refuse, the rest end their turn."""
+    truncated, refused = spec.get("truncated", 0), spec.get("refused", 0)
+    return "max_tokens" if k < truncated else "refusal" if k < truncated + refused else "end_turn"
+
+
 def failure_days(path, days, per_day=60):
     """One CLI main-thread session a day from Sep 1: `per_day` responses a minute apart,
     each after a prompt and read 90% from the cache, plus what each entry of `days`
     asks for: `errors` banners of `kind` (default "overloaded"), `slept` banners,
-    `retries` retry records, and `truncated` responses that stop at the token limit.
-    `version` sets the day's Claude Code version (default "2.1.226")."""
+    `retries` retry records, `truncated` responses that stop at the token limit and,
+    after them, `refused` responses that refuse. `version` sets the day's Claude Code
+    version (default "2.1.226")."""
     for d, spec in enumerate(days):
         version = spec.get("version", "2.1.226")
         records = []
@@ -388,7 +396,7 @@ def failure_days(path, days, per_day=60):
             records += [prompt(ts, sid=f"s{d}"),
                         line(f"m{d}-{k}", text(40), ts=ts, sid=f"s{d}", cache_read=900, cache_creation=100,
                              cache_1h=100, cache_5m=0, version=version, entrypoint="cli", effort="xhigh",
-                             stop_reason="max_tokens" if k < spec.get("truncated", 0) else "end_turn")]
+                             stop_reason=stop_reason(k, spec))]
         after = d * DAY + 60 * per_day
         for j in range(spec.get("errors", 0)):
             records.append(api_error(at(after + j), sid=f"s{d}", kind=spec.get("kind", "overloaded"), version=version))

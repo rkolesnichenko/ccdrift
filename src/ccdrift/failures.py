@@ -148,7 +148,7 @@ def failing_requests(counts: pd.DataFrame, state: dict[str, Any], today: date,
     return new
 
 
-def _cut_shares(frame: pd.DataFrame) -> pd.Series:
+def cut_shares(frame: pd.DataFrame) -> pd.Series:
     """The share of each day's responses that stopped at the token limit or refused."""
     return (frame["truncated"] + frame["refused"]) / frame["responses"]
 
@@ -165,7 +165,7 @@ def _episode_share(episode: dict[str, Any]) -> float:
 
 def _worst_share(frame: pd.DataFrame) -> float:
     """The worst of those shares, 0.0 over no days at all."""
-    return float(_cut_shares(frame).max()) if len(frame) else 0.0
+    return float(cut_shares(frame).max()) if len(frame) else 0.0
 
 
 def _usual_days(before: pd.DataFrame, share: float) -> pd.DataFrame:
@@ -177,7 +177,7 @@ def _usual_days(before: pd.DataFrame, share: float) -> pd.DataFrame:
     carrying it on could never clear, so it would never be reported at all."""
     keep = len(before)
     if keep:
-        shares = _cut_shares(before)
+        shares = cut_shares(before)
         while keep and float(shares.iloc[keep - 1]) >= share:
             keep -= 1
     return before.iloc[:keep]
@@ -211,7 +211,7 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
         if before.empty or episode["since"] < str(before["day"].astype(str).iloc[0]):
             return False
         carried = before[before["day"].astype(str) >= episode["since"]]
-        return bool(len(carried)) and bool((_cut_shares(carried) >= share).all())
+        return bool(len(carried)) and bool((cut_shares(carried) >= share).all())
 
     def louder(episode: dict[str, Any], row: pd.Series) -> bool:
         """Whether this day stands CUT_RATIO above the share `episode` reported: the same

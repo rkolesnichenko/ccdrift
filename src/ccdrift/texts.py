@@ -17,7 +17,7 @@ CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 METRIC_ARGS = {"cache": "cache_ratio", "haiku": "haiku_fraction"}
 # The alerts `incident draft` can write up besides incidents: the word it takes, and the
 # state key that records the alert.
-ALERT_ARGS = {"tool-loop": "loop_warnings"}
+ALERT_ARGS = {"tool-loop": "loop_warnings", "cut-short": "cut_short"}
 ALERT_NAMES = {key: word for word, key in ALERT_ARGS.items()}
 
 INCIDENT_METRICS = {"cache_ratio": "Cache read ratio on new prompts",
@@ -1151,6 +1151,41 @@ def _loop_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
     return title, sections
 
 
+def _cut_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
+    counts, periods, span, episode = facts["counts"], facts["periods"], version_span(facts["span"]), facts["alert"]
+    refused = any(stops[1] for stops in facts["stops"].values())
+    what = "stopped at the token limit or refused" if refused else "stopped at the token limit"
+    usually = f" (usually {_rate(*counts['before'])})" if counts["before"][1] else ""
+    title = (f"Main-thread responses {'stop at the token limit or refuse' if refused else 'stop at the token limit'} "
+             f"{_rate(*counts['during'])} of the time" + (f" on Claude Code {span}" if span else "") + usually)
+    during = periods["during"]
+    lead = f"On {during[0]}" if len(during) == 1 else f"From {during[0]} to {during[-1]}"
+    worse = episode.get("worse_than")
+    deepened = (f" The check had reported this run at {worse['share']:.2%} on {worse['since']}; this day stood "
+                f"{facts['method']['ratio']} times above it." if worse else "")
+    sections = [
+        "### What happened\n\n"
+        f"{lead}, {counts['during'][0]:,} of {counts['during'][1]:,} main-thread responses ({_rate(*counts['during'])}) "
+        f"{what}{_compared(counts, periods)}.{deepened}",
+        "### Before, during and after\n\n"
+        "Before is the active days the check compared the first day with; during is that day and each day after it "
+        "that stayed as high.\n\n"
+        + _markdown_table(
+            ["", "Days", "Responses", "Cut short", "Share"],
+            [[f"{name.capitalize()} ({_day_span(periods[name])})", len(periods[name]), f"{counts[name][1]:,}",
+              f"{counts[name][0]:,}", _rate(*counts[name])]
+             for name in periods if periods[name]]),
+    ]
+    versions = _version_table(facts["versions"], ["Responses", "Cut short", "Share"])
+    if versions:
+        sections.append("### By Claude Code version\n\n" + versions)
+    sections.append("### How they stopped\n\n"
+                    + _markdown_table(["", "At the token limit", "Refused"],
+                                      [[name.capitalize(), f"{facts['stops'][name][0]:,}", f"{facts['stops'][name][1]:,}"]
+                                       for name in periods if periods[name]]))
+    return title, sections
+
+
 def _draft_environment(env: Mapping[str, Any]) -> str:
     entrypoints = env["entrypoints"]
     entry = f" (entrypoint{'s' if len(entrypoints) > 1 else ''} {', '.join(entrypoints)})" if entrypoints else ""
@@ -1184,9 +1219,20 @@ def _loop_method(method: Mapping[str, Any]) -> str:
             f"{method['share']:.0%} of what the turn before had cached. " + rule)
 
 
+def _cut_method(method: Mapping[str, Any]) -> str:
+    return ("### How this was measured\n\nccdrift reads Claude Code's local session transcripts. It counts main-thread "
+            "responses outside Agent SDK sessions, and those that stopped at the token limit or refused, on UTC days "
+            f"with at least {method['active']} of them. A day is reported when at least {method['floor']} did, on at "
+            f"least {method['share']:.1%} of its responses and {method['ratio']} times the worst share of the days in "
+            f"the {method['days']} before it that stand for the usual level, a clean day counting as "
+            f"{method['usual']:.1%} and the days of its own run left out; it needs {method['min_days']} such days to "
+            f"compare with. A run is reported once, and again when a day stands {method['ratio']} times above what "
+            "was last reported of it.")
+
+
 def _draft_method(method: Mapping[str, Any]) -> str:
-    if method.get("kind") == "loop_warnings":
-        return _loop_method(method)
+    if method.get("kind") in ALERT_METHODS:
+        return ALERT_METHODS[method["kind"]](method)
     cache = method["metric"] == "cache_ratio"
     rule = (f"an incident opens when {method['bins']} of {method['window']} days in a row fall "
             f"{'below z = −' if cache else 'above z = +'}{method['cutoff']:.1f} and closes once "
@@ -1207,7 +1253,9 @@ def _draft_method(method: Mapping[str, Any]) -> str:
             + rule)
 
 
-DRAFTS = {"cache_ratio": _cache_draft, "haiku_fraction": _haiku_draft, "loop_warnings": _loop_draft}
+DRAFTS = {"cache_ratio": _cache_draft, "haiku_fraction": _haiku_draft, "loop_warnings": _loop_draft,
+          "cut_short": _cut_draft}
+ALERT_METHODS = {"loop_warnings": _loop_method, "cut_short": _cut_method}
 
 
 def draft_text(facts: Mapping[str, Any]) -> str:
