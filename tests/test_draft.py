@@ -942,3 +942,27 @@ def test_a_hook_change_on_some_events_and_tools_counts_only_the_streams_that_cha
     assert (facts["change"]["events"], facts["counts"]) == (["PreToolUse"], {"before": (0, 56), "after": (68, 68)})
     assert "Before 2026-09-17, PreToolUse hooks ran on 0 of 224 CLI subagent tool calls; from then, on 272 of 272." \
         in draft_text(facts)
+
+
+@pytest.mark.parametrize("kind, word", [("context_changes", "session-start"), ("hook_changes", "hooks"),
+                                        ("loop_warnings", "tool-loop"), ("cut_short", "cut-short")])
+def test_no_alert_draft_names_a_folder_session_skill_mcp_server_hook_command_or_tool_id(tmp_path, capsys, kind, word):
+    # A draft is meant for a public issue. Each kind's fixture, run through the command with
+    # its transcripts in a project folder whose name is private; the fixtures also carry
+    # a skill, an MCP server, hook commands, a working directory and tool ids of their own.
+    records = {"context_changes": lambda: stepped(tmp_path)[1],
+               "hook_changes": lambda: hooks_started(tmp_path)[1],
+               "loop_warnings": lambda: [loop_warned(tmp_path)[1]],
+               "cut_short": lambda: cut_episodes(tmp_path, CUT_SPEC)[1]}[kind]()
+    logs = tmp_path / "logs"
+    (logs / "-Users-me-secretproject").mkdir()
+    for path in logs.glob("*.jsonl"):
+        path.rename(logs / "-Users-me-secretproject" / path.name)
+    save_state(tmp_path / "state.json", {**new_state(), kind: records})
+    assert main(["incident", "draft", word, "--source", str(logs), "--state", str(tmp_path / "state.json")]) == 0
+    out = capsys.readouterr().out
+    for private in (str(tmp_path), "secretproject", "-Users-me-", "alpha", "beta", "gamma", "deploy", "vault",
+                    "private", "toolu_", ".jsonl", PRIVATE_PATH, PRIVATE_TEXT):
+        assert private not in out
+    if kind == "hook_changes":  # Claude Code's own tools are named: the rule is names, not the lack of them
+        assert "| PreToolUse | Bash |" in out
