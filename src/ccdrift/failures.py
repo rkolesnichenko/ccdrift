@@ -148,7 +148,7 @@ def failing_requests(counts: pd.DataFrame, state: dict[str, Any], today: date,
     return new
 
 
-def _cut_shares(frame: pd.DataFrame) -> pd.Series:
+def cut_shares(frame: pd.DataFrame) -> pd.Series:
     """The share of each day's responses that stopped at the token limit or refused."""
     return (frame["truncated"] + frame["refused"]) / frame["responses"]
 
@@ -165,10 +165,10 @@ def _episode_share(episode: dict[str, Any]) -> float:
 
 def _worst_share(frame: pd.DataFrame) -> float:
     """The worst of those shares, 0.0 over no days at all."""
-    return float(_cut_shares(frame).max()) if len(frame) else 0.0
+    return float(cut_shares(frame).max()) if len(frame) else 0.0
 
 
-def _usual_days(before: pd.DataFrame, share: float) -> pd.DataFrame:
+def usual_days(before: pd.DataFrame, share: float) -> pd.DataFrame:
     """The days before a candidate that stand for its usual level: `before` without the
     unbroken run of days at or above `share` that ends at its latest day. A day inside the
     same run of bad days is the regression, not the usual level: the idea
@@ -177,7 +177,7 @@ def _usual_days(before: pd.DataFrame, share: float) -> pd.DataFrame:
     carrying it on could never clear, so it would never be reported at all."""
     keep = len(before)
     if keep:
-        shares = _cut_shares(before)
+        shares = cut_shares(before)
         while keep and float(shares.iloc[keep - 1]) >= share:
             keep -= 1
     return before.iloc[:keep]
@@ -197,7 +197,7 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
     def hit(row: pd.Series, before: pd.DataFrame) -> bool:
         cut = int(row["truncated"] + row["refused"])
         today_share = _day_share(row)
-        usual = max(CUT_USUAL, _worst_share(_usual_days(before, share)))
+        usual = max(CUT_USUAL, _worst_share(usual_days(before, share)))
         return cut >= floor and today_share >= share and today_share >= CUT_RATIO * usual
 
     def ongoing(episode: dict[str, Any], row: pd.Series, before: pd.DataFrame) -> bool:
@@ -211,7 +211,7 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
         if before.empty or episode["since"] < str(before["day"].astype(str).iloc[0]):
             return False
         carried = before[before["day"].astype(str) >= episode["since"]]
-        return bool(len(carried)) and bool((_cut_shares(carried) >= share).all())
+        return bool(len(carried)) and bool((cut_shares(carried) >= share).all())
 
     def louder(episode: dict[str, Any], row: pd.Series) -> bool:
         """Whether this day stands CUT_RATIO above the share `episode` reported: the same
@@ -226,7 +226,7 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
     new = []
     for row, before, covering in _judged_days(counts, "cut_short", state, today, hit,
                                               ongoing=ongoing, louder=louder):
-        usual = _usual_days(before, share)
+        usual = usual_days(before, share)
         episode = {"since": str(row["day"]), "days": [str(row["day"])],
                    "cut": int(row["truncated"] + row["refused"]), "truncated": int(row["truncated"]),
                    "refused": int(row["refused"]), "responses": int(row["responses"]),

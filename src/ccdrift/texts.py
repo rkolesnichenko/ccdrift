@@ -15,6 +15,11 @@ from typing import Any, Mapping, Optional, Sequence
 CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 METRIC_ARGS = {"cache": "cache_ratio", "haiku": "haiku_fraction"}
+# The alerts `incident draft` can write up besides incidents: the word it takes, and the
+# state key that records the alert.
+ALERT_ARGS = {"session-start": "context_changes", "hooks": "hook_changes", "tool-loop": "loop_warnings",
+              "cut-short": "cut_short"}
+ALERT_NAMES = {key: word for word, key in ALERT_ARGS.items()}
 
 INCIDENT_METRICS = {"cache_ratio": "Cache read ratio on new prompts",
                     "haiku_fraction": "Haiku share on the main thread"}
@@ -965,6 +970,9 @@ SCHEDULE_LINES = {"exited": "`{command}` exited with {code}",
 DRAFT_LINES = {"no_incident_on": "No {name} incident starts on {start}.",
                "no_incident": "No {name} incident is recorded.",
                "no_days": "The history holds no judged days during the {name} incident from {start}.",
+               "no_alert_on": "No {name} alert starts on {start}.",
+               "no_alert": "No {name} alert is recorded.",
+               "no_alert_days": "The history no longer holds the {name} alert from {start}.",
                "macos": "macOS {version}",
                "system": "{system} {release}"}
 
@@ -973,6 +981,9 @@ PAUSE_NAMES = {60: "≤1 min", 300: "1–5 min", 900: "5–15 min", 3600: "15–
 
 # The settings the environment names: the column, what it is called, and what its share counts.
 DRAFT_SETTINGS = (("cache_tier", "cache tier", " that write to the cache"), ("effort", "effort", ""))
+# The thread whose settings the environment gives, and where a tool-loop draft's turns ran.
+DRAFT_THREADS = {"main": "Main thread", "subagent": "Subagents"}
+LOOP_WHERE = {"main": "on the main thread", "subagent": "in subagents"}
 
 BASELINE_NOTE = ("Before is the baseline ccdrift judged the incident against: the days it compared with, which skip "
                  "the days of other incidents, except ones dismissed or taken as the new normal, so they need not "
@@ -1105,6 +1116,158 @@ def _haiku_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
     return title, sections
 
 
+def _loop_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
+    counts, periods, span, warning = facts["counts"], facts["periods"], version_span(facts["span"]), facts["alert"]
+    where = LOOP_WHERE[warning["stream"]]
+    usually = f" (usually {_rate(*counts['before'])})" if counts["before"][1] else ""
+    title = (f"Tool-loop turns {where} miss the prompt cache {_rate(*counts['during'])} of the time"
+             + (f" on Claude Code {span}" if span else "") + usually)
+    sessions = f"{warning['sessions']} session{'' if warning['sessions'] == 1 else 's'}"
+    rewritten = (f"~{approx(warning['tokens'])} tokens were written to the cache again" if warning["tokens"] > 0
+                 else "no tokens were written to the cache again")
+    sections = [
+        "### What happened\n\n"
+        f"From {warning['since'][:16].replace('T', ' ')} to {warning['at'][11:16]} UTC, {counts['during'][0]:,} of "
+        f"{counts['during'][1]:,} tool-loop turns {where} ({_rate(*counts['during'])}) missed the prompt cache, "
+        f"in {sessions}{_compared(counts, periods)}; {rewritten}.",
+        "### Before, during and after\n\n"
+        f"Before is the {facts['method']['base']} days the warning took its usual miss rate from; during is the rise "
+        "it warned about, from its first turn to the turn that raised it.\n\n"
+        + _markdown_table(
+            ["", "Days", "Tool-loop turns", "Misses", "Miss rate"],
+            [[f"{name.capitalize()} ({_day_span(periods[name])})", len(periods[name]), f"{counts[name][1]:,}",
+              f"{counts[name][0]:,}", _rate(*counts[name])]
+             for name in periods if periods[name]]),
+    ]
+    versions = _version_table(facts["versions"], ["Turns", "Misses", "Miss rate"])
+    if versions:
+        sections.append("### By Claude Code version\n\n" + versions)
+    if facts["missed"]:
+        missed, wrote = facts["missed"], facts["missed"]["wrote"]
+        wrote_text = (f"The missed turn during wrote {wrote[0]:,} tokens to the cache, where the turn before had left "
+                      "what it needed cached." if missed["turns"] == 1 else
+                      f"The {missed['turns']:,} missed turns during wrote a median {wrote[0]:,} tokens to the cache "
+                      f"(middle half {wrote[1]:,}–{wrote[2]:,}), where the turn before had left what they needed cached.")
+        sections.append("### What a missed turn looks like\n\n" + wrote_text)
+    return title, sections
+
+
+def _start_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
+    record, periods, medians, span = facts["alert"], facts["periods"], facts["medians"], version_span(facts["span"])
+    title = (f"Session start {'grew' if facts['up'] else 'shrank'} from ~{approx(record['from'])} to "
+             f"~{approx(record['to'])} tokens" + (f" on Claude Code {span}" if span else ""))
+    moved, seen = len(record.get("projects", [])), record.get("of_projects", 0)
+    projects = ""
+    if seen:
+        projects = (f" The step showed in every project compared ({moved} of {seen})." if moved == seen and seen > 1
+                    else f" The step showed in {moved} of {seen} project{'' if seen == 1 else 's'} compared.")
+    against = (f" Against each project's level when the step began they started at {medians['after'][2]:.2f} times "
+               f"it, against {medians['before'][2]:.2f} times on the {_days(len(periods['before']))} before."
+               if medians["before"][0] else "")
+    rows = [[f"{name.capitalize()} ({_day_span(periods[name])})", len(periods[name]), f"{medians[name][0]:,}",
+             f"~{approx(medians[name][1])}", f"{medians[name][2]:.2f}"] for name in periods if periods[name]]
+    sections = [
+        "### What happened\n\n"
+        f"From {record['since']}, CLI sessions started at a median ~{approx(record['to'])} tokens, against "
+        f"~{approx(record['from'])} in the sessions before them.{against}{projects}",
+        "### Before and after\n\n"
+        "A session's start is the context its first response sent: input, cache writes and cache reads. Each is also "
+        "given against its project's level when the step began, the median of that project's last sessions before "
+        "it, so moving between projects doesn't read as a change.\n\n"
+        + _markdown_table(["", "Days", "Sessions", "Median start", "Against its project"], rows),
+    ]
+    versions = [[version, period, f"{count:,}", f"~{approx(tokens)}", f"{ratio:.2f}"]
+                for version, period, count, tokens, ratio in facts["versions"]]
+    if versions:
+        sections.append("### By Claude Code version\n\n"
+                        + _markdown_table(["Version", "Period", "Sessions", "Median start", "Against its project"],
+                                          versions))
+    what = facts["what"]
+    lines = ([components_text(what).strip()] if what is not None else
+             ["The sessions compared don't log enough of how they started for ccdrift to compare its parts."])
+    lines += [f"Built-in tools {word}: {', '.join(names)}." for word, names in facts["builtin"].items()]
+    sections.append("### What changed at the start of the session\n\n" + " ".join(lines))
+    return title, sections
+
+
+HOOK_TRANSCRIPTS = {"main": "CLI main-thread", "subagent": "CLI subagent"}
+
+
+def _hook_tool(tool: str, servers: int) -> str:
+    """A tool as a hook draft names it: a built-in one by name, every MCP server's together."""
+    return f"MCP tools ({servers} server{'' if servers == 1 else 's'})" if tool == "mcp__" else tool
+
+
+def _hook_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
+    change, periods, counts, span = facts["change"], facts["periods"], facts["counts"], version_span(facts["span"])
+    title = (f"Hooks {change['direction']} running on {HOOK_CALLS[change['thread']]}"
+             + (f" from Claude Code {span}" if span else ""))
+    ran = [(event, *facts["ran"]["before"][event], *facts["ran"]["after"][event])
+           for event in sorted(change["events"], reverse=True)]
+    before = " and ".join(f"{event} hooks{' ran' if i == 0 else ''} on {hb:,} of {cb:,}"
+                          for i, (event, cb, hb, _, _) in enumerate(ran))
+    after = " and ".join(f"{ha:,} of {ca:,}" for _, _, _, ca, ha in ran)
+    projects = f"{facts['projects']} project{'' if facts['projects'] == 1 else 's'}"
+    sections = [
+        "### What happened\n\n"
+        f"Before {change['since']}, {before} {HOOK_TRANSCRIPTS[change['thread']]} tool calls; from then, on {after}. "
+        f"The change showed in {projects}.",
+        "### Before and after\n\n"
+        "Judged is a transcript's calls of one tool for one hook event, where it made enough of them; it counts as "
+        "hooked when a hook record came on at least half of those calls.\n\n"
+        + _markdown_table(
+            ["", "Days", "Transcripts", "Judged", "Hooked", "Share"],
+            [[f"{name.capitalize()} ({_day_span(periods[name])})", len(periods[name]),
+              f"{facts['transcripts'][name]:,}", f"{counts[name][1]:,}", f"{counts[name][0]:,}", _rate(*counts[name])]
+             for name in periods if periods[name]]),
+    ]
+    versions = _version_table(facts["versions"], ["Judged", "Hooked", "Share"])
+    if versions:
+        sections.append("### By Claude Code version\n\n" + versions)
+    rows = [[event, _hook_tool(tool, facts["servers"]),
+             *(f"{cells[name][1]:,} of {cells[name][0]:,} ({_rate(cells[name][1], cells[name][0])})" if name in cells
+               else "-" for name in periods)]
+            for event, tool, cells in facts["calls"]]
+    sections.append("### Which events and tools\n\nTool calls a hook record came on, of all the calls.\n\n"
+                    + _markdown_table(["Event", "Tool", *(name.capitalize() for name in periods)], rows))
+    return title, sections
+
+
+def _cut_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
+    counts, periods, span, episode = facts["counts"], facts["periods"], version_span(facts["span"]), facts["alert"]
+    refused = any(stops[1] for stops in facts["stops"].values())
+    what = "stopped at the token limit or refused" if refused else "stopped at the token limit"
+    usually = f" (usually {_rate(*counts['before'])})" if counts["before"][1] else ""
+    title = (f"Main-thread responses {'stop at the token limit or refuse' if refused else 'stop at the token limit'} "
+             f"{_rate(*counts['during'])} of the time" + (f" on Claude Code {span}" if span else "") + usually)
+    during = periods["during"]
+    lead = f"On {during[0]}" if len(during) == 1 else f"From {during[0]} to {during[-1]}"
+    worse = episode.get("worse_than")
+    deepened = (f" The check had reported this run at {worse['share']:.2%} on {worse['since']}; this day stood "
+                f"{facts['method']['ratio']} times above it." if worse else "")
+    sections = [
+        "### What happened\n\n"
+        f"{lead}, {counts['during'][0]:,} of {counts['during'][1]:,} main-thread responses ({_rate(*counts['during'])}) "
+        f"{what}{_compared(counts, periods)}.{deepened}",
+        "### Before, during and after\n\n"
+        "Before is the active days the check compared the first day with; during is that day and each day after it "
+        "that stayed as high.\n\n"
+        + _markdown_table(
+            ["", "Days", "Responses", "Cut short", "Share"],
+            [[f"{name.capitalize()} ({_day_span(periods[name])})", len(periods[name]), f"{counts[name][1]:,}",
+              f"{counts[name][0]:,}", _rate(*counts[name])]
+             for name in periods if periods[name]]),
+    ]
+    versions = _version_table(facts["versions"], ["Responses", "Cut short", "Share"])
+    if versions:
+        sections.append("### By Claude Code version\n\n" + versions)
+    sections.append("### How they stopped\n\n"
+                    + _markdown_table(["", "At the token limit", "Refused"],
+                                      [[name.capitalize(), f"{facts['stops'][name][0]:,}", f"{facts['stops'][name][1]:,}"]
+                                       for name in periods if periods[name]]))
+    return title, sections
+
+
 def _draft_environment(env: Mapping[str, Any]) -> str:
     entrypoints = env["entrypoints"]
     entry = f" (entrypoint{'s' if len(entrypoints) > 1 else ''} {', '.join(entrypoints)})" if entrypoints else ""
@@ -1117,12 +1280,63 @@ def _draft_environment(env: Mapping[str, Any]) -> str:
     for column, name, suffix in DRAFT_SETTINGS:
         top = env["settings"][column]
         settings.append(f"{name} {top[0]} on {top[1]:.2%} of responses{suffix}" if top else f"{name} not logged")
-    lines += [f"- Main thread: {', '.join(settings)}", f"- OS: {env['os']}",
+    lines += [f"- {DRAFT_THREADS[env['thread']]}: {', '.join(settings)}", f"- OS: {env['os']}",
               f"- Measured with ccdrift {env['ccdrift']} from local session transcripts (aggregates only)"]
     return "### Environment\n\n" + "\n".join(lines)
 
 
+def _loop_method(method: Mapping[str, Any]) -> str:
+    setting = method["setting"]
+    cusum = (f"a CUSUM over the turns of the last {method['window']} days against the miss rate of the "
+             f"{method['base']} days before them")
+    rule = (f"It runs {cusum}, and warns when it passes h = {setting['h']:g} with a miss rate of p1 = "
+            f"{setting['p1']:.0%} in mind and misses from at least {setting['min_sessions']} "
+            f"session{'' if setting['min_sessions'] == 1 else 's'}." if setting
+            else f"It ran {cusum}; ccdrift no longer warns on this stream, since no setting it measured passes its "
+                 "gate.")
+    return ("### How this was measured\n\nccdrift reads Claude Code's local session transcripts. It counts tool-loop "
+            f"turns {LOOP_WHERE[method['stream']]}, outside Agent SDK sessions: responses that follow a tool result "
+            f"within {method['gap'] // 60} minutes of the previous response, not right after a compaction, where "
+            f"the response before had left tokens cached. A turn misses when it reads back less than "
+            f"{method['share']:.0%} of what the turn before had cached. " + rule)
+
+
+def _start_method(method: Mapping[str, Any]) -> str:
+    return ("### How this was measured\n\nccdrift reads Claude Code's local session transcripts. It takes the first "
+            "response of each CLI main-thread session, outside Agent SDK sessions and not a resumed one, and the "
+            "context it sent. Each session is measured against its own project's level, the median of up to "
+            f"{method['project_baseline']} of that project's earlier sessions once it has {method['min_project']}. "
+            f"A step is reported when {method['window']} sessions in a row move at least {method['change']:.0%} "
+            f"from the median of up to {method['baseline']} before them, with at least {method['min_baseline']}, "
+            f"each of them more than {method['side']:.1%} on the same side. A project counts as compared when it "
+            f"has {method['min_project']} sessions each side of the step within {method['side_days']} days.")
+
+
+def _hook_method(method: Mapping[str, Any]) -> str:
+    return ("### How this was measured\n\nccdrift reads Claude Code's local session transcripts. For each CLI transcript "
+            "it counts the calls of each tool, an MCP server's tools together, and whether Claude Code logged a "
+            "PreToolUse or PostToolUse hook record on each. A transcript is hooked for an event and tool when a hook "
+            f"record came on at least half of its calls, with at least {method['min_calls']} of them. A project's "
+            "transcripts in one thread, for one event and tool, make a stream; a change is reported when its last "
+            f"{method['window']} transcripts all turned the other way from {method['agree']:.0%} of the "
+            f"{method['baseline']} before them. Changes in one thread and direction starting within {method['merge']} "
+            "days of each other are one alert.")
+
+
+def _cut_method(method: Mapping[str, Any]) -> str:
+    return ("### How this was measured\n\nccdrift reads Claude Code's local session transcripts. It counts main-thread "
+            "responses outside Agent SDK sessions, and those that stopped at the token limit or refused, on UTC days "
+            f"with at least {method['active']} of them. A day is reported when at least {method['floor']} did, on at "
+            f"least {method['share']:.1%} of its responses and {method['ratio']} times the worst share of the days in "
+            f"the {method['days']} before it that stand for the usual level, a clean day counting as "
+            f"{method['usual']:.1%} and the days of its own run left out; it needs {method['min_days']} such days to "
+            f"compare with. A run is reported once, and again when a day stands {method['ratio']} times above what "
+            "was last reported of it.")
+
+
 def _draft_method(method: Mapping[str, Any]) -> str:
+    if method.get("kind") in ALERT_METHODS:
+        return ALERT_METHODS[method["kind"]](method)
     cache = method["metric"] == "cache_ratio"
     rule = (f"an incident opens when {method['bins']} of {method['window']} days in a row fall "
             f"{'below z = −' if cache else 'above z = +'}{method['cutoff']:.1f} and closes once "
@@ -1143,9 +1357,15 @@ def _draft_method(method: Mapping[str, Any]) -> str:
             + rule)
 
 
+DRAFTS = {"cache_ratio": _cache_draft, "haiku_fraction": _haiku_draft, "context_changes": _start_draft,
+          "hook_changes": _hook_draft, "loop_warnings": _loop_draft, "cut_short": _cut_draft}
+ALERT_METHODS = {"context_changes": _start_method, "hook_changes": _hook_method, "loop_warnings": _loop_method,
+                 "cut_short": _cut_method}
+
+
 def draft_text(facts: Mapping[str, Any]) -> str:
     """The draft issue from draft.draft_facts: a title line, a blank line and its sections."""
-    title, sections = (_cache_draft if facts["metric"] == "cache_ratio" else _haiku_draft)(facts)
+    title, sections = DRAFTS[facts["kind"]](facts)
     if facts["notes"]:
         sections.append("### Release notes that may be related\n\n"
                         + "\n".join(f"- {version}: {text}" for version, text in facts["notes"]))

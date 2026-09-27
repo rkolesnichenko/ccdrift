@@ -374,12 +374,20 @@ def main_thread_days(path, days, per_day=60, first_day=0):
         write(path / f"s{d}.jsonl", records)
 
 
+def stop_reason(k, spec):
+    """The stop reason of a day's `k`th response in failure_days: its first `truncated`
+    stop at the token limit, the `refused` after them refuse, the rest end their turn."""
+    truncated, refused = spec.get("truncated", 0), spec.get("refused", 0)
+    return "max_tokens" if k < truncated else "refusal" if k < truncated + refused else "end_turn"
+
+
 def failure_days(path, days, per_day=60):
     """One CLI main-thread session a day from Sep 1: `per_day` responses a minute apart,
     each after a prompt and read 90% from the cache, plus what each entry of `days`
     asks for: `errors` banners of `kind` (default "overloaded"), `slept` banners,
-    `retries` retry records, and `truncated` responses that stop at the token limit.
-    `version` sets the day's Claude Code version (default "2.1.226")."""
+    `retries` retry records, `truncated` responses that stop at the token limit and,
+    after them, `refused` responses that refuse. `version` sets the day's Claude Code
+    version (default "2.1.226")."""
     for d, spec in enumerate(days):
         version = spec.get("version", "2.1.226")
         records = []
@@ -388,7 +396,7 @@ def failure_days(path, days, per_day=60):
             records += [prompt(ts, sid=f"s{d}"),
                         line(f"m{d}-{k}", text(40), ts=ts, sid=f"s{d}", cache_read=900, cache_creation=100,
                              cache_1h=100, cache_5m=0, version=version, entrypoint="cli", effort="xhigh",
-                             stop_reason="max_tokens" if k < spec.get("truncated", 0) else "end_turn")]
+                             stop_reason=stop_reason(k, spec))]
         after = d * DAY + 60 * per_day
         for j in range(spec.get("errors", 0)):
             records.append(api_error(at(after + j), sid=f"s{d}", kind=spec.get("kind", "overloaded"), version=version))
@@ -399,23 +407,26 @@ def failure_days(path, days, per_day=60):
         write(path / f"s{d}.jsonl", records)
 
 
-def tool_loop_days(path, days, per_day=100, misses=0, subagent=False):
-    """One CLI session a day from Sep 1 on 2.1.226, on the main thread or in a subagent
-    of it: a prompt, then `per_day` turns a minute apart, each after a tool result and
-    reading back what the one before had cached, with a second prompt halfway. The last
-    `misses` turns of the last day miss the cache, reading nothing."""
+def tool_loop_days(path, days, per_day=100, misses=0, subagent=False, versions=None, miss_day=None):
+    """One CLI session a day from Sep 1, on the main thread or in a subagent of it: a
+    prompt, then `per_day` turns a minute apart, each after a tool result and reading back
+    what the one before had cached, with a second prompt halfway. The last `misses` turns
+    of day `miss_day` (default the last day) miss the cache, reading nothing. `versions`
+    gives each day's Claude Code version (default 2.1.226 every day)."""
+    miss_day = days - 1 if miss_day is None else miss_day
     for d in range(days):
+        version = versions[d] if versions else "2.1.226"
         records, cached = [], 0
         for k in range(per_day + 1):
             ts = at(d * DAY + 60 * k)
             opens = k in (0, per_day // 2)
             records.append(prompt(ts, sid=f"s{d}", sidechain=subagent) if opens
                            else tool_result(ts, sid=f"s{d}", sidechain=subagent))
-            missed = d == days - 1 and k > per_day - misses
+            missed = d == miss_day and k > per_day - misses
             read = 0 if k == 0 or missed else cached
             written = 1000 if k == 0 else 100 + (cached if missed else 0)
             records.append(line(f"{'a' if subagent else 'm'}{d}-{k}", text(40), ts=ts, sid=f"s{d}",
-                                sidechain=subagent, cache_read=read, cache_creation=written, version="2.1.226",
+                                sidechain=subagent, cache_read=read, cache_creation=written, version=version,
                                 entrypoint="cli"))
             cached = read + written
         write(path / (f"s{d}/subagents/agent-a.jsonl" if subagent else f"s{d}.jsonl"), records)
