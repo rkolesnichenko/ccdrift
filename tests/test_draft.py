@@ -2,7 +2,7 @@
 
 import platform
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -13,10 +13,12 @@ import ccdrift.draft
 from ccdrift.changelog import TOPIC_OF, load_changelog
 from ccdrift.cli import main
 from ccdrift.detector import DetectorConfig
-from ccdrift.draft import draft_markdown, draft_periods, find_incident, os_text, run_draft, title_versions
-from ccdrift.logs import judged_turns, parse_source
+from ccdrift.draft import (alert_facts, draft_markdown, draft_periods, find_alert, find_incident, os_text, run_draft,
+                          title_versions)
+from ccdrift.logs import judged_turns, parse_all, parse_source
+from ccdrift.loops import LoopSetting, loop_warning
 from ccdrift.state import new_state, save_state
-from ccdrift.texts import version_span
+from ccdrift.texts import draft_text, version_span
 from tests.helpers import DAY, at, busy_days, line, main_thread_days, nth_day, prompt, text, tool_loop_days, write
 
 
@@ -404,3 +406,157 @@ def test_a_dismissed_incident_is_drafted_when_its_day_is_asked_for(tmp_path, cap
     assert run_draft(tmp_path / "logs", tmp_path / "state.json", "cache_ratio", "2026-09-15",
                      today=date(2026, 9, 25), os_name="macOS 26.5.2") == 0
     assert capsys.readouterr().out.startswith("New prompts miss the prompt cache 10.17% of the time")
+
+
+# ---------------------------------------------------------------------------
+# Drafts about alerts that are not incidents
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("day, expected", [(None, "2026-09-22T11:33:00+00:00"),
+                                           ("2026-09-22", "2026-09-22T11:33:00+00:00"),
+                                           ("2026-09-10", "2026-09-10T08:00:00+00:00"),
+                                           ("2026-09-11", None)])
+def test_an_alert_draft_is_about_the_alert_that_starts_on_the_day_given_or_the_latest(day, expected):
+    # A tool-loop warning's `since` is a time; the day asked for is its UTC date. Two
+    # starting that day, as a main-thread and a subagent warning could, give the later.
+    records = [{"since": "2026-09-10T08:00:00+00:00"}, {"since": "2026-09-22T11:33:00+00:00"},
+               {"since": "2026-09-22T09:00:00+00:00"}, {"since": "2026-09-01T23:00:00+00:00"}]
+    found = find_alert(records, day)
+    assert (found["since"] if found else None) == expected
+    assert find_alert([], None) is None
+
+
+LOOP_VERSIONS = ["2.1.279"] * 21 + ["2.1.280"] + ["2.1.281"] * 3
+LOOP_NOTES = {"2.1.280": ["Changed how the prompt cache is keyed in tool loops", "Added a theme picker"]}
+
+
+def loop_warned(path, stream="main"):
+    """Tool-loop turns from Sep 1 to 25 whose last 8 turns on Sep 22 miss the cache, and the
+    warning the check raised about them that day, through the shipped rule. Subagents no
+    longer get a warning, so theirs is raised at the setting they had before 0.16.0, as the
+    owner's own subagent warning was."""
+    tool_loop_days(path / "logs", 25, misses=8, miss_day=21, subagent=stream == "subagent", versions=LOOP_VERSIONS)
+    tables = parse_all(path / "logs")
+    setting = LoopSetting(p1=0.02, h=8.0, min_sessions=1) if stream == "subagent" else None
+    state = new_state()
+    for hour in range(24):
+        warning = loop_warning(tables.responses, stream, state, datetime(2026, 9, 22, hour, 59, tzinfo=timezone.utc),
+                               setting)
+        if warning:
+            return tables, warning
+    raise AssertionError("the fixture raised no warning")
+
+
+def test_a_tool_loop_draft_holds_the_rise_the_warning_was_about_and_the_days_around_it(tmp_path):
+    tables, warning = loop_warned(tmp_path)
+    # The draft counts the rise the warning counted, from the same turns.
+    assert (warning["misses"], warning["turns"], warning["since"], warning["at"]) == (
+        8, 8, "2026-09-22T11:33:00+00:00", "2026-09-22T11:40:00+00:00")
+    facts = alert_facts(tables, "loop_warnings", warning, LOOP_NOTES, date(2026, 9, 26), "macOS 26.5.2")
+    assert draft_text(facts) == (
+        "Tool-loop turns on the main thread miss the prompt cache 100.00% of the time on Claude Code 2.1.280 "
+        "(usually 0.00%)\n\n"
+        "### What happened\n\n"
+        "From 2026-09-22 11:33 to 11:40 UTC, 8 of 8 tool-loop turns on the main thread (100.00%) missed the prompt "
+        "cache, in 1 session, against 0 of 1,386 (0.00%) on the 14 days before and 0 of 297 (0.00%) on the 3 days "
+        "after; ~85k tokens were written to the cache again.\n\n"
+        "### Before, during and after\n\n"
+        "Before is the 14 days the warning took its usual miss rate from; during is the rise it warned about, from "
+        "its first turn to the turn that raised it.\n\n"
+        "|  | Days | Tool-loop turns | Misses | Miss rate |\n"
+        "|---|---|---|---|---|\n"
+        "| Before (09-02..09-15) | 14 | 1,386 | 0 | 0.00% |\n"
+        "| During (09-22..09-22) | 1 | 8 | 8 | 100.00% |\n"
+        "| After (09-23..09-25) | 3 | 297 | 0 | 0.00% |\n\n"
+        "### By Claude Code version\n\n"
+        "| Version | Period | Turns | Misses | Miss rate |\n"
+        "|---|---|---|---|---|\n"
+        "| 2.1.279 | before | 1,386 | 0 | 0.00% |\n"
+        "| 2.1.280 | during | 8 | 8 | 100.00% |\n"
+        "| 2.1.281 | after | 297 | 0 | 0.00% |\n\n"
+        "### What a missed turn looks like\n\n"
+        "The 8 missed turns during wrote a median 10,650 tokens to the cache (middle half 10,475–10,825), where the "
+        "turn before had left what they needed cached.\n\n"
+        "### Release notes that may be related\n\n"
+        "- 2.1.280: Changed how the prompt cache is keyed in tool loops\n\n"
+        "### Environment\n\n"
+        "- Claude Code: 2.1.280 (entrypoint cli)\n"
+        "- Models during: claude-opus-5 (100.00% of responses)\n"
+        "- Main thread: cache tier not logged, effort not logged\n"
+        "- OS: macOS 26.5.2\n"
+        f"- Measured with ccdrift {__version__} from local session transcripts (aggregates only)\n\n"
+        "### How this was measured\n\n"
+        "ccdrift reads Claude Code's local session transcripts. It counts tool-loop turns on the main thread, outside "
+        "Agent SDK sessions: responses that follow a tool result within 5 minutes of the previous response, not "
+        "right after a compaction, where the response before had left tokens cached. A turn misses when it reads "
+        "back less than 50% of what the turn before had cached. It runs a CUSUM over the turns of the last 7 days "
+        "against the miss rate of the 14 days before them, and warns when it passes h = 3 with a miss rate of "
+        "p1 = 2% in mind and misses from at least 1 session.\n")
+
+
+def test_a_subagent_tool_loop_draft_says_where_it_ran_and_that_the_stream_no_longer_warns(tmp_path):
+    tables, warning = loop_warned(tmp_path, "subagent")
+    text = draft_text(alert_facts(tables, "loop_warnings", warning, {}, date(2026, 9, 26), "macOS 26.5.2"))
+    assert text.startswith("Tool-loop turns in subagents miss the prompt cache 100.00% of the time")
+    assert "\n- Subagents: cache tier not logged, effort not logged\n" in text
+    assert "\n- Main thread:" not in text
+    assert text.endswith("It ran a CUSUM over the turns of the last 7 days against the miss rate of the 14 days "
+                         "before them; ccdrift no longer warns on this stream, since no setting it measured passes "
+                         "its gate.\n")
+
+
+def test_a_tool_loop_draft_of_one_missed_turn_says_what_it_wrote(tmp_path):
+    # Found drafting the owner's own warning on 2026-09-27: a median of one turn, and its
+    # middle half, read as nonsense. The shipped setting needs more than one miss; a looser
+    # one, as subagents had, warned on one.
+    tool_loop_days(tmp_path / "logs", 22, misses=1)
+    tables = parse_all(tmp_path / "logs")
+    warning = next(w for hour in range(24) for w in [loop_warning(tables.responses, "main", new_state(),
+                                                                  datetime(2026, 9, 22, hour, 59, tzinfo=timezone.utc),
+                                                                  LoopSetting(p1=0.02, h=2.0, min_sessions=1))]
+                   if w)
+    assert (warning["misses"], warning["turns"]) == (1, 1)
+    text = draft_text(alert_facts(tables, "loop_warnings", warning, {}, date(2026, 9, 23), "macOS 26.5.2"))
+    assert ("### What a missed turn looks like\n\nThe missed turn during wrote 11,000 tokens to the cache, where the "
+            "turn before had left what it needed cached.\n") in text
+
+
+def test_a_tool_loop_draft_drafted_the_day_it_fired_has_its_rise_and_no_after(tmp_path):
+    # The warning fires mid-day, so the rise is counted by time, not by complete days.
+    tables, warning = loop_warned(tmp_path)
+    facts = alert_facts(tables, "loop_warnings", warning, {}, date(2026, 9, 22), "macOS 26.5.2")
+    assert (facts["counts"]["during"], facts["periods"]["after"]) == ((8, 8), [])
+
+
+def test_run_draft_drafts_a_tool_loop_warning_and_writes_nothing(tmp_path, capsys):
+    tables, warning = loop_warned(tmp_path)
+    save_state(tmp_path / "state.json", {**new_state(), "loop_warnings": [warning]})
+    before = sorted(path.name for path in tmp_path.iterdir())
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "loop_warnings", "2026-09-22",
+                     today=date(2026, 9, 26), os_name="macOS 26.5.2") == 0
+    assert capsys.readouterr().out.startswith("Tool-loop turns on the main thread miss the prompt cache 100.00%")
+    assert sorted(path.name for path in tmp_path.iterdir()) == before
+
+
+def test_run_draft_says_when_there_is_no_such_alert_or_the_history_no_longer_holds_it(tmp_path, capsys):
+    tables, warning = loop_warned(tmp_path)
+    save_state(tmp_path / "state.json", new_state())
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "loop_warnings", today=date(2026, 9, 26)) == 2
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "loop_warnings", "2026-09-22",
+                     today=date(2026, 9, 26)) == 2
+    err = capsys.readouterr().err
+    assert "No tool-loop alert is recorded.\n" in err and "No tool-loop alert starts on 2026-09-22.\n" in err
+    moved = {**warning, "since": "2026-10-02T11:33:00+00:00", "at": "2026-10-02T11:40:00+00:00"}
+    save_state(tmp_path / "state.json", {**new_state(), "loop_warnings": [moved]})
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "loop_warnings", today=date(2026, 10, 5)) == 2
+    captured = capsys.readouterr()
+    assert captured.err == "The history no longer holds the tool-loop alert from 2026-10-02.\n"
+    assert captured.out == ""
+
+
+def test_the_draft_command_takes_an_alert_kind(tmp_path, capsys):
+    tables, warning = loop_warned(tmp_path)
+    save_state(tmp_path / "state.json", {**new_state(), "loop_warnings": [warning]})
+    assert main(["incident", "draft", "tool-loop", "2026-09-22", "--source", str(tmp_path / "logs"),
+                 "--state", str(tmp_path / "state.json")]) == 0
+    assert capsys.readouterr().out.startswith("Tool-loop turns on the main thread miss the prompt cache")

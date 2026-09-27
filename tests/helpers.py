@@ -399,23 +399,26 @@ def failure_days(path, days, per_day=60):
         write(path / f"s{d}.jsonl", records)
 
 
-def tool_loop_days(path, days, per_day=100, misses=0, subagent=False):
-    """One CLI session a day from Sep 1 on 2.1.226, on the main thread or in a subagent
-    of it: a prompt, then `per_day` turns a minute apart, each after a tool result and
-    reading back what the one before had cached, with a second prompt halfway. The last
-    `misses` turns of the last day miss the cache, reading nothing."""
+def tool_loop_days(path, days, per_day=100, misses=0, subagent=False, versions=None, miss_day=None):
+    """One CLI session a day from Sep 1, on the main thread or in a subagent of it: a
+    prompt, then `per_day` turns a minute apart, each after a tool result and reading back
+    what the one before had cached, with a second prompt halfway. The last `misses` turns
+    of day `miss_day` (default the last day) miss the cache, reading nothing. `versions`
+    gives each day's Claude Code version (default 2.1.226 every day)."""
+    miss_day = days - 1 if miss_day is None else miss_day
     for d in range(days):
+        version = versions[d] if versions else "2.1.226"
         records, cached = [], 0
         for k in range(per_day + 1):
             ts = at(d * DAY + 60 * k)
             opens = k in (0, per_day // 2)
             records.append(prompt(ts, sid=f"s{d}", sidechain=subagent) if opens
                            else tool_result(ts, sid=f"s{d}", sidechain=subagent))
-            missed = d == days - 1 and k > per_day - misses
+            missed = d == miss_day and k > per_day - misses
             read = 0 if k == 0 or missed else cached
             written = 1000 if k == 0 else 100 + (cached if missed else 0)
             records.append(line(f"{'a' if subagent else 'm'}{d}-{k}", text(40), ts=ts, sid=f"s{d}",
-                                sidechain=subagent, cache_read=read, cache_creation=written, version="2.1.226",
+                                sidechain=subagent, cache_read=read, cache_creation=written, version=version,
                                 entrypoint="cli"))
             cached = read + written
         write(path / (f"s{d}/subagents/agent-a.jsonl" if subagent else f"s{d}.jsonl"), records)

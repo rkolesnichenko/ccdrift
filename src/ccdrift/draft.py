@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import platform
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -22,12 +22,12 @@ from ccdrift.changelog import (TOPIC_OF, changelog_path, days_before, load_chang
 from ccdrift.detector import DetectorConfig, baseline_bins
 from ccdrift.history import HistoryError, load_history
 from ccdrift.incidents import OPEN_END, RECOVERY_BINS, exclusions, incident_cost, incident_versions
-from ccdrift.logs import judged_turns
-from ccdrift.loops import loop_turns
+from ccdrift.logs import LOOP_GAP_SECONDS, LOOP_MISS_SHARE, Tables, judged_turns, outside_sdk
+from ccdrift.loops import BASE_DAYS, LOOP_SETTINGS, WINDOW_DAYS, loop_turns
 from ccdrift.report import reason_counts
 from ccdrift.state import load_state
-from ccdrift.texts import (COMMAND_LINES, DRAFT_LINES, DRAFT_SETTINGS, SHORT_NAMES, draft_text, no_transcripts_message,
-                           version_key)
+from ccdrift.texts import (ALERT_NAMES, COMMAND_LINES, DRAFT_LINES, DRAFT_SETTINGS, SHORT_NAMES, draft_text,
+                           no_transcripts_message, version_key)
 
 AFTER_DAYS = 14  # judged days after an incident that the draft compares with
 PAUSE_BOUNDS = (60, 300, 900, 3600)  # seconds before the prompt: the upper bound of each bucket
@@ -170,7 +170,7 @@ def os_text() -> str:
     return DRAFT_LINES["system"].format(system=platform.system(), release=platform.release()).strip()
 
 
-def _environment_facts(during: pd.DataFrame, os_name: str) -> dict[str, Any]:
+def _environment_facts(during: pd.DataFrame, os_name: str, thread: str = "main") -> dict[str, Any]:
     entrypoints = _shares(during["entrypoint"]) if "entrypoint" in during and len(during) else []
     settings = {}
     for column, _, _ in DRAFT_SETTINGS:
@@ -178,7 +178,7 @@ def _environment_facts(during: pd.DataFrame, os_name: str) -> dict[str, Any]:
         settings[column] = shares[0] if shares else None
     return {"versions": sorted(during["version"].dropna().astype(str).unique(), key=version_key),
             "entrypoints": [name for name, _ in entrypoints], "models": _shares(during["model"]) if len(during) else [],
-            "settings": settings, "os": os_name, "ccdrift": __version__}
+            "settings": settings, "os": os_name, "ccdrift": __version__, "thread": thread}
 
 
 def draft_facts(responses: pd.DataFrame, incident: dict[str, Any], incidents: Sequence[dict[str, Any]],
@@ -199,7 +199,7 @@ def draft_facts(responses: pd.DataFrame, incident: dict[str, Any], incidents: Se
     first_days = periods["during"][:RECOVERY_BINS]
     quoted = note_versions(turns, versions, days_before(incident["start"], 7),
                            first_days[-1] if first_days else incident["start"])
-    facts.update({"metric": metric, "incident": incident, "periods": periods,
+    facts.update({"kind": metric, "metric": metric, "incident": incident, "periods": periods,
                   "cost": incident_cost(turns, incident, incidents, cfg),
                   "notes": release_notes(changelog, quoted, TOPIC_OF[metric]),
                   "environment": _environment_facts(_on_days(turns, periods["during"]), os_name),
@@ -218,6 +218,74 @@ def draft_markdown(responses: pd.DataFrame, incident: dict[str, Any], incidents:
     return None if facts is None else draft_text(facts)
 
 
+def find_alert(records: Sequence[dict[str, Any]], day: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """The alert record that starts on `day`, the UTC date its `since` opens with; without
+    `day`, the latest. None when there is none."""
+    matching = [record for record in records if day is None or str(record["since"])[:10] == day]
+    return max(matching, key=lambda record: str(record["since"])) if matching else None
+
+
+def _quartiles(values: pd.Series) -> list[int]:
+    return values.quantile([0.5, 0.25, 0.75]).round().astype(int).tolist()
+
+
+def _loop_facts(tables: Tables, warning: dict[str, Any], today: date) -> Optional[dict[str, Any]]:
+    """What a tool-loop draft says: the turns of the warning's stream on the BASE_DAYS
+    days that gave its usual rate (those before the WINDOW_DAYS it ran over, taken to end
+    on the day of the alarm), the rise it warned about, from its first turn to the alarm,
+    and up to AFTER_DAYS complete days after it. None when the history no longer holds
+    the rise."""
+    stream, responses = warning["stream"], tables.responses
+    turns = loop_turns(responses, stream)
+    since, at = pd.Timestamp(warning["since"]), pd.Timestamp(warning["at"])
+    first = date.fromisoformat(warning["at"][:10]) - timedelta(days=WINDOW_DAYS - 1)
+    days = turns["day"]
+    frames = {"before": turns[(days >= (first - timedelta(days=BASE_DAYS)).isoformat()) & (days < first.isoformat())],
+              "during": turns[(turns["timestamp"] >= since) & (turns["timestamp"] <= at)]}
+    later = sorted(days[(days > warning["at"][:10]) & (days < today.isoformat())].unique())[:AFTER_DAYS]
+    frames["after"] = turns[days.isin(later)]
+    during = frames["during"]
+    if during.empty:
+        return None
+    periods = {name: sorted(frame["day"].unique()) for name, frame in frames.items()}
+    missed = during[during["is_loop_miss"]]
+    main = responses["main_thread"].astype(bool)
+    stamps = responses["timestamp"]
+    in_rise = responses[(main if stream == "main" else ~main) & outside_sdk(responses)
+                        & (stamps >= since) & (stamps <= at)]
+    setting = LOOP_SETTINGS[stream]
+    return {"counts": {name: (int(frame["is_loop_miss"].sum()), len(frame)) for name, frame in frames.items()},
+            "periods": periods, "span": title_versions(during["version"]),
+            "versions": _version_rows(frames, "is_loop_miss"),
+            "missed": {"turns": len(missed), "wrote": _quartiles(missed["cache_creation"])} if len(missed) else None,
+            "environment_rows": in_rise, "thread": stream, "topic": "cache",
+            "method": {"kind": "loop_warnings", "stream": stream, "window": WINDOW_DAYS, "base": BASE_DAYS,
+                       "gap": LOOP_GAP_SECONDS, "share": LOOP_MISS_SHARE,
+                       "setting": setting._asdict() if setting else None},
+            "notes_from": (warning["versions"], days_before(warning["since"][:10], 7), warning["at"][:10])}
+
+
+ALERT_FACTS = {"loop_warnings": _loop_facts}
+
+
+def alert_facts(tables: Tables, kind: str, alert: dict[str, Any], changelog: dict[str, list[str]],
+                today: date, os_name: str) -> Optional[dict[str, Any]]:
+    """What the draft about `alert`, a record of state key `kind`, says: its kind's facts
+    (ALERT_FACTS, from the history's tables), then the release notes and the environment
+    every draft carries. A kind's facts name the versions and days whose release notes the
+    check quoted with the alert (`notes_from`), the rows the environment describes and the
+    thread they ran on. None when the history no longer holds what the alert was about."""
+    facts = ALERT_FACTS[kind](tables, alert, today)
+    if facts is None:
+        return None
+    named, first, last = facts.pop("notes_from")
+    quoted = note_versions(judged_turns(tables.responses, today), named, first, last)
+    facts.update({"kind": kind, "alert": alert,
+                  "notes": release_notes(changelog, quoted, facts.pop("topic")),
+                  "environment": _environment_facts(facts.pop("environment_rows"), os_name, facts.pop("thread"))})
+    return facts
+
+
 def run_draft(source: Path, state_path: Path, metric: str, start: Optional[str] = None,
               today: Optional[date] = None, cfg: Optional[DetectorConfig] = None,
               os_name: Optional[str] = None) -> int:
@@ -226,10 +294,13 @@ def run_draft(source: Path, state_path: Path, metric: str, start: Optional[str] 
     store; like `ccdrift report`, it brings a store the check has claimed up to date.
     Nothing is sent."""
     try:
-        incidents = load_state(state_path)["incidents"]
+        state = load_state(state_path)
     except (OSError, ValueError) as exc:
         print(COMMAND_LINES["state_unreadable"].format(path=state_path, error=exc), file=sys.stderr)
         return 1
+    if metric in ALERT_NAMES:
+        return _run_alert_draft(source, state_path, state, metric, start, today, os_name)
+    incidents = state["incidents"]
     incident = find_incident(incidents, metric, start)
     if incident is None:
         name = SHORT_NAMES[metric]
@@ -251,4 +322,31 @@ def run_draft(source: Path, state_path: Path, metric: str, start: Optional[str] 
         print(DRAFT_LINES["no_days"].format(name=SHORT_NAMES[metric], start=incident["start"]), file=sys.stderr)
         return 2
     print(text, end="")
+    return 0
+
+
+def _run_alert_draft(source: Path, state_path: Path, state: dict[str, Any], kind: str, start: Optional[str],
+                     today: Optional[date], os_name: Optional[str]) -> int:
+    """run_draft for an alert that is not an incident: the record of `kind` starting on
+    `start`, or the latest."""
+    name = ALERT_NAMES[kind]
+    alert = find_alert(state[kind], start)
+    if alert is None:
+        print(DRAFT_LINES["no_alert_on"].format(name=name, start=start) if start
+              else DRAFT_LINES["no_alert"].format(name=name), file=sys.stderr)
+        return 2
+    try:
+        tables = load_history(source, state_path, claim=False)
+    except HistoryError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if tables.responses.empty:
+        print(no_transcripts_message(source), file=sys.stderr)
+        return 2
+    today = today or datetime.now(timezone.utc).date()
+    facts = alert_facts(tables, kind, alert, load_changelog(changelog_path(source)), today, os_name or os_text())
+    if facts is None:
+        print(DRAFT_LINES["no_alert_days"].format(name=name, start=str(alert["since"])[:10]), file=sys.stderr)
+        return 2
+    print(draft_text(facts), end="")
     return 0

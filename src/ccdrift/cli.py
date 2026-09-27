@@ -11,7 +11,7 @@ from typing import Optional
 
 from ccdrift import __version__
 from ccdrift.state import ccdrift_home
-from ccdrift.texts import COMMAND_LINES, DIMENSION_NAMES, METRIC_ARGS
+from ccdrift.texts import ALERT_ARGS, COMMAND_LINES, DIMENSION_NAMES, METRIC_ARGS
 
 
 def choose_backend():
@@ -126,10 +126,11 @@ def build_parser() -> argparse.ArgumentParser:
     dismiss_action.add_argument("start", help="the incident's first day")
     _add_state(dismiss_action)
     draft_action = incident_actions.add_parser(
-        "draft", help="print a GitHub issue draft about an incident with its evidence, aggregates only")
-    draft_action.add_argument("metric", choices=list(METRIC_ARGS))
+        "draft", help="print a GitHub issue draft about an incident or an alert with its evidence, aggregates only")
+    draft_action.add_argument("metric", choices=[*METRIC_ARGS, *ALERT_ARGS])
     draft_action.add_argument("start", nargs="?", default=None, type=_day,
-                              help="the incident's first day (default: the latest incident not dismissed)")
+                              help="the incident's or alert's first day (default: the latest, for an incident "
+                                   "the latest not dismissed)")
     _add_source(draft_action)
     _add_state(draft_action)
 
@@ -207,7 +208,7 @@ def _incident(args: argparse.Namespace) -> int:
         return run_list(_source(args), state_path)
     if args.action == "draft":
         from ccdrift.draft import run_draft
-        return run_draft(_source(args), state_path, METRIC_ARGS[args.metric], args.start)
+        return run_draft(_source(args), state_path, {**METRIC_ARGS, **ALERT_ARGS}[args.metric], args.start)
     # A check running now would otherwise save the state it read before this change.
     try:
         with state_lock(state_path):
