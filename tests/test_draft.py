@@ -1071,3 +1071,31 @@ def test_a_hook_draft_of_a_later_change_leaves_out_the_streams_of_an_earlier_one
     facts = hook_facts_of(tmp_path, date(2026, 10, 18))
     assert (facts["change"]["since"], facts["counts"]) == ("2026-10-11", {"before": (14, 14), "after": (0, 6)})
 
+
+# ---------------------------------------------------------------------------
+# 0.17.1: what the final review of 2026-09-27 deferred
+# ---------------------------------------------------------------------------
+
+def test_a_hook_draft_names_no_unknown_version(tmp_path):
+    # transcript_states reads a transcript that logged no version as "unknown"; the title
+    # and the version table leave it out, as every other draft does.
+    main_thread_hooks(tmp_path / "logs", "-Users-me-alpha", range(0, 14), {"Bash"}, "2.1.260", tools=("Bash",))
+    main_thread_hooks(tmp_path / "logs", "-Users-me-alpha", range(14, 20), set(), None, tools=("Bash",))
+    text = draft_text(hook_facts_of(tmp_path, date(2026, 9, 22)))
+    assert text.startswith("Hooks stopped running on main-thread tool calls\n\n")
+    assert "unknown" not in text
+
+
+def test_a_tool_loop_draft_of_a_rise_across_midnight_gives_both_days(tmp_path):
+    tables, warning = loop_warned(tmp_path)
+    facts = alert_facts(tables, "loop_warnings", warning, {}, date(2026, 9, 26), "macOS 26.5.2")
+    facts["alert"] = {**warning, "since": "2026-09-21T23:50:00+00:00", "at": "2026-09-22T00:10:00+00:00"}
+    assert "From 2026-09-21 23:50 to 2026-09-22 00:10 UTC, 8 of 8 tool-loop turns" in draft_text(facts)
+
+
+def test_a_session_start_record_is_drafted_only_from_a_change_in_its_own_direction(tmp_path):
+    # A change found on the record's day but going the other way is a different step.
+    tables, records = stepped(tmp_path)
+    shrank = {**records[0], "from": records[0]["to"], "to": records[0]["from"]}
+    assert alert_facts(tables, "context_changes", shrank, {}, date(2026, 10, 11), "macOS 26.5.2") is None
+
