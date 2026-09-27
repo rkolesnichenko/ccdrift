@@ -349,8 +349,8 @@ draft`, and no rule turns on them.
 - A timer catches up on a run missed while the machine was off; cron doesn't.
 - Notifications use `notify-send`. They usually appear from a systemd timer but not
   from cron, so with cron, watch the log or use `--exec`.
-- The systemd path is covered by tests but hasn't yet run on a real machine. Reports
-  are welcome.
+- CI installs, checks and removes a real systemd timer on Ubuntu on every push; cron
+  is covered by tests only. Reports from other distributions are welcome.
 
 ## Uninstall
 

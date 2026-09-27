@@ -1,9 +1,11 @@
-"""A draft Claude Code issue about an incident: what happened before, during and after
-it, by version, what a missed turn looks like, the release notes that may be related,
-the environment and how ccdrift measured it, as aggregates only: no paths, project
-names, session ids or prompt text. The owner wrote the August 2026 caching regression
-up by hand from the lab; `ccdrift incident draft` prints that write-up for any
-incident."""
+"""A draft Claude Code issue about an incident, or about an alert that points at Claude
+Code itself (a session-start step, a hook coverage change, a tool-loop cache warning,
+responses cut short): what happened before, during and after it, by version, a section
+of the kind's own, the release notes that may be related, the environment and how
+ccdrift measured it, as aggregates only: no paths, project names, session ids, prompt
+text, or the names of skills, agents or MCP servers. The owner wrote the August 2026
+caching regression up by hand from the lab; `ccdrift incident draft` prints that
+write-up for any of them."""
 
 from __future__ import annotations
 
@@ -388,7 +390,9 @@ def _start_facts(tables: Tables, record: dict[str, Any], today: date) -> Optiona
     history no longer shows it."""
     starts = session_starts(tables.responses)
     starts = starts[starts["day"].astype(str) < today.isoformat()].reset_index(drop=True)
-    change = next((found for found in found_changes(ratio_starts(starts)) if found.since == record["since"]), None)
+    up = record["to"] > record["from"]
+    change = next((found for found in found_changes(ratio_starts(starts))
+                   if found.since == record["since"] and found.up == up), None)
     if change is None:
         return None
     rated = step_ratios(starts, change.since)
@@ -475,8 +479,11 @@ def _hook_facts(tables: Tables, group: dict[str, Any], today: date) -> Optional[
         parts["before"].append(before)
         parts["after"].append(stream[(days >= alert["since"]) & (days <= latest)])
     frames = {name: pd.concat(frames_of) if frames_of else states.iloc[0:0] for name, frames_of in parts.items()}
+    # transcript_states reads a transcript that logged no version as "unknown": left out, as
+    # the other drafts leave out a response that logged none.
     by_version = {name: frame.explode("versions").rename(columns={"versions": "version"}).assign(
-        on=lambda f: f["on"].astype(bool)) for name, frame in frames.items()}
+        on=lambda f: f["on"].astype(bool), version=lambda f: f["version"].where(f["version"] != "unknown"))
+        for name, frame in frames.items()}
     files = {name: sorted(frame["source_file"].astype(str).unique()) for name, frame in frames.items()}
     main = tables.responses["main_thread"].astype(bool)
     thread = alert["thread"]
@@ -534,7 +541,8 @@ def run_draft(source: Path, state_path: Path, metric: str, start: Optional[str] 
               today: Optional[date] = None, cfg: Optional[DetectorConfig] = None,
               os_name: Optional[str] = None) -> int:
     """Print a GitHub issue draft about the incident of `metric` starting on `start`, or
-    the latest, from the history. It saves no state and creates or claims no history
+    the latest, from the history; `metric` can instead be the state key of an alert kind
+    (ALERT_NAMES), drafted the same way. It saves no state and creates or claims no history
     store; like `ccdrift report`, it brings a store the check has claimed up to date.
     Nothing is sent."""
     try:

@@ -1123,11 +1123,14 @@ def _loop_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
     title = (f"Tool-loop turns {where} miss the prompt cache {_rate(*counts['during'])} of the time"
              + (f" on Claude Code {span}" if span else "") + usually)
     sessions = f"{warning['sessions']} session{'' if warning['sessions'] == 1 else 's'}"
+    # The alarm's time alone, unless the rise ran past midnight into another day.
+    until = (warning["at"][11:16] if warning["at"][:10] == warning["since"][:10]
+             else warning["at"][:16].replace("T", " "))
     rewritten = (f"~{approx(warning['tokens'])} tokens were written to the cache again" if warning["tokens"] > 0
                  else "no tokens were written to the cache again")
     sections = [
         "### What happened\n\n"
-        f"From {warning['since'][:16].replace('T', ' ')} to {warning['at'][11:16]} UTC, {counts['during'][0]:,} of "
+        f"From {warning['since'][:16].replace('T', ' ')} to {until} UTC, {counts['during'][0]:,} of "
         f"{counts['during'][1]:,} tool-loop turns {where} ({_rate(*counts['during'])}) missed the prompt cache, "
         f"in {sessions}{_compared(counts, periods)}; {rewritten}.",
         "### Before, during and after\n\n"
