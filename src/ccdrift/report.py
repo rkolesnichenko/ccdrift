@@ -23,7 +23,7 @@ from ccdrift.logs import judged_subagent_turns, judged_turns, outside_sdk
 from ccdrift.loops import COUNT_COLUMNS, loop_counts
 from ccdrift.sessions import MIN_SESSIONS, project_summary, session_starts
 from ccdrift.settings import settings_summary, subagent_summary
-from ccdrift.state import load_state, make_stream_private
+from ccdrift.state import load_state, open_private
 from ccdrift.texts import (COMMAND_LINES, DAY_TABLE, INCIDENT_METRICS, REPORT_LINES, SHORT_NAMES, VERSION_TABLE,
                            failure_lines, hooks_lines, incident_line, miss_reason_line, misses as _misses,
                            no_transcripts_message, number as _number, project_lines, settings_lines, size_text,
@@ -310,10 +310,7 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
                       today=today, source=source,
                       incident_days={metric: _incident_days(entries, shown, metric) for metric in INCIDENT_METRICS})
         try:
-            # The page names project folders. Made private through the open file, so a folder
-            # given by mistake fails to open before its own permissions are touched.
-            with open(html_path, "w", encoding="utf-8") as out:
-                make_stream_private(out)
+            with open_private(html_path) as out:  # the page names project folders
                 out.write(page)
         except OSError as exc:
             print(REPORT_LINES["unwritable"].format(path=html_path, error=exc), file=sys.stderr)

@@ -18,6 +18,9 @@ STALE_DAYS = 3
 HOOK_DAYS = 3
 RECENT_DAYS = 30
 RISING_HOURS = 24
+# What the long form can raise on a state it can't read, or one that parses but isn't shaped
+# as the check writes it: bad JSON or a bad time, a missing key, a value of the wrong type.
+MALFORMED = (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError)
 
 
 def _when(stamp: str) -> datetime:
@@ -117,9 +120,9 @@ def run_status(state_path: Path, short: bool = False, now: Optional[datetime] = 
             print(line)
         return 0
     try:
-        state = load_state(state_path)
-    except (OSError, ValueError) as exc:
+        report = status_report(load_state(state_path), now)
+    except MALFORMED as exc:
         print(COMMAND_LINES["state_unreadable"].format(path=state_path, error=exc), file=sys.stderr)
         return 1
-    print(status_report(state, now), end="")
+    print(report, end="")
     return 0

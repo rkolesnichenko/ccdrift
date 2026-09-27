@@ -1,11 +1,12 @@
 """Partitioning the history by where its tokens went."""
 
 import json
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 import pytest
 
+from ccdrift.cli import main
 from ccdrift.history import load_history
 from ccdrift.logs import parse_source
 from ccdrift.prices import Price
@@ -461,6 +462,29 @@ def test_the_dollars_printed_are_the_ones_claude_codes_own_cost_records_imply(tm
     assert dollars == {"claude-opus-5": pytest.approx(25.00005), "claude-haiku-4-5": pytest.approx(11.00001)}
 
 
+def test_the_cost_command_passes_its_window_dimension_and_json_through_to_the_breakdown(tmp_path, capsys,
+                                                                                         monkeypatch):
+    # Only an invalid --by had been run through the command line; found in the audit of
+    # 2026-09-25. Today is frozen where the command reads it, since the command takes no date.
+    class Today(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 10, 12, 0, tzinfo=tz)
+
+    monkeypatch.setattr("ccdrift.spend.datetime", Today)
+    money_corpus(tmp_path / "logs")
+    write(tmp_path / "logs" / "proj-a" / "s2.jsonl", [line("m2", text(40), ts=at(86_400), entrypoint="cli")])
+    paths = ["--source", str(tmp_path / "logs"), "--state", str(tmp_path / "state.json")]
+    assert main(["cost", *paths]) == 0
+    assert "$36.00" in capsys.readouterr().out.splitlines()[0]
+    assert main(["cost", "--json", *paths]) == 0
+    assert json.loads(capsys.readouterr().out)["days"] == 2
+    assert main(["cost", "--by", "model", "--days", "1", "--json", *paths]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert (payload["days"], list(payload["dimensions"])) == (1, ["model"])
+    assert [row["bucket"] for row in payload["dimensions"]["model"]] == ["claude-opus-5"]
+
+
 def write_tier_corpus(tmp_path):
     """One session of claude-opus-5-5 at its list price, $4 in, $20 out and reads at 0.05x,
     writing as Claude Code does: a million tokens for an hour on the main thread and a
@@ -524,6 +548,20 @@ def test_a_cost_records_one_hour_share_counts_its_sessions_untiered_writes_at_fi
         {"session_id": "s1", "model": "claude-opus-5-5", "cache_creation": 400.0, "cache_1h": 300.0, "cache_5m": 100.0},
         {"session_id": "s1", "model": "claude-opus-5-5", "cache_creation": 400.0, "cache_1h": 0.0, "cache_5m": 0.0}])
     assert record_write_tiers(usage, responses)["cache_1h"].tolist() == [375.0]
+
+
+def test_a_cost_records_one_hour_share_stays_a_share_when_its_sessions_counts_disagree():
+    # Claude Code logs a response's total writes and its tiers as separate counts. One-hour
+    # writes over a total of zero made the share infinite, and the fit then raised LinAlgError,
+    # so `ccdrift cost` crashed; found in the audit of 2026-09-25. A session whose responses
+    # wrote nothing by their totals wrote at five minutes, as one that logged no writes at all
+    # does, and one-hour writes over the total are all of it.
+    usage = pd.DataFrame([{"session_id": "s1", "model": "claude-opus-5-5", "cache_creation": 1000.0},
+                          {"session_id": "s2", "model": "claude-opus-5-5", "cache_creation": 1000.0}])
+    responses = pd.DataFrame([
+        {"session_id": "s1", "model": "claude-opus-5-5", "cache_creation": 0.0, "cache_1h": 300.0, "cache_5m": 0.0},
+        {"session_id": "s2", "model": "claude-opus-5-5", "cache_creation": 100.0, "cache_1h": 300.0, "cache_5m": 0.0}])
+    assert record_write_tiers(usage, responses)["cache_1h"].tolist() == [0.0, 1000.0]
 
 
 def test_a_response_is_charged_for_its_own_one_hour_writes_and_one_logging_no_tier_at_five_minutes(tmp_path):

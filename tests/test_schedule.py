@@ -2,6 +2,7 @@
 remove and report on it. Scheduler commands run through fakes; nothing touches the
 real system."""
 
+import os
 import plistlib
 import stat
 import subprocess
@@ -33,6 +34,9 @@ class FakeRun:
 def launchd(tmp_path, results=None, sleep=lambda seconds: None):
     run = FakeRun(results)
     return run, Launchd(run=run, home=tmp_path, uid=501, sleep=sleep)
+
+
+UNLOADED = {("launchctl", "print"): (113, "")}  # launchctl's answer for a service it doesn't know
 
 
 def job_for(tmp_path):
@@ -105,6 +109,23 @@ def test_launchd_install_leaves_nothing_behind_when_loading_fails(tmp_path):
     assert run.calls[-1] == ["launchctl", "bootout", "gui/501/io.github.rkolesnichenko.ccdrift"]
 
 
+def test_launchd_install_leaves_the_agent_it_would_replace_running_when_it_cant_write_the_new_one(tmp_path):
+    # Unloading first, then failing to write, left no job running and a traceback. Found in
+    # the audit of 2026-09-25.
+    run, backend = launchd(tmp_path)
+    backend.install(make_job("09:00", notify=True, python="/venv/bin/python", environ={}))
+    before = backend.plist.read_bytes()
+    run.calls.clear()
+    backend.plist.parent.chmod(0o500)
+    try:
+        with pytest.raises(ScheduleError, match="Can't write"):
+            backend.install(job_for(tmp_path))
+    finally:
+        backend.plist.parent.chmod(0o700)
+    assert run.calls == []
+    assert backend.plist.read_bytes() == before
+
+
 def test_launchd_install_waits_for_the_agent_it_replaces_to_unload(tmp_path):
     # bootout can return while the old agent, or a check it runs, is still going; bootstrap then fails.
     run, backend = launchd(tmp_path, sleep=lambda seconds: run.results.clear())
@@ -135,9 +156,18 @@ def test_launchd_remove_unloads_the_agent_and_deletes_it(tmp_path):
 
 
 def test_launchd_remove_says_so_when_nothing_is_installed(tmp_path):
-    run, backend = launchd(tmp_path)
+    run, backend = launchd(tmp_path, UNLOADED)
     assert backend.remove() is False
-    assert run.calls == []
+    assert run.calls == [["launchctl", "print", "gui/501/io.github.rkolesnichenko.ccdrift"]]
+
+
+def test_launchd_remove_unloads_an_agent_whose_plist_was_deleted_by_hand(tmp_path):
+    # Returning early on a missing plist said nothing was installed while the agent went
+    # on running every hour. Found in the audit of 2026-09-25.
+    run, backend = launchd(tmp_path)
+    assert backend.remove() is True
+    assert run.calls == [["launchctl", "print", "gui/501/io.github.rkolesnichenko.ccdrift"],
+                         ["launchctl", "bootout", "gui/501/io.github.rkolesnichenko.ccdrift"]]
 
 
 def test_launchd_status_shows_runs_exit_code_and_the_last_log_line(tmp_path):
@@ -156,8 +186,14 @@ def test_launchd_status_shows_runs_exit_code_and_the_last_log_line(tmp_path):
 
 
 def test_launchd_status_says_when_nothing_is_installed(tmp_path):
-    run, backend = launchd(tmp_path)
+    run, backend = launchd(tmp_path, UNLOADED)
     assert backend.status() == ["not installed"]
+
+
+def test_launchd_status_says_when_an_agent_is_loaded_without_its_plist(tmp_path):
+    run, backend = launchd(tmp_path)
+    assert backend.status() == [f"loaded, but its plist {backend.plist} is gone; "
+                                "`ccdrift schedule remove` unloads it"]
 
 
 def test_launchd_status_says_so_when_the_plist_cant_be_read(tmp_path):
@@ -285,7 +321,7 @@ def test_schedule_remove_exits_1_when_the_scheduler_cant_be_read(monkeypatch, ca
 
 
 def test_schedule_remove_through_cli_reports_whether_a_job_was_installed(tmp_path, monkeypatch, capsys):
-    run, backend = launchd(tmp_path)
+    run, backend = launchd(tmp_path, UNLOADED)
     monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: backend)
     assert main(["schedule", "remove"]) == 0
     assert capsys.readouterr().out.splitlines() == ["No ccdrift job was installed."]
@@ -295,7 +331,7 @@ def test_schedule_remove_through_cli_reports_whether_a_job_was_installed(tmp_pat
 
 
 def test_schedule_status_through_cli_says_when_nothing_is_installed(tmp_path, monkeypatch, capsys):
-    run, backend = launchd(tmp_path)
+    run, backend = launchd(tmp_path, UNLOADED)
     monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: backend)
     assert main(["schedule", "status"]) == 0
     assert capsys.readouterr().out.splitlines() == ["not installed"]
@@ -344,6 +380,23 @@ def test_systemd_install_writes_both_units_and_starts_a_first_run(tmp_path):
         ["systemctl", "--user", "enable", "--now", "ccdrift-check.timer"],
         ["systemctl", "--user", "start", "--no-block", "ccdrift-check.service"],
     ]
+
+
+def test_only_the_owner_can_read_the_scheduler_files_since_the_command_can_carry_a_secret(tmp_path):
+    # --exec can hold a webhook URL with its token. Found in the audit of 2026-09-25: the
+    # plist and units were written with the umask's permissions, 0644 on most machines.
+    job = make_job("09:00", notify=True, python="/venv/bin/python", environ={},
+                   exec_command="curl -d @- https://hooks.example/T0/secret")
+    umask = os.umask(0o022)
+    try:
+        for backend in (launchd(tmp_path)[1], systemd(tmp_path)[1]):
+            backend.install(job)
+    finally:
+        os.umask(umask)
+    written = [tmp_path / "Library" / "LaunchAgents" / "io.github.rkolesnichenko.ccdrift.plist",
+               tmp_path / "config" / "systemd" / "user" / "ccdrift-check.service",
+               tmp_path / "config" / "systemd" / "user" / "ccdrift-check.timer"]
+    assert [stat.S_IMODE(path.stat().st_mode) for path in written] == [0o600] * 3
 
 
 def test_systemd_install_leaves_nothing_behind_when_enabling_fails(tmp_path):

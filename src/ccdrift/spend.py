@@ -165,12 +165,17 @@ def record_write_tiers(usage: pd.DataFrame, responses: pd.DataFrame) -> pd.DataF
     minutes, as every record was fitted before. Its 1M-tier key is its model's plain name to
     a response, as in joined_prices, so a session holding records under both keys gives both
     one pooled share: a record can't say which thread it ran on. On 2026-09-25 one session
-    of the owner's did, and taking its 1M tier as the main thread's instead fitted worse."""
+    of the owner's did, and taking its 1M tier as the main thread's instead fitted worse.
+    The tiers and the total are counts Claude Code logs apart, so they can disagree: one-hour
+    writes over a total of zero count as none, like a session that wrote nothing, and over a
+    smaller total as all of it. Divided as logged, the first made the share infinite and the
+    fit raise."""
     if usage.empty:
         return usage.assign(cache_1h=pd.Series(dtype="float64"))
     tiers = (responses.assign(model=responses["model"].astype(str))
              .groupby(["session_id", "model"])[[HOUR_WRITES, "cache_creation"]].sum())
-    share = (tiers[HOUR_WRITES] / tiers["cache_creation"]).rename("share")
+    written = tiers["cache_creation"].where(tiers["cache_creation"] > 0)
+    share = (tiers[HOUR_WRITES] / written).clip(upper=1.0).rename("share")
     model = usage["model"].astype(str)
     plain = model.where(~model.str.endswith(LONG_CONTEXT), model.str[:-len(LONG_CONTEXT)])
     keys = pd.MultiIndex.from_arrays([usage["session_id"], plain])

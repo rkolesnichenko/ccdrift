@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,6 +76,25 @@ def _checked(run: Run, argv: list[str], input: Optional[str] = None) -> subproce
     if result.returncode != 0:
         raise ScheduleError(_failure(argv, result))
     return result
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Replace `path` with `text` as a file only its owner can read, since the job's command
+    can carry a webhook's secret given to --exec, through a temporary file of its own so a
+    scheduler never reads half of it. Raises ScheduleError when it can't, leaving `path` as
+    it was."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(text)
+            os.replace(tmp, path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+    except OSError as exc:
+        raise ScheduleError(SCHEDULE_LINES["unwritable"].format(path=path, error=exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -180,10 +200,11 @@ class Launchd:
         """Write and load the agent, then start a first run. On failure, unload it, put
         back the agent it replaced or delete it when there was none, and raise
         ScheduleError."""
-        previous = self.plist.read_bytes() if self.plist.exists() else None
+        previous = self.plist.read_text() if self.plist.exists() else None
+        # Written before the agent it replaces is unloaded, so a folder it can't write to
+        # leaves that agent running. launchd reads a plist only when it loads one.
+        _write_private(self.plist, launchd_plist(job))
         self.run(["launchctl", "bootout", self.service])  # replaces a loaded agent; fails harmlessly otherwise
-        self.plist.parent.mkdir(parents=True, exist_ok=True)
-        self.plist.write_text(launchd_plist(job))
         try:
             self._bootstrap()
             _checked(self.run, ["launchctl", "kickstart", self.service])
@@ -192,7 +213,7 @@ class Launchd:
             if previous is None:
                 self.plist.unlink(missing_ok=True)
                 raise
-            self.plist.write_bytes(previous)
+            _write_private(self.plist, previous)
             try:
                 self._bootstrap()
             except ScheduleError:
@@ -212,15 +233,21 @@ class Launchd:
                 return
         raise ScheduleError(_failure(argv, result))
 
+    def _loaded(self) -> bool:
+        return self.run(["launchctl", "print", self.service]).returncode == 0
+
     def remove(self) -> bool:
-        if not self.plist.exists():
+        # A plist deleted by hand leaves its agent loaded, running the check until logout.
+        if not self.plist.exists() and not self._loaded():
             return False
         self.run(["launchctl", "bootout", self.service])
-        self.plist.unlink()
+        self.plist.unlink(missing_ok=True)
         return True
 
     def status(self) -> list[str]:
         if not self.plist.exists():
+            if self._loaded():
+                return [SCHEDULE_LINES["loaded_without_plist"].format(plist=self.plist)]
             return [SCHEDULE_LINES["not_installed"]]
         # The plist is ccdrift's own, but a half-written or hand-edited one must read as a
         # status rather than as a traceback: `status` is what someone runs to find out why
@@ -280,9 +307,8 @@ class Systemd:
         back the units they replaced, or disable and delete them when there were none,
         and raise ScheduleError."""
         previous = {path: path.read_text() for path in (self.timer, self.service) if path.exists()}
-        self.unit_dir.mkdir(parents=True, exist_ok=True)
         for name, text in systemd_units(job).items():
-            (self.unit_dir / name).write_text(text)
+            _write_private(self.unit_dir / name, text)
         try:
             _checked(self.run, ["systemctl", "--user", "daemon-reload"])
             _checked(self.run, ["systemctl", "--user", "enable", "--now", self.timer.name])
@@ -293,7 +319,7 @@ class Systemd:
                 raise
             for path in (self.timer, self.service):
                 if path in previous:
-                    path.write_text(previous[path])
+                    _write_private(path, previous[path])
                 else:
                     path.unlink(missing_ok=True)
             self.run(["systemctl", "--user", "daemon-reload"])

@@ -13,9 +13,10 @@ from ccdrift.logs import judged_turns
 from ccdrift.report import _incident_days, daily_rows, run_report, version_key
 from ccdrift.state import new_state, save_state
 from ccdrift.texts import miss_reason_line
-from tests.helpers import (DAY, HAIKU, QUIET, at, busy_days, compact_boundary, daily_turns,
-                           damage_responses_table, line, main_thread_days, prompt, stop_hook_summary, text,
-                           tool_result, write)
+from tests.helpers import (DAY, HAIKU, PRIVATE_PATH, PRIVATE_TEXT, QUIET, api_error, at, busy_days,
+                           compact_boundary, daily_turns, damage_responses_table, hook_record, line,
+                           main_thread_days, prompt, stop_hook_summary, text, tool_loop_days, tool_result,
+                           tool_use, write)
 
 
 def test_report_lists_recent_days_with_their_metrics(tmp_path, capsys):
@@ -223,6 +224,44 @@ def test_report_json_holds_aggregates_without_paths_or_session_ids(tmp_path, cap
     assert str(tmp_path) not in out and ".jsonl" not in out and '"s0"' not in out
 
 
+def private_corpus(root):
+    """Three days in a project folder whose name, branch, working directory, hook commands and
+    tool ids are all private: main-thread sessions, subagents, hooks and a failed request."""
+    main_thread_days(root, [{"extra": {"gitBranch": "feature/secret-branch", "cwd": PRIVATE_PATH}}] * 3)
+    tool_loop_days(root, 3, subagent=True)
+    write(root / "s-secret" / "subagents" / "agent-x.jsonl",
+          [line("x1", text(40), ts=at(DAY + 50), sid="s-secret", sidechain=True, agent_type="Explore",
+                cache_read=900, cache_creation=100, version="2.1.261", entrypoint="cli",
+                branch="feature/secret-branch")])
+    write(root / "hooked.jsonl", [
+        line("h1", tool_use("toolu_secret", "Bash"), ts=at(DAY + 30), sid="s-secret", cache_read=900,
+             cache_creation=100, version="2.1.261", entrypoint="cli", branch="feature/secret-branch"),
+        hook_record(at(DAY + 31), "PreToolUse", "toolu_secret", "Bash", sid="s-secret"),
+        hook_record(at(DAY + 32), "PostToolUse", "toolu_secret", "Bash", sid="s-secret"),
+        stop_hook_summary(at(DAY + 35), 1, errors=("exit 1",), durations=(400,), sid="s-secret", uuid="hook-1"),
+        api_error(at(DAY + 40), sid="s-secret")])
+
+
+@pytest.mark.parametrize("by", ["day", "version"])
+def test_report_json_names_no_folder_session_branch_hook_command_or_tool_id(tmp_path, capsys, by):
+    # The fixture above had no subagents, hooks, failures, incidents or branches, so it had
+    # nothing to leak, and the version view was never checked. Found in the audit of 2026-09-25.
+    private_corpus(tmp_path / "logs" / "-Users-me-secretproject")
+    state = tmp_path / "state.json"
+    save_state(state, {**new_state(), "incidents": [
+        {"metric": "cache_ratio", "start": "2026-09-01", "end": "2026-09-02", "status": "recovered",
+         "source": "check", "closed_by": "check", "recovered_from": "2026-09-03", "opened_on": "2026-09-01",
+         "closed_on": "2026-09-03", "versions": ["2.1.226"], "cost": 1_000}]})
+    assert run_report(tmp_path / "logs", state, by=by, as_json=True, today=date(2026, 9, 4)) == 0
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    if by == "day":  # the fixture reached every part of the view that could leak it
+        assert payload["incidents"] and payload["hooks"] and payload["subagents"] and payload["failures"]
+    for private in (str(tmp_path), "secretproject", "secret-branch", PRIVATE_PATH, PRIVATE_TEXT, "toolu_secret",
+                    "s-secret", "secret-hook", '"s0"', ".jsonl"):
+        assert private not in out
+
+
 def test_the_day_view_says_why_the_cache_missed(tmp_path, capsys):
     main_thread_days(tmp_path / "p", [{}, {}])
     write(tmp_path / "p" / "extra.jsonl", [line("x1", text(40), ts=at(0), version="2.1.226",
@@ -386,6 +425,23 @@ def test_report_html_writes_a_page_only_its_owner_can_read(tmp_path, existing):
         os.umask(umask)
     assert stat.S_IMODE(page.stat().st_mode) == 0o600
     assert "Users/me/app" in page.read_text()
+
+
+def test_report_html_writes_nothing_when_it_cant_make_the_page_private(tmp_path, capsys, monkeypatch):
+    # The failed chmod was swallowed and the page written world-readable. Found in the audit
+    # of 2026-09-25.
+    main_thread_days(tmp_path / "logs" / "-Users-me-app", [{}] * 3)
+    page = tmp_path / "report.html"
+    page.write_text("an older page")
+    page.chmod(0o644)
+
+    def refuse(fd, mode):
+        raise PermissionError("not permitted")
+
+    monkeypatch.setattr(os, "fchmod", refuse)
+    assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4), html_path=page) == 1
+    assert "Can't write" in capsys.readouterr().err
+    assert page.read_text() == "an older page"
 
 
 def test_report_html_given_a_folder_leaves_its_permissions_alone(tmp_path, capsys):
