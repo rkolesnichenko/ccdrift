@@ -2,7 +2,7 @@
 
 import platform
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -22,6 +22,7 @@ from ccdrift.loops import LoopSetting, loop_warning
 from ccdrift.sessions import context_alerts, session_starts
 from ccdrift.state import new_state, save_state
 from ccdrift.texts import draft_text, version_span
+import tests.helpers as helpers
 from tests.helpers import (DAY, PRIVATE_PATH, PRIVATE_TEXT, at, attachment, busy_days, deferred_tools, failure_days,
                            hook_record, line, main_thread_days, nth_day, prompt, prompt_snapshot, skill_listing, text,
                            tool_loop_days, tool_use, write)
@@ -659,8 +660,10 @@ def test_a_cut_short_draft_of_a_run_that_deepened_says_what_was_reported_before(
     assert [(e["since"], e.get("worse_than")) for e in episodes] == [
         ("2026-09-15", None), ("2026-09-16", {"share": 0.0125, "since": "2026-09-15"})]
     text = draft_text(alert_facts(tables, "cut_short", episodes[1], {}, date(2026, 9, 19), "macOS 26.5.2"))
-    assert ("On 2026-09-16, 16 of 400 main-thread responses (4.00%) stopped at the token limit, against 5 of 5,600 "
-            "(0.09%) on the 14 days before and 0 of 800 (0.00%) on the 2 days after. The check had reported this run "
+    # Before is the check's own usual level: the days of the run it deepened are left out, as
+    # the method paragraph says. Found in the final review of 2026-09-27.
+    assert ("On 2026-09-16, 16 of 400 main-thread responses (4.00%) stopped at the token limit, against 0 of 5,200 "
+            "(0.00%) on the 13 days before and 0 of 800 (0.00%) on the 2 days after. The check had reported this run "
             "at 1.25% on 2026-09-15; this day stood 3 times above it.") in text
 
 
@@ -966,3 +969,105 @@ def test_no_alert_draft_names_a_folder_session_skill_mcp_server_hook_command_or_
         assert private not in out
     if kind == "hook_changes":  # Claude Code's own tools are named: the rule is names, not the lack of them
         assert "| PreToolUse | Bash |" in out
+
+
+# ---------------------------------------------------------------------------
+# Found in the final review of 2026-09-27
+# ---------------------------------------------------------------------------
+
+def test_a_tool_loop_draft_counts_the_turn_that_raised_the_warning_though_claude_code_logs_milliseconds(
+        tmp_path, monkeypatch):
+    # The record keeps `since` and `at` to the second; Claude Code logs milliseconds, so the
+    # alarm turn fell after `at` and a one-turn rise couldn't be drafted at all.
+    monkeypatch.setattr(helpers, "at", lambda seconds: (helpers.T0 + timedelta(seconds=seconds, milliseconds=537))
+                        .isoformat().replace("+00:00", "Z"))
+    tables, warning = loop_warned(tmp_path)
+    facts = alert_facts(tables, "loop_warnings", warning, {}, date(2026, 9, 26), "macOS 26.5.2")
+    assert facts["counts"]["during"] == (warning["misses"], warning["turns"]) == (8, 8)
+    tool_loop_days(tmp_path / "one", 22, misses=1)
+    one = parse_all(tmp_path / "one")
+    warning = next(w for hour in range(24) for w in [loop_warning(one.responses, "main", new_state(),
+                                                                  datetime(2026, 9, 22, hour, 59, tzinfo=timezone.utc),
+                                                                  LoopSetting(p1=0.02, h=2.0, min_sessions=1))]
+                   if w)
+    assert alert_facts(one, "loop_warnings", warning, {}, date(2026, 9, 23), "macOS 26.5.2")["counts"]["during"] == (1, 1)
+
+
+def test_a_cut_short_alert_whose_day_no_longer_reaches_the_share_is_no_longer_held(tmp_path, capsys):
+    # Claude Code's cleanup can delete the transcript that held the cut responses while
+    # another from that day survives: the day is still active, its share is gone.
+    tables, episodes = cut_episodes(tmp_path, CUT_SPEC)
+    save_state(tmp_path / "state.json", {**new_state(), "cut_short": [{**episodes[0], "since": "2026-09-10",
+                                                                      "days": ["2026-09-10"]}]})
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "cut_short", today=date(2026, 9, 22)) == 2
+    assert capsys.readouterr().err == "The history no longer holds the cut-short alert from 2026-09-10.\n"
+
+
+def main_thread_hooks(root, project, days, hooked_tools, version, tools=("Bash", "Read")):
+    """A CLI session a day in `project` on `days`, calling each of `tools` four times on the
+    main thread, with a PreToolUse hook record on the calls of `hooked_tools`."""
+    for d in days:
+        sid = f"{project}-{d}"
+        records = [prompt(at(d * DAY), sid=sid)]
+        for k, tool in enumerate(t for t in tools for _ in range(4)):
+            tid, ts = f"toolu_m{d}_{k}", d * DAY + 20 * k
+            records.append(line(f"{tid}-r", tool_use(tid, tool), ts=at(ts), sid=sid, version=version, entrypoint="cli",
+                                cache_read=900, cache_creation=100))
+            if tool in hooked_tools:
+                records.append(hook_record(at(ts + 1), "PreToolUse", tid, tool, sid=sid, version=version))
+        write(root / project / f"{sid}.jsonl", records)
+
+
+def hook_facts_of(path, today):
+    tables = parse_all(path / "logs")
+    state = new_state()
+    hook_coverage_alerts(tables.hook_coverage, state, today)
+    return alert_facts(tables, "hook_changes", find_alert(hook_groups(state["hook_changes"])), {}, today, "macOS 26.5.2")
+
+
+def test_a_hook_draft_counts_the_streams_that_changed_not_every_pairing_of_their_projects_events_and_tools(tmp_path):
+    # One project hooked Bash only and the other Read only; one update stopped both.
+    main_thread_hooks(tmp_path / "logs", "-Users-me-alpha", range(0, 14), {"Bash"}, "2.1.260")
+    main_thread_hooks(tmp_path / "logs", "-Users-me-alpha", range(14, 20), set(), "2.1.270")
+    main_thread_hooks(tmp_path / "logs", "-Users-me-beta", range(0, 14), {"Read"}, "2.1.260")
+    main_thread_hooks(tmp_path / "logs", "-Users-me-beta", range(14, 20), set(), "2.1.270")
+    facts = hook_facts_of(tmp_path, date(2026, 9, 22))
+    assert facts["counts"] == {"before": (28, 28), "after": (0, 12)}
+    assert ("Before 2026-09-15, PreToolUse hooks ran on 112 of 112 CLI main-thread tool calls; from then, on 0 of 48."
+            in draft_text(facts))
+
+
+def test_a_hook_draft_of_a_stream_idle_across_the_step_compares_with_what_the_rule_compared(tmp_path):
+    # The stream's last transcripts before the step came three weeks earlier; the rule
+    # compared with them, and so does the draft.
+    main_thread_hooks(tmp_path / "logs", "-Users-me-alpha", range(0, 12), {"Bash"}, "2.1.260", tools=("Bash",))
+    main_thread_hooks(tmp_path / "logs", "-Users-me-alpha", range(32, 37), set(), "2.1.270", tools=("Bash",))
+    facts = hook_facts_of(tmp_path, date(2026, 10, 8))
+    assert (facts["counts"], len(facts["periods"]["before"])) == ({"before": (10, 10), "after": (0, 5)}, 10)
+    assert "Before 2026-10-03, PreToolUse hooks ran on 40 of 40 CLI main-thread tool calls; from then, on 0 of 20." \
+        in draft_text(facts)
+
+
+def test_a_session_start_draft_of_a_step_in_one_project_of_several_measures_that_project(tmp_path):
+    # Six larger projects held steady while one stepped: pooled, the step read as 1.00 against 1.00.
+    start_sessions(tmp_path / "logs", "-Users-me-alpha", [50_000] * 20, 0, "2.1.266", ["r"], ["Read"], {"Bash": 100})
+    start_sessions(tmp_path / "logs", "-Users-me-alpha", [80_000] * 20, 20, "2.1.266", ["r"], ["Read"], {"Bash": 100})
+    for project in ("-Users-me-beta", "-Users-me-gamma", "-Users-me-delta"):
+        start_sessions(tmp_path / "logs", project, [120_000] * 40, 0, "2.1.266", ["r"], ["Read"], {"Bash": 100})
+    tables = parse_all(tmp_path / "logs")
+    records = context_alerts(session_starts(tables.responses), new_state(), date(2026, 9, 25))
+    assert [(r["projects"], r["of_projects"]) for r in records] == [(["-Users-me-alpha"], 4)]
+    facts = alert_facts(tables, "context_changes", records[0], {}, date(2026, 10, 11), "macOS 26.5.2")
+    assert (facts["medians"]["before"][1:], facts["medians"]["after"][1:]) == ((50_000, 1.0), (80_000, 1.6))
+
+
+def test_a_hook_draft_of_a_later_change_leaves_out_the_streams_of_an_earlier_one(tmp_path):
+    # Two stops a month apart in one thread are two alerts; the later one's draft counts
+    # only its own stream, not the stream that stopped weeks before.
+    main_thread_hooks(tmp_path / "logs", "-Users-me-alpha", range(0, 14), {"Bash"}, "2.1.260", tools=("Bash",))
+    main_thread_hooks(tmp_path / "logs", "-Users-me-alpha", range(14, 20), set(), "2.1.270", tools=("Bash",))
+    main_thread_hooks(tmp_path / "logs", "-Users-me-beta", range(0, 40), {"Read"}, "2.1.260", tools=("Read",))
+    main_thread_hooks(tmp_path / "logs", "-Users-me-beta", range(40, 46), set(), "2.1.280", tools=("Read",))
+    facts = hook_facts_of(tmp_path, date(2026, 10, 18))
+    assert (facts["change"]["since"], facts["counts"]) == ("2026-10-11", {"before": (14, 14), "after": (0, 6)})
+

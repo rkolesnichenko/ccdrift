@@ -23,15 +23,15 @@ from ccdrift.changelog import (TOPIC_OF, changelog_path, days_before, load_chang
 from ccdrift.components import MCP_TOOL, compare_components
 from ccdrift.detector import DetectorConfig, baseline_bins
 from ccdrift.failures import (ACTIVE_RESPONSES, CUT_FLOOR, CUT_RATIO, CUT_SHARE, CUT_USUAL, MIN_BEFORE_DAYS,
-                              cut_shares, failure_counts, judged_failures)
+                              cut_shares, failure_counts, judged_failures, usual_days)
 from ccdrift.history import HistoryError, load_history
-from ccdrift.hookcover import MERGE_DAYS, SETTING, merged, stream_changes, transcript_states
+from ccdrift.hookcover import MERGE_DAYS, SETTING, STREAM, merged, stream_changes, transcript_states
 from ccdrift.incidents import OPEN_END, RECOVERY_BINS, exclusions, incident_cost, incident_versions, versions_text
 from ccdrift.logs import HOOK_EVENTS, LOOP_GAP_SECONDS, LOOP_MISS_SHARE, Tables, judged_turns, outside_sdk
 from ccdrift.loops import BASE_DAYS, LOOP_SETTINGS, WINDOW_DAYS, loop_turns
 from ccdrift.report import reason_counts
 from ccdrift.sessions import (BASELINE, CHANGE, MIN_BASELINE, MIN_PROJECT_SESSIONS, PROJECT_BASELINE, SIDE, SIDE_DAYS,
-                              WINDOW, found_changes, ratio_starts, session_starts)
+                              WINDOW, found_changes, project_of, ratio_starts, session_starts)
 from ccdrift.state import load_state
 from ccdrift.texts import (ALERT_NAMES, BEFORE_DAYS, COMMAND_LINES, DRAFT_LINES, DRAFT_SETTINGS, SHORT_NAMES,
                            draft_text, no_transcripts_message, version_key)
@@ -269,8 +269,11 @@ def _loop_facts(tables: Tables, warning: dict[str, Any], today: date) -> Optiona
     since, at = pd.Timestamp(warning["since"]), pd.Timestamp(warning["at"])
     first = date.fromisoformat(warning["at"][:10]) - timedelta(days=WINDOW_DAYS - 1)
     days = turns["day"]
+    # The record keeps its times to the second and Claude Code logs milliseconds, so the
+    # turns are compared to the second, or the turn that raised the warning falls after it.
+    seconds = turns["timestamp"].dt.floor("s")
     frames = {"before": turns[(days >= (first - timedelta(days=BASE_DAYS)).isoformat()) & (days < first.isoformat())],
-              "during": turns[(turns["timestamp"] >= since) & (turns["timestamp"] <= at)]}
+              "during": turns[(seconds >= since) & (seconds <= at)]}
     later = sorted(days[(days > warning["at"][:10]) & (days < today.isoformat())].unique())[:AFTER_DAYS]
     frames["after"] = turns[days.isin(later)]
     during = frames["during"]
@@ -279,7 +282,7 @@ def _loop_facts(tables: Tables, warning: dict[str, Any], today: date) -> Optiona
     periods = {name: sorted(frame["day"].unique()) for name, frame in frames.items()}
     missed = during[during["is_loop_miss"]]
     main = responses["main_thread"].astype(bool)
-    stamps = responses["timestamp"]
+    stamps = responses["timestamp"].dt.floor("s")
     in_rise = responses[(main if stream == "main" else ~main) & outside_sdk(responses)
                         & (stamps >= since) & (stamps <= at)]
     setting = LOOP_SETTINGS[stream]
@@ -311,7 +314,11 @@ def _cut_facts(tables: Tables, episode: dict[str, Any], today: date) -> Optional
         if share < CUT_SHARE:
             break
         run.append(day)
-    periods = {"before": sorted(days[(days < since) & (days >= earliest)]), "during": run,
+    if not run:  # the day is still active but no longer cut short, as after part of it was deleted
+        return None
+    # The days the check compared with, its own run's left out as failures.usual_days leaves them.
+    usual = usual_days(active[(days < since) & (days >= earliest)], CUT_SHARE)
+    periods = {"before": sorted(usual["day"].astype(str)), "during": run,
                "after": sorted(days[days > run[-1]])[:AFTER_DAYS]}
     stop = turns["stop_reason"].astype("string")
     marked = turns.assign(cut=stop.isin(["max_tokens", "refusal"]).fillna(False))
@@ -385,6 +392,11 @@ def _start_facts(tables: Tables, record: dict[str, Any], today: date) -> Optiona
     if change is None:
         return None
     rated = step_ratios(starts, change.since)
+    # The projects the step showed in, as the record names them: pooled with projects that
+    # held steady, a step in one of several would read as no change at all.
+    moved = record.get("projects") or []
+    if moved:
+        rated = rated[rated["project"].astype(str).isin(moved)]
     days = rated["day"].astype(str)
     earliest = (date.fromisoformat(change.since) - timedelta(days=SIDE_DAYS)).isoformat()
     latest = (date.fromisoformat(change.until) + timedelta(days=SIDE_DAYS)).isoformat()
@@ -437,19 +449,32 @@ def _hook_facts(tables: Tables, group: dict[str, Any], today: date) -> Optional[
     the history no longer shows it."""
     coverage = tables.hook_coverage
     states = transcript_states(coverage, today, SETTING.min_calls)
-    found = [alert for alert in merged(stream_changes(states, SETTING))
+    changes = stream_changes(states, SETTING)
+    found = [alert for alert in merged(changes)
              if (alert["thread"], alert["direction"]) == (group["thread"], group["direction"])
              and _days_apart(alert["since"], group["since"]) <= MERGE_DAYS]
     if not found:
         return None
     alert = min(found, key=lambda change: _days_apart(change["since"], group["since"]))
-    rows = states[(states["thread"] == alert["thread"]) & states["project"].isin(alert["projects"])
-                  & states["event"].isin(alert["events"]) & states["tool"].isin(alert["tools"])]
-    days = rows["day"].astype(str)
+    # The streams merged folded into the alert: its thread and direction, starting within
+    # MERGE_DAYS of its first. Only those count; every pairing of their projects, events
+    # and tools would count streams that never changed.
+    streams = [change for change in changes
+               if (change["thread"], change["direction"]) == (alert["thread"], alert["direction"])
+               and alert["since"] <= change["since"]
+               and (date.fromisoformat(change["since"]) - date.fromisoformat(alert["since"])).days <= MERGE_DAYS]
     earliest = (date.fromisoformat(alert["since"]) - timedelta(days=SIDE_DAYS)).isoformat()
     latest = (date.fromisoformat(alert["until"]) + timedelta(days=SIDE_DAYS)).isoformat()
-    frames = {"before": rows[(days >= earliest) & (days < alert["since"])],
-              "after": rows[(days >= alert["since"]) & (days <= latest)]}
+    parts: dict[str, list[pd.DataFrame]] = {"before": [], "after": []}
+    for change in streams:
+        stream = states[(states[STREAM] == pd.Series({name: change[name] for name in STREAM})).all(axis=1)]
+        days = stream["day"].astype(str)
+        before = stream[(days >= earliest) & (days < alert["since"])]
+        if before.empty:  # idle across the step: the rule compared with its last transcripts, however old
+            before = stream[days < change["since"]].tail(SETTING.baseline)
+        parts["before"].append(before)
+        parts["after"].append(stream[(days >= alert["since"]) & (days <= latest)])
+    frames = {name: pd.concat(frames_of) if frames_of else states.iloc[0:0] for name, frames_of in parts.items()}
     by_version = {name: frame.explode("versions").rename(columns={"versions": "version"}).assign(
         on=lambda f: f["on"].astype(bool)) for name, frame in frames.items()}
     files = {name: sorted(frame["source_file"].astype(str).unique()) for name, frame in frames.items()}
@@ -460,7 +485,9 @@ def _hook_facts(tables: Tables, group: dict[str, Any], today: date) -> Optional[
     turns = judged_turns(tables.responses, today)
     tools = coverage.loc[coverage["source_file"].astype(str).isin(files["before"] + files["after"]), "tool"].astype(str)
     servers = {tool[len(MCP_TOOL):] for tool in tools if tool.startswith(MCP_TOOL)}
-    changed = coverage[coverage["event"].isin(alert["events"]) & coverage["tool"].isin(alert["tools"])]
+    keys = {(change["project"], change["event"], change["tool"]) for change in streams}
+    changed = coverage[[key in keys for key in zip(coverage["source_file"].astype(str).map(project_of),
+                                                   coverage["event"], coverage["tool"])]]
     ran = {name: {event: tuple(sum(pair[i] for (e, _), pair in rows.items() if e == event) for i in (0, 1))
                   for event in alert["events"]}
            for name, rows in ((name, _call_rows(changed, names)) for name, names in files.items())}

@@ -168,7 +168,7 @@ def _worst_share(frame: pd.DataFrame) -> float:
     return float(cut_shares(frame).max()) if len(frame) else 0.0
 
 
-def _usual_days(before: pd.DataFrame, share: float) -> pd.DataFrame:
+def usual_days(before: pd.DataFrame, share: float) -> pd.DataFrame:
     """The days before a candidate that stand for its usual level: `before` without the
     unbroken run of days at or above `share` that ends at its latest day. A day inside the
     same run of bad days is the regression, not the usual level: the idea
@@ -197,7 +197,7 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
     def hit(row: pd.Series, before: pd.DataFrame) -> bool:
         cut = int(row["truncated"] + row["refused"])
         today_share = _day_share(row)
-        usual = max(CUT_USUAL, _worst_share(_usual_days(before, share)))
+        usual = max(CUT_USUAL, _worst_share(usual_days(before, share)))
         return cut >= floor and today_share >= share and today_share >= CUT_RATIO * usual
 
     def ongoing(episode: dict[str, Any], row: pd.Series, before: pd.DataFrame) -> bool:
@@ -226,7 +226,7 @@ def cut_short(counts: pd.DataFrame, state: dict[str, Any], today: date,
     new = []
     for row, before, covering in _judged_days(counts, "cut_short", state, today, hit,
                                               ongoing=ongoing, louder=louder):
-        usual = _usual_days(before, share)
+        usual = usual_days(before, share)
         episode = {"since": str(row["day"]), "days": [str(row["day"])],
                    "cut": int(row["truncated"] + row["refused"]), "truncated": int(row["truncated"]),
                    "refused": int(row["refused"]), "responses": int(row["responses"]),
