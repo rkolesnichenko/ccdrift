@@ -133,6 +133,16 @@ G3, G8 and G9 used to print the best setting they found as a pass, whatever ccdr
 - **G8 holds.** 18,856 main-thread tool-loop turns (11 misses, 37 days): p1 = 0.02, h = 3, one session raises no false alarm over 17 days judged and catches 50 of 50 in a median 75 turns.
 - **G9 fails on the shipped setting, and nothing passes.** 64,302 subagent tool-loop turns (127 misses, 33 days): p1 = 0.02, h = 8, one session still raises no false alarm over 16 days, but a planted 2% miss rate now takes a median 359 turns to catch, past the bar of 300; on 2026-09-24 it took 262. Of the 36 combinations none passes: those that catch within 300 turns raise 1 to 57 false alarms. With nothing passing, the subagent stream now ships no setting and gets no warning; its tool-loop misses stay in `ccdrift report` and the weekly summary, and the daily verdict was already the main signal there.
 
+## Tool calls copied into a second transcript, 2026-09-27
+
+An audit on 2026-09-25 noted that hook coverage, unlike responses, never removes a copy of a record from a second transcript, so a resumed transcript counts the tool calls copied from the one before it. Measured read-only over every transcript on disk on 2026-09-27 (2,409 files) and through the shipped `transcript_states` and `stream_changes`.
+
+- **A copy is counted again, on the day it was first made, and often without its hooks.** 713 of 101,832 tool calls (0.70%) sit in more than one transcript: 701 in two, and 12 in ten subagent transcripts each. They are 4% to 72% of the calls of the 18 transcripts holding them, a median 22%, and half or more in one. A copy keeps its original timestamp, and in the first transcript by path 710 of the 713 had a PreToolUse hook record against 511 of the 809 later copies (PostToolUse 699 against 783). The original can't be told from the copy by the session id either: 687 of the calls carry the id of whichever transcript holds them.
+- **It changes no stream on these logs.** Counting each call once, in the first transcript by path as `parse_all` does for responses, removes 1,610 of 205,294 counted calls and 12 of 6,536 transcript states, all on the main thread. It moves the first day of 18 transcripts back from the parent session's day to their own, and turns one from unhooked to hooked (main thread, PreToolUse, Bash, 2026-08-18). All 14 stream changes at the shipped setting come out identical in every field. The rule needs the last 3 transcripts of a stream to agree, so a single transcript miscounted this way can hold a change back until it leaves those 3, but can't raise one on its own.
+- **So it isn't fixed.** The store keeps each transcript's coverage as totals and skips a transcript that hasn't changed, so a call can't be de-duplicated across transcripts after the fact. That would take tool ids stored per transcript, a schema and a parser version, and every transcript read again, for a skew that moved nothing here. A corpus where resumed sessions are the norm, and their copies the bulk of a stream's calls, would change that.
+
+These counts come from a one-off measurement with no in-repo reproduction path.
+
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
 
 Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).
