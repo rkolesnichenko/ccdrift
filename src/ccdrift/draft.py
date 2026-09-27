@@ -8,6 +8,7 @@ incident."""
 from __future__ import annotations
 
 import platform
+import statistics
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -19,6 +20,7 @@ import pandas as pd
 from ccdrift import __version__
 from ccdrift.changelog import (TOPIC_OF, changelog_path, days_before, load_changelog, note_versions,
                                release_notes)
+from ccdrift.components import MCP_TOOL, compare_components
 from ccdrift.detector import DetectorConfig, baseline_bins
 from ccdrift.failures import (ACTIVE_RESPONSES, CUT_FLOOR, CUT_RATIO, CUT_SHARE, CUT_USUAL, MIN_BEFORE_DAYS,
                               cut_shares, failure_counts, judged_failures)
@@ -27,6 +29,8 @@ from ccdrift.incidents import OPEN_END, RECOVERY_BINS, exclusions, incident_cost
 from ccdrift.logs import LOOP_GAP_SECONDS, LOOP_MISS_SHARE, Tables, judged_turns, outside_sdk
 from ccdrift.loops import BASE_DAYS, LOOP_SETTINGS, WINDOW_DAYS, loop_turns
 from ccdrift.report import reason_counts
+from ccdrift.sessions import (BASELINE, CHANGE, MIN_BASELINE, MIN_PROJECT_SESSIONS, PROJECT_BASELINE, SIDE, SIDE_DAYS,
+                              WINDOW, found_changes, ratio_starts, session_starts)
 from ccdrift.state import load_state
 from ccdrift.texts import (ALERT_NAMES, BEFORE_DAYS, COMMAND_LINES, DRAFT_LINES, DRAFT_SETTINGS, SHORT_NAMES,
                            draft_text, no_transcripts_message, version_key)
@@ -303,7 +307,82 @@ def _cut_facts(tables: Tables, episode: dict[str, Any], today: date) -> Optional
             "notes_from": (versions_text(turns, episode["days"]), days_before(since, 7), episode["days"][-1])}
 
 
-ALERT_FACTS = {"loop_warnings": _loop_facts, "cut_short": _cut_facts}
+def _median_rows(frames: dict[str, pd.DataFrame]) -> list[tuple[str, str, int, float, float]]:
+    """(version, period, sessions, median start tokens, median ratio to the project's
+    level) for each Claude Code version and period with sessions, ordered by version
+    (`version_key`) then period."""
+    rows = []
+    for version in sorted({str(v) for frame in frames.values() for v in frame["version"].dropna()}, key=version_key):
+        for name, frame in frames.items():
+            group = frame[frame["version"].astype(str) == version]
+            if len(group):
+                rows.append((version, name, len(group), float(group["prompt_tokens"].median()),
+                             float(group["ratio"].median())))
+    return rows
+
+
+def _builtin_tools(what: Optional[dict[str, Any]]) -> dict[str, list[str]]:
+    """The built-in tools a session-start comparison found added or removed, by name: the
+    tool definitions and deferred tools that aren't an MCP server's. Claude Code names
+    those; a draft names nothing else it finds."""
+    found: dict[str, list[str]] = {}
+    for word in ("added", "removed") if what else ():
+        names = sorted({name for part in ("tools", "deferred") for name in what[word].get(part, [])
+                        if not name.startswith(MCP_TOOL)})
+        if names:
+            found[word] = names
+    return found
+
+
+def step_ratios(starts: pd.DataFrame, since: str) -> pd.DataFrame:
+    """The session starts of projects with at least MIN_PROJECT_SESSIONS sessions before
+    `since`, each with its ratio to its project's level when the step began: the median of
+    that project's last PROJECT_BASELINE sessions before it. A fixed level, unlike
+    ratio_starts' rolling one, which catches up with a step within PROJECT_BASELINE
+    sessions and would read every later session as usual."""
+    before = starts[starts["day"].astype(str) < since]
+    levels = {project: statistics.median(rows["prompt_tokens"].astype(float).tolist()[-PROJECT_BASELINE:])
+              for project, rows in before.groupby(before["project"].astype(str), sort=True)
+              if len(rows) >= MIN_PROJECT_SESSIONS}
+    known = starts[starts["project"].astype(str).isin(levels)]
+    level = known["project"].astype(str).map(levels).astype(float)
+    return known.assign(ratio=known["prompt_tokens"].astype(float) / level)
+
+
+def _start_facts(tables: Tables, record: dict[str, Any], today: date) -> Optional[dict[str, Any]]:
+    """What a session-start draft says: each project's sessions against its level when the
+    step began (step_ratios) over the SIDE_DAYS before the step and from it through SIDE_DAYS
+    after its window, which is what the check compared projects over, and what the sessions
+    started with, compared as the check compared it. The step is found again as the check
+    found it (found_changes over sessions.ratio_starts), by its first day. None when the
+    history no longer shows it."""
+    starts = session_starts(tables.responses)
+    starts = starts[starts["day"].astype(str) < today.isoformat()].reset_index(drop=True)
+    change = next((found for found in found_changes(ratio_starts(starts)) if found.since == record["since"]), None)
+    if change is None:
+        return None
+    rated = step_ratios(starts, change.since)
+    days = rated["day"].astype(str)
+    earliest = (date.fromisoformat(change.since) - timedelta(days=SIDE_DAYS)).isoformat()
+    latest = (date.fromisoformat(change.until) + timedelta(days=SIDE_DAYS)).isoformat()
+    frames = {"before": rated[(days >= earliest) & (days < change.since)],
+              "after": rated[(days >= change.since) & (days <= latest)]}
+    what = compare_components(tables.components, change.window_files, change.baseline_files)
+    turns = judged_turns(tables.responses, today)
+    periods = {name: sorted(frame["day"].astype(str).unique()) for name, frame in frames.items()}
+    return {"periods": periods, "up": change.up,
+            "medians": {name: (len(frame), float(frame["prompt_tokens"].median()) if len(frame) else 0.0,
+                               float(frame["ratio"].median()) if len(frame) else 0.0) for name, frame in frames.items()},
+            "span": title_versions(frames["after"]["version"]), "versions": _median_rows(frames),
+            "what": what, "builtin": _builtin_tools(what),
+            "environment_rows": _on_days(turns, periods["after"]), "thread": "main", "topic": "context",
+            "method": {"kind": "context_changes", "window": WINDOW, "baseline": BASELINE, "min_baseline": MIN_BASELINE,
+                       "change": CHANGE, "side": SIDE, "project_baseline": PROJECT_BASELINE,
+                       "min_project": MIN_PROJECT_SESSIONS, "side_days": SIDE_DAYS},
+            "notes_from": (versions_text(turns, record["days"]), days_before(record["since"], 7), record["days"][-1])}
+
+
+ALERT_FACTS = {"context_changes": _start_facts, "loop_warnings": _loop_facts, "cut_short": _cut_facts}
 
 
 def alert_facts(tables: Tables, kind: str, alert: dict[str, Any], changelog: dict[str, list[str]],

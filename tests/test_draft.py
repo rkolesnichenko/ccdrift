@@ -18,10 +18,11 @@ from ccdrift.draft import (alert_facts, draft_markdown, draft_periods, find_aler
 from ccdrift.failures import cut_short, failure_counts, judged_failures
 from ccdrift.logs import judged_turns, parse_all, parse_source
 from ccdrift.loops import LoopSetting, loop_warning
+from ccdrift.sessions import context_alerts, session_starts
 from ccdrift.state import new_state, save_state
 from ccdrift.texts import draft_text, version_span
-from tests.helpers import (DAY, at, busy_days, failure_days, line, main_thread_days, nth_day, prompt, text,
-                           tool_loop_days, write)
+from tests.helpers import (DAY, at, attachment, busy_days, deferred_tools, failure_days, line, main_thread_days, nth_day,
+                           prompt, prompt_snapshot, skill_listing, text, tool_loop_days, write)
 
 
 BASELINE_NOTE = ("Before is the baseline ccdrift judged the incident against: the days it compared with, which skip "
@@ -685,3 +686,106 @@ def test_an_alert_drafts_after_is_at_most_14_days(tmp_path):
     cuts, episodes = cut_episodes(tmp_path / "cut", spec, per_day=60, days=range(15, 16))
     facts = alert_facts(cuts, "cut_short", episodes[0], {}, date(2026, 10, 15), "macOS 26.5.2")
     assert (facts["periods"]["after"][0], len(facts["periods"]["after"])) == ("2026-09-16", 14)
+
+
+def start_sessions(root, project, sizes, first_day, version, skills, deferred, tools):
+    """One CLI session a day in `project` from `first_day`, each starting with the next of
+    `sizes` tokens of context, the skills and deferred tools listed before its first
+    response and the tool definitions in the snapshot after it."""
+    for i, size in enumerate(sizes):
+        d = first_day + i
+        sid = f"{project}-{d}"
+        write(root / project / f"{sid}.jsonl",
+              [attachment(at(d * DAY), skill_listing(skills), sid=sid, version=version),
+               attachment(at(d * DAY), deferred_tools(deferred), sid=sid, version=version),
+               prompt(at(d * DAY + 1), sid=sid),
+               line(f"m{sid}", text(40), ts=at(d * DAY + 2), sid=sid, cache_creation=100, cache_read=size - 110,
+                    version=version, entrypoint="cli"),
+               attachment(at(d * DAY + 3), prompt_snapshot(4000, tools=tools), sid=sid, version=version)])
+
+
+def stepped(path, projects=(("-Users-me-alpha", 50_000),)):
+    """A session a day in each project, 20 on 2.1.266 (the first ten 10% smaller, too little
+    to be a step) and then 20 on 2.1.267 starting 60% larger than the ten before them, with
+    a skill, an MCP server's tools and the built-in Monitor and WebFetch tools added; the
+    step the check recorded about them on Sep 25, through the shipped rule."""
+    for project, level in projects:
+        start_sessions(path / "logs", project, [int(level * 0.9)] * 10 + [level] * 10, 0, "2.1.266", ["review"],
+                       ["Read", "mcp__gh__pr"], {"Bash": 100, "Read": 50})
+        start_sessions(path / "logs", project, [int(level * 1.6)] * 20, 20, "2.1.267", ["review", "deploy"],
+                       ["Read", "WebFetch", "mcp__gh__pr", "mcp__private__x"],
+                       {"Bash": 100, "Read": 50, "Monitor": 400, "mcp__private__x": 300})
+    tables = parse_all(path / "logs")
+    return tables, context_alerts(session_starts(tables.responses), new_state(), date(2026, 9, 25))
+
+
+START_NOTES = {"2.1.267": ["Added the Monitor tool to the tool definitions", "Added a theme picker"]}
+
+
+def test_a_session_start_draft_holds_the_step_against_each_projects_level_and_what_changed(tmp_path):
+    tables, records = stepped(tmp_path)
+    assert [(r["since"], r["from"], r["to"]) for r in records] == [("2026-09-21", 50_000, 80_000)]
+    text = draft_text(alert_facts(tables, "context_changes", records[0], START_NOTES, date(2026, 10, 11),
+                                  "macOS 26.5.2"))
+    assert text == (
+        "Session start grew from ~50k to ~80k tokens on Claude Code 2.1.267\n\n"
+        "### What happened\n\n"
+        "From 2026-09-21, CLI sessions started at a median ~80k tokens, against ~50k in the sessions before them. "
+        "Against each project's level when the step began they started at 1.60 times it, against 1.00 times on the "
+        "14 days before. The step showed in 1 of 1 project compared.\n\n"
+        "### Before and after\n\n"
+        "A session's start is the context its first response sent: input, cache writes and cache reads. Each is also "
+        "given against its project's level when the step began, the median of that project's last sessions before "
+        "it, so moving between projects doesn't read as a change.\n\n"
+        "|  | Days | Sessions | Median start | Against its project |\n"
+        "|---|---|---|---|---|\n"
+        "| Before (09-07..09-20) | 14 | 14 | ~50k | 1.00 |\n"
+        "| After (09-21..10-07) | 17 | 17 | ~80k | 1.60 |\n\n"
+        "### By Claude Code version\n\n"
+        "| Version | Period | Sessions | Median start | Against its project |\n"
+        "|---|---|---|---|---|\n"
+        "| 2.1.266 | before | 14 | ~50k | 1.00 |\n"
+        "| 2.1.267 | after | 17 | ~80k | 1.60 |\n\n"
+        "### What changed at the start of the session\n\n"
+        "Of what Claude Code logs about a session's start, 1 skill, 1 MCP tool, 1 deferred tool and 2 tool "
+        "definitions were added, about 920 more characters, though the logs can't say how many of the tokens that "
+        "is. The agent types, CLAUDE.md files or the system prompt weren't logged in every session compared, so "
+        "ccdrift couldn't compare those parts. Built-in tools added: Monitor, WebFetch.\n\n"
+        "### Release notes that may be related\n\n"
+        "- 2.1.267: Added the Monitor tool to the tool definitions\n\n"
+        "### Environment\n\n"
+        "- Claude Code: 2.1.267 (entrypoint cli)\n"
+        "- Models during: claude-opus-5 (100.00% of responses)\n"
+        "- Main thread: cache tier not logged, effort not logged\n"
+        "- OS: macOS 26.5.2\n"
+        f"- Measured with ccdrift {__version__} from local session transcripts (aggregates only)\n\n"
+        "### How this was measured\n\n"
+        "ccdrift reads Claude Code's local session transcripts. It takes the first response of each CLI main-thread "
+        "session, outside Agent SDK sessions and not a resumed one, and the context it sent. Each session is measured "
+        "against its own project's level, the median of up to 10 of that project's earlier sessions once it has 3. A "
+        "step is reported when 3 sessions in a row move at least 25% from the median of up to 10 before them, with at "
+        "least 5, each of them more than 12.5% on the same side. A project counts as compared when it has 3 sessions "
+        "each side of the step within 14 days.\n")
+    # A skill or an MCP server is the user's own configuration: counted, never named.
+    assert "deploy" not in text and "private" not in text
+
+
+def test_a_session_start_draft_of_a_step_in_every_project_says_so_and_cant_compare_across_them(tmp_path):
+    tables, records = stepped(tmp_path, (("-Users-me-alpha", 50_000), ("-Users-me-beta", 30_000)))
+    text = draft_text(alert_facts(tables, "context_changes", records[0], {}, date(2026, 10, 11), "macOS 26.5.2"))
+    assert "The step showed in every project compared (2 of 2).\n" in text
+    assert ("### What changed at the start of the session\n\nThe sessions compared don't log enough of how they "
+            "started for ccdrift to compare its parts.\n") in text
+    assert "alpha" not in text and "beta" not in text
+
+
+def test_the_draft_command_takes_a_session_start_alert_the_history_still_shows(tmp_path, capsys):
+    tables, records = stepped(tmp_path)
+    save_state(tmp_path / "state.json", {**new_state(), "context_changes": records})
+    assert main(["incident", "draft", "session-start", "2026-09-21", "--source", str(tmp_path / "logs"),
+                 "--state", str(tmp_path / "state.json")]) == 0
+    assert capsys.readouterr().out.startswith("Session start grew from ~50k to ~80k tokens on Claude Code 2.1.267\n")
+    # A step the rule no longer finds, as after a transcript was deleted, can't be drafted.
+    save_state(tmp_path / "state.json", {**new_state(), "context_changes": [{**records[0], "since": "2026-09-05"}]})
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "context_changes", today=date(2026, 10, 11)) == 2
+    assert capsys.readouterr().err == "The history no longer holds the session-start alert from 2026-09-05.\n"

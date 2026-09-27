@@ -17,7 +17,7 @@ CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 METRIC_ARGS = {"cache": "cache_ratio", "haiku": "haiku_fraction"}
 # The alerts `incident draft` can write up besides incidents: the word it takes, and the
 # state key that records the alert.
-ALERT_ARGS = {"tool-loop": "loop_warnings", "cut-short": "cut_short"}
+ALERT_ARGS = {"session-start": "context_changes", "tool-loop": "loop_warnings", "cut-short": "cut_short"}
 ALERT_NAMES = {key: word for word, key in ALERT_ARGS.items()}
 
 INCIDENT_METRICS = {"cache_ratio": "Cache read ratio on new prompts",
@@ -1151,6 +1151,44 @@ def _loop_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
     return title, sections
 
 
+def _start_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
+    record, periods, medians, span = facts["alert"], facts["periods"], facts["medians"], version_span(facts["span"])
+    title = (f"Session start {'grew' if facts['up'] else 'shrank'} from ~{approx(record['from'])} to "
+             f"~{approx(record['to'])} tokens" + (f" on Claude Code {span}" if span else ""))
+    moved, seen = len(record.get("projects", [])), record.get("of_projects", 0)
+    projects = ""
+    if seen:
+        projects = (f" The step showed in every project compared ({moved} of {seen})." if moved == seen and seen > 1
+                    else f" The step showed in {moved} of {seen} project{'' if seen == 1 else 's'} compared.")
+    against = (f" Against each project's level when the step began they started at {medians['after'][2]:.2f} times "
+               f"it, against {medians['before'][2]:.2f} times on the {_days(len(periods['before']))} before."
+               if medians["before"][0] else "")
+    rows = [[f"{name.capitalize()} ({_day_span(periods[name])})", len(periods[name]), f"{medians[name][0]:,}",
+             f"~{approx(medians[name][1])}", f"{medians[name][2]:.2f}"] for name in periods if periods[name]]
+    sections = [
+        "### What happened\n\n"
+        f"From {record['since']}, CLI sessions started at a median ~{approx(record['to'])} tokens, against "
+        f"~{approx(record['from'])} in the sessions before them.{against}{projects}",
+        "### Before and after\n\n"
+        "A session's start is the context its first response sent: input, cache writes and cache reads. Each is also "
+        "given against its project's level when the step began, the median of that project's last sessions before "
+        "it, so moving between projects doesn't read as a change.\n\n"
+        + _markdown_table(["", "Days", "Sessions", "Median start", "Against its project"], rows),
+    ]
+    versions = [[version, period, f"{count:,}", f"~{approx(tokens)}", f"{ratio:.2f}"]
+                for version, period, count, tokens, ratio in facts["versions"]]
+    if versions:
+        sections.append("### By Claude Code version\n\n"
+                        + _markdown_table(["Version", "Period", "Sessions", "Median start", "Against its project"],
+                                          versions))
+    what = facts["what"]
+    lines = ([components_text(what).strip()] if what is not None else
+             ["The sessions compared don't log enough of how they started for ccdrift to compare its parts."])
+    lines += [f"Built-in tools {word}: {', '.join(names)}." for word, names in facts["builtin"].items()]
+    sections.append("### What changed at the start of the session\n\n" + " ".join(lines))
+    return title, sections
+
+
 def _cut_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
     counts, periods, span, episode = facts["counts"], facts["periods"], version_span(facts["span"]), facts["alert"]
     refused = any(stops[1] for stops in facts["stops"].values())
@@ -1219,6 +1257,17 @@ def _loop_method(method: Mapping[str, Any]) -> str:
             f"{method['share']:.0%} of what the turn before had cached. " + rule)
 
 
+def _start_method(method: Mapping[str, Any]) -> str:
+    return ("### How this was measured\n\nccdrift reads Claude Code's local session transcripts. It takes the first "
+            "response of each CLI main-thread session, outside Agent SDK sessions and not a resumed one, and the "
+            "context it sent. Each session is measured against its own project's level, the median of up to "
+            f"{method['project_baseline']} of that project's earlier sessions once it has {method['min_project']}. "
+            f"A step is reported when {method['window']} sessions in a row move at least {method['change']:.0%} "
+            f"from the median of up to {method['baseline']} before them, with at least {method['min_baseline']}, "
+            f"each of them more than {method['side']:.1%} on the same side. A project counts as compared when it "
+            f"has {method['min_project']} sessions each side of the step within {method['side_days']} days.")
+
+
 def _cut_method(method: Mapping[str, Any]) -> str:
     return ("### How this was measured\n\nccdrift reads Claude Code's local session transcripts. It counts main-thread "
             "responses outside Agent SDK sessions, and those that stopped at the token limit or refused, on UTC days "
@@ -1253,9 +1302,9 @@ def _draft_method(method: Mapping[str, Any]) -> str:
             + rule)
 
 
-DRAFTS = {"cache_ratio": _cache_draft, "haiku_fraction": _haiku_draft, "loop_warnings": _loop_draft,
-          "cut_short": _cut_draft}
-ALERT_METHODS = {"loop_warnings": _loop_method, "cut_short": _cut_method}
+DRAFTS = {"cache_ratio": _cache_draft, "haiku_fraction": _haiku_draft, "context_changes": _start_draft,
+          "loop_warnings": _loop_draft, "cut_short": _cut_draft}
+ALERT_METHODS = {"context_changes": _start_method, "loop_warnings": _loop_method, "cut_short": _cut_method}
 
 
 def draft_text(facts: Mapping[str, Any]) -> str:
