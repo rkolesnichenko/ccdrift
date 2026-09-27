@@ -25,8 +25,9 @@ from ccdrift.detector import DetectorConfig, baseline_bins
 from ccdrift.failures import (ACTIVE_RESPONSES, CUT_FLOOR, CUT_RATIO, CUT_SHARE, CUT_USUAL, MIN_BEFORE_DAYS,
                               cut_shares, failure_counts, judged_failures)
 from ccdrift.history import HistoryError, load_history
+from ccdrift.hookcover import MERGE_DAYS, SETTING, merged, stream_changes, transcript_states
 from ccdrift.incidents import OPEN_END, RECOVERY_BINS, exclusions, incident_cost, incident_versions, versions_text
-from ccdrift.logs import LOOP_GAP_SECONDS, LOOP_MISS_SHARE, Tables, judged_turns, outside_sdk
+from ccdrift.logs import HOOK_EVENTS, LOOP_GAP_SECONDS, LOOP_MISS_SHARE, Tables, judged_turns, outside_sdk
 from ccdrift.loops import BASE_DAYS, LOOP_SETTINGS, WINDOW_DAYS, loop_turns
 from ccdrift.report import reason_counts
 from ccdrift.sessions import (BASELINE, CHANGE, MIN_BASELINE, MIN_PROJECT_SESSIONS, PROJECT_BASELINE, SIDE, SIDE_DAYS,
@@ -224,6 +225,28 @@ def draft_markdown(responses: pd.DataFrame, incident: dict[str, Any], incidents:
     return None if facts is None else draft_text(facts)
 
 
+def _days_apart(one: str, other: str) -> int:
+    return abs((date.fromisoformat(one) - date.fromisoformat(other)).days)
+
+
+def hook_groups(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """state["hook_changes"], one record per stream, as the alerts they make up: the records
+    of one thread and direction whose `since` lies within MERGE_DAYS of the group's first,
+    as hookcover.merged groups changes. Every record counts, whether it alerted or was
+    recorded quietly on the first check after upgrading. Each group carries its thread,
+    direction, first `since` and records."""
+    groups: list[dict[str, Any]] = []
+    for record in sorted(records, key=lambda r: (r["thread"], r["direction"], r["since"], r["stream"])):
+        last = groups[-1] if groups else None
+        if (last is None or (last["thread"], last["direction"]) != (record["thread"], record["direction"])
+                or _days_apart(record["since"], last["since"]) > MERGE_DAYS):
+            last = {"thread": record["thread"], "direction": record["direction"], "since": record["since"],
+                    "records": []}
+            groups.append(last)
+        last["records"].append(record)
+    return groups
+
+
 def find_alert(records: Sequence[dict[str, Any]], day: Optional[str] = None) -> Optional[dict[str, Any]]:
     """The alert record that starts on `day`, the UTC date its `since` opens with; without
     `day`, the latest. None when there is none."""
@@ -382,7 +405,84 @@ def _start_facts(tables: Tables, record: dict[str, Any], today: date) -> Optiona
             "notes_from": (versions_text(turns, record["days"]), days_before(record["since"], 7), record["days"][-1])}
 
 
-ALERT_FACTS = {"context_changes": _start_facts, "loop_warnings": _loop_facts, "cut_short": _cut_facts}
+def _call_rows(coverage: pd.DataFrame, files: Sequence[str]) -> dict[tuple[str, str], tuple[int, int]]:
+    """(calls, hooked) by (event, tool) over the coverage rows of `files`, each MCP
+    server's tools folded into one "mcp__" tool."""
+    rows = coverage[coverage["source_file"].astype(str).isin(list(files))]
+    tool = rows["tool"].astype(str)
+    rows = rows.assign(tool=tool.where(~tool.str.startswith(MCP_TOOL), MCP_TOOL))
+    sums = rows.groupby(["event", "tool"], sort=True)[["calls", "hooked"]].sum()
+    return {(str(event), str(name)): (int(calls), int(hooked))
+            for (event, name), calls, hooked in zip(sums.index, sums["calls"], sums["hooked"])}
+
+
+def _call_table(coverage: pd.DataFrame, files: dict[str, list[str]]) -> list[tuple[str, str, dict[str, tuple[int, int]]]]:
+    """(event, tool, {period: (calls, hooked)}) for every event and tool the transcripts of
+    any period called, as HOOK_EVENTS then tool order with the MCP tools last; a period
+    that never called one has no entry for it."""
+    periods = {name: _call_rows(coverage, names) for name, names in files.items()}
+    keys = sorted({key for rows in periods.values() for key in rows},
+                  key=lambda key: (HOOK_EVENTS.index(key[0]), key[1] == MCP_TOOL, key[1]))
+    return [(event, tool, {name: rows[(event, tool)] for name, rows in periods.items() if (event, tool) in rows})
+            for event, tool in keys]
+
+
+def _hook_facts(tables: Tables, group: dict[str, Any], today: date) -> Optional[dict[str, Any]]:
+    """What a hook-coverage draft says: the CLI transcripts of the change's thread and
+    projects, each judged hooked or not per hook event and tool as the rule judges them
+    (transcript_states at the shipped SETTING), over the SIDE_DAYS before the change and
+    from it through SIDE_DAYS after its window, and their tool calls by event and tool.
+    The change is found again as the check found it (hookcover.merged), the one of the
+    group's thread and direction starting nearest the group, within MERGE_DAYS. None when
+    the history no longer shows it."""
+    coverage = tables.hook_coverage
+    states = transcript_states(coverage, today, SETTING.min_calls)
+    found = [alert for alert in merged(stream_changes(states, SETTING))
+             if (alert["thread"], alert["direction"]) == (group["thread"], group["direction"])
+             and _days_apart(alert["since"], group["since"]) <= MERGE_DAYS]
+    if not found:
+        return None
+    alert = min(found, key=lambda change: _days_apart(change["since"], group["since"]))
+    rows = states[(states["thread"] == alert["thread"]) & states["project"].isin(alert["projects"])
+                  & states["event"].isin(alert["events"]) & states["tool"].isin(alert["tools"])]
+    days = rows["day"].astype(str)
+    earliest = (date.fromisoformat(alert["since"]) - timedelta(days=SIDE_DAYS)).isoformat()
+    latest = (date.fromisoformat(alert["until"]) + timedelta(days=SIDE_DAYS)).isoformat()
+    frames = {"before": rows[(days >= earliest) & (days < alert["since"])],
+              "after": rows[(days >= alert["since"]) & (days <= latest)]}
+    by_version = {name: frame.explode("versions").rename(columns={"versions": "version"}).assign(
+        on=lambda f: f["on"].astype(bool)) for name, frame in frames.items()}
+    files = {name: sorted(frame["source_file"].astype(str).unique()) for name, frame in frames.items()}
+    main = tables.responses["main_thread"].astype(bool)
+    thread = alert["thread"]
+    after_rows = tables.responses[(main if thread == "main" else ~main) & outside_sdk(tables.responses)
+                                  & tables.responses["source_file"].astype(str).isin(files["after"])]
+    turns = judged_turns(tables.responses, today)
+    tools = coverage.loc[coverage["source_file"].astype(str).isin(files["before"] + files["after"]), "tool"].astype(str)
+    servers = {tool[len(MCP_TOOL):] for tool in tools if tool.startswith(MCP_TOOL)}
+    changed = coverage[coverage["event"].isin(alert["events"]) & coverage["tool"].isin(alert["tools"])]
+    ran = {name: {event: tuple(sum(pair[i] for (e, _), pair in rows.items() if e == event) for i in (0, 1))
+                  for event in alert["events"]}
+           for name, rows in ((name, _call_rows(changed, names)) for name, names in files.items())}
+    return {"periods": {name: sorted(frame["day"].astype(str).unique()) for name, frame in frames.items()},
+            "counts": {name: (int(frame["on"].astype(bool).sum()), len(frame)) for name, frame in frames.items()},
+            "transcripts": {name: len(names) for name, names in files.items()},
+            "calls": _call_table(coverage, files), "ran": ran,
+            "change": {key: alert[key] for key in ("thread", "direction", "since", "events")},
+            "projects": len(alert["projects"]), "servers": len(servers),
+            "span": title_versions(by_version["after"]["version"]),
+            "versions": _version_rows(by_version, "on"), "environment_rows": after_rows, "thread": thread,
+            "topic": "hooks",
+            "method": {"kind": "hook_changes", "window": SETTING.window, "baseline": SETTING.baseline,
+                       "agree": SETTING.agree, "min_calls": SETTING.min_calls, "merge": MERGE_DAYS},
+            "notes_from": (versions_text(turns, alert["days"]), days_before(alert["since"], 7), alert["days"][-1])}
+
+
+ALERT_FACTS = {"context_changes": _start_facts, "hook_changes": _hook_facts, "loop_warnings": _loop_facts,
+               "cut_short": _cut_facts}
+# How a kind's records become the alerts a draft is about: hook coverage records one
+# change per stream, and the check alerts on them grouped.
+ALERT_RECORDS = {"hook_changes": hook_groups}
 
 
 def alert_facts(tables: Tables, kind: str, alert: dict[str, Any], changelog: dict[str, list[str]],
@@ -447,7 +547,7 @@ def _run_alert_draft(source: Path, state_path: Path, state: dict[str, Any], kind
     """run_draft for an alert that is not an incident: the record of `kind` starting on
     `start`, or the latest."""
     name = ALERT_NAMES[kind]
-    alert = find_alert(state[kind], start)
+    alert = find_alert(ALERT_RECORDS.get(kind, list)(state[kind]), start)
     if alert is None:
         print(DRAFT_LINES["no_alert_on"].format(name=name, start=start) if start
               else DRAFT_LINES["no_alert"].format(name=name), file=sys.stderr)

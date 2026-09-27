@@ -17,7 +17,8 @@ CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 METRIC_ARGS = {"cache": "cache_ratio", "haiku": "haiku_fraction"}
 # The alerts `incident draft` can write up besides incidents: the word it takes, and the
 # state key that records the alert.
-ALERT_ARGS = {"session-start": "context_changes", "tool-loop": "loop_warnings", "cut-short": "cut_short"}
+ALERT_ARGS = {"session-start": "context_changes", "hooks": "hook_changes", "tool-loop": "loop_warnings",
+              "cut-short": "cut_short"}
 ALERT_NAMES = {key: word for word, key in ALERT_ARGS.items()}
 
 INCIDENT_METRICS = {"cache_ratio": "Cache read ratio on new prompts",
@@ -1189,6 +1190,49 @@ def _start_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
     return title, sections
 
 
+HOOK_TRANSCRIPTS = {"main": "CLI main-thread", "subagent": "CLI subagent"}
+
+
+def _hook_tool(tool: str, servers: int) -> str:
+    """A tool as a hook draft names it: a built-in one by name, every MCP server's together."""
+    return f"MCP tools ({servers} server{'' if servers == 1 else 's'})" if tool == "mcp__" else tool
+
+
+def _hook_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
+    change, periods, counts, span = facts["change"], facts["periods"], facts["counts"], version_span(facts["span"])
+    title = (f"Hooks {change['direction']} running on {HOOK_CALLS[change['thread']]}"
+             + (f" from Claude Code {span}" if span else ""))
+    ran = [(event, *facts["ran"]["before"][event], *facts["ran"]["after"][event])
+           for event in sorted(change["events"], reverse=True)]
+    before = " and ".join(f"{event} hooks{' ran' if i == 0 else ''} on {hb:,} of {cb:,}"
+                          for i, (event, cb, hb, _, _) in enumerate(ran))
+    after = " and ".join(f"{ha:,} of {ca:,}" for _, _, _, ca, ha in ran)
+    projects = f"{facts['projects']} project{'' if facts['projects'] == 1 else 's'}"
+    sections = [
+        "### What happened\n\n"
+        f"Before {change['since']}, {before} {HOOK_TRANSCRIPTS[change['thread']]} tool calls; from then, on {after}. "
+        f"The change showed in {projects}.",
+        "### Before and after\n\n"
+        "Judged is a transcript's calls of one tool for one hook event, where it made enough of them; it counts as "
+        "hooked when a hook record came on at least half of those calls.\n\n"
+        + _markdown_table(
+            ["", "Days", "Transcripts", "Judged", "Hooked", "Share"],
+            [[f"{name.capitalize()} ({_day_span(periods[name])})", len(periods[name]),
+              f"{facts['transcripts'][name]:,}", f"{counts[name][1]:,}", f"{counts[name][0]:,}", _rate(*counts[name])]
+             for name in periods if periods[name]]),
+    ]
+    versions = _version_table(facts["versions"], ["Judged", "Hooked", "Share"])
+    if versions:
+        sections.append("### By Claude Code version\n\n" + versions)
+    rows = [[event, _hook_tool(tool, facts["servers"]),
+             *(f"{cells[name][1]:,} of {cells[name][0]:,} ({_rate(cells[name][1], cells[name][0])})" if name in cells
+               else "-" for name in periods)]
+            for event, tool, cells in facts["calls"]]
+    sections.append("### Which events and tools\n\nTool calls a hook record came on, of all the calls.\n\n"
+                    + _markdown_table(["Event", "Tool", *(name.capitalize() for name in periods)], rows))
+    return title, sections
+
+
 def _cut_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
     counts, periods, span, episode = facts["counts"], facts["periods"], version_span(facts["span"]), facts["alert"]
     refused = any(stops[1] for stops in facts["stops"].values())
@@ -1268,6 +1312,17 @@ def _start_method(method: Mapping[str, Any]) -> str:
             f"has {method['min_project']} sessions each side of the step within {method['side_days']} days.")
 
 
+def _hook_method(method: Mapping[str, Any]) -> str:
+    return ("### How this was measured\n\nccdrift reads Claude Code's local session transcripts. For each CLI transcript "
+            "it counts the calls of each tool, an MCP server's tools together, and whether Claude Code logged a "
+            "PreToolUse or PostToolUse hook record on each. A transcript is hooked for an event and tool when a hook "
+            f"record came on at least half of its calls, with at least {method['min_calls']} of them. A project's "
+            "transcripts in one thread, for one event and tool, make a stream; a change is reported when its last "
+            f"{method['window']} transcripts all turned the other way from {method['agree']:.0%} of the "
+            f"{method['baseline']} before them. Changes in one thread and direction starting within {method['merge']} "
+            "days of each other are one alert.")
+
+
 def _cut_method(method: Mapping[str, Any]) -> str:
     return ("### How this was measured\n\nccdrift reads Claude Code's local session transcripts. It counts main-thread "
             "responses outside Agent SDK sessions, and those that stopped at the token limit or refused, on UTC days "
@@ -1303,8 +1358,9 @@ def _draft_method(method: Mapping[str, Any]) -> str:
 
 
 DRAFTS = {"cache_ratio": _cache_draft, "haiku_fraction": _haiku_draft, "context_changes": _start_draft,
-          "loop_warnings": _loop_draft, "cut_short": _cut_draft}
-ALERT_METHODS = {"context_changes": _start_method, "loop_warnings": _loop_method, "cut_short": _cut_method}
+          "hook_changes": _hook_draft, "loop_warnings": _loop_draft, "cut_short": _cut_draft}
+ALERT_METHODS = {"context_changes": _start_method, "hook_changes": _hook_method, "loop_warnings": _loop_method,
+                 "cut_short": _cut_method}
 
 
 def draft_text(facts: Mapping[str, Any]) -> str:

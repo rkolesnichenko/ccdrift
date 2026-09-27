@@ -13,16 +13,18 @@ import ccdrift.draft
 from ccdrift.changelog import TOPIC_OF, load_changelog
 from ccdrift.cli import main
 from ccdrift.detector import DetectorConfig
-from ccdrift.draft import (alert_facts, draft_markdown, draft_periods, find_alert, find_incident, os_text, run_draft,
-                          title_versions)
+from ccdrift.draft import (alert_facts, draft_markdown, draft_periods, find_alert, find_incident, hook_groups, os_text,
+                          run_draft, title_versions)
 from ccdrift.failures import cut_short, failure_counts, judged_failures
+from ccdrift.hookcover import hook_coverage_alerts
 from ccdrift.logs import judged_turns, parse_all, parse_source
 from ccdrift.loops import LoopSetting, loop_warning
 from ccdrift.sessions import context_alerts, session_starts
 from ccdrift.state import new_state, save_state
 from ccdrift.texts import draft_text, version_span
-from tests.helpers import (DAY, at, attachment, busy_days, deferred_tools, failure_days, line, main_thread_days, nth_day,
-                           prompt, prompt_snapshot, skill_listing, text, tool_loop_days, write)
+from tests.helpers import (DAY, PRIVATE_PATH, PRIVATE_TEXT, at, attachment, busy_days, deferred_tools, failure_days,
+                           hook_record, line, main_thread_days, nth_day, prompt, prompt_snapshot, skill_listing, text,
+                           tool_loop_days, tool_use, write)
 
 
 BASELINE_NOTE = ("Before is the baseline ccdrift judged the incident against: the days it compared with, which skip "
@@ -789,3 +791,154 @@ def test_the_draft_command_takes_a_session_start_alert_the_history_still_shows(t
     save_state(tmp_path / "state.json", {**new_state(), "context_changes": [{**records[0], "since": "2026-09-05"}]})
     assert run_draft(tmp_path / "logs", tmp_path / "state.json", "context_changes", today=date(2026, 10, 11)) == 2
     assert capsys.readouterr().err == "The history no longer holds the session-start alert from 2026-09-05.\n"
+
+
+def hook_change(stream, since, thread="subagent", direction="started", alerted=False):
+    return {"stream": f"{stream}|{thread}|PreToolUse|Bash", "thread": thread, "direction": direction,
+            "after": since, "since": since, "reported_on": since, "alerted": alerted}
+
+
+def test_hook_records_are_drafted_as_the_alerts_they_make_up_alerted_or_not():
+    # One record per stream; a Claude Code update reaches every stream within days, and
+    # the first check after upgrading records such a change without alerting. 14 days
+    # after a group's first is still that group, as in hookcover.merged; 15 isn't.
+    records = [hook_change("b", "2026-09-06"), hook_change("a", "2026-09-05", alerted=True),
+               hook_change("d", "2026-09-19"), hook_change("c", "2026-09-20"),
+               hook_change("a", "2026-09-20", direction="stopped"), hook_change("a", "2026-09-06", thread="main")]
+    groups = hook_groups(records)
+    assert [(g["thread"], g["direction"], g["since"], [r["stream"][0] for r in g["records"]]) for g in groups] == [
+        ("main", "started", "2026-09-06", ["a"]),
+        ("subagent", "started", "2026-09-05", ["a", "b", "d"]),
+        ("subagent", "started", "2026-09-20", ["c"]),
+        ("subagent", "stopped", "2026-09-20", ["a"])]
+    assert find_alert(groups, "2026-09-05")["records"][1]["stream"].startswith("b|")
+    assert find_alert(groups)["since"] == "2026-09-20"
+
+
+HOOK_TOOLS = ("Bash", "Read", "mcp__vault__read")
+ALL_HOOKS = frozenset((event, tool) for event in ("PreToolUse", "PostToolUse") for tool in (*HOOK_TOOLS, "Grep"))
+
+
+def hooked_sessions(root, project, days, first_day, version, subagent_hooks, tools=HOOK_TOOLS):
+    """A CLI session a day in `project` from `first_day`, calling each of `tools` (Bash,
+    Read and an MCP server's tool) four times on the main thread and in a subagent. Every
+    main-thread call gets a PreToolUse and a PostToolUse hook record; the subagent's get the
+    (event, tool) pairs in `subagent_hooks`."""
+    for i in range(days):
+        d = first_day + i
+        sid = f"{project}-{d}"
+        main, sub = [prompt(at(d * DAY), sid=sid)], []
+        for k, tool in enumerate(t for t in tools for _ in range(4)):
+            for records, sidechain, hooks in ((main, False, ALL_HOOKS), (sub, True, subagent_hooks)):
+                tid = f"toolu_{'s' if sidechain else 'm'}{d}_{k}"
+                ts = d * DAY + 20 * k + (10 if sidechain else 0)
+                records.append(line(f"{tid}-r", tool_use(tid, tool), ts=at(ts), sid=sid, sidechain=sidechain,
+                                    version=version, entrypoint="cli", cache_read=900, cache_creation=100))
+                records += [hook_record(at(ts + 1), event, tid, tool, sid=sid, version=version, sidechain=sidechain)
+                            for event in ("PreToolUse", "PostToolUse") if (event, tool) in hooks]
+        write(root / project / f"{sid}.jsonl", main)
+        write(root / project / sid / "subagents" / "agent-a.jsonl", sub)
+
+
+def hooks_started(path, today=date(2026, 9, 25), before=frozenset(), after=ALL_HOOKS):
+    """Two projects' sessions, 16 on 2.1.247 with the subagent hook records of `before`
+    (none), then 20 on 2.1.261 with those of `after` (all) and Grep called too, beside a
+    third project whose subagents never had any; the hook coverage records the check made
+    on `today`."""
+    for project in ("-Users-me-alpha", "-Users-me-beta"):
+        hooked_sessions(path / "logs", project, 16, 0, "2.1.247", before)
+        hooked_sessions(path / "logs", project, 20, 16, "2.1.261", after, tools=(*HOOK_TOOLS, "Grep"))
+    hooked_sessions(path / "logs", "-Users-me-gamma", 36, 0, "2.1.261", frozenset())
+    tables = parse_all(path / "logs")
+    state = new_state()
+    hook_coverage_alerts(tables.hook_coverage, state, today)
+    return tables, state["hook_changes"]
+
+
+def test_a_hook_coverage_draft_holds_the_change_by_transcript_version_event_and_tool(tmp_path):
+    tables, records = hooks_started(tmp_path)
+    group = find_alert(hook_groups(records))
+    assert (group["since"], len(group["records"])) == ("2026-09-17", 12)
+    text = draft_text(alert_facts(tables, "hook_changes", group, {"2.1.261": ["Hooks now run on subagent tool calls"]},
+                                  date(2026, 10, 8), "macOS 26.5.2"))
+    assert text == (
+        "Hooks started running on subagent tool calls from Claude Code 2.1.261\n\n"
+        "### What happened\n\n"
+        "Before 2026-09-17, PreToolUse hooks ran on 0 of 336 and PostToolUse hooks on 0 of 336 CLI subagent tool calls; "
+        "from then, on 408 of 408 and 408 of 408. The change showed in 2 projects.\n\n"
+        "### Before and after\n\n"
+        "Judged is a transcript's calls of one tool for one hook event, where it made enough of them; it counts as "
+        "hooked when a hook record came on at least half of those calls.\n\n"
+        "|  | Days | Transcripts | Judged | Hooked | Share |\n"
+        "|---|---|---|---|---|---|\n"
+        "| Before (09-03..09-16) | 14 | 28 | 168 | 0 | 0.00% |\n"
+        "| After (09-17..10-03) | 17 | 34 | 204 | 204 | 100.00% |\n\n"
+        "### By Claude Code version\n\n"
+        "| Version | Period | Judged | Hooked | Share |\n"
+        "|---|---|---|---|---|\n"
+        "| 2.1.247 | before | 168 | 0 | 0.00% |\n"
+        "| 2.1.261 | after | 204 | 204 | 100.00% |\n\n"
+        "### Which events and tools\n\n"
+        "Tool calls a hook record came on, of all the calls.\n\n"
+        "| Event | Tool | Before | After |\n"
+        "|---|---|---|---|\n"
+        "| PreToolUse | Bash | 0 of 112 (0.00%) | 136 of 136 (100.00%) |\n"
+        "| PreToolUse | Grep | - | 136 of 136 (100.00%) |\n"
+        "| PreToolUse | Read | 0 of 112 (0.00%) | 136 of 136 (100.00%) |\n"
+        "| PreToolUse | MCP tools (1 server) | 0 of 112 (0.00%) | 136 of 136 (100.00%) |\n"
+        "| PostToolUse | Bash | 0 of 112 (0.00%) | 136 of 136 (100.00%) |\n"
+        "| PostToolUse | Grep | - | 136 of 136 (100.00%) |\n"
+        "| PostToolUse | Read | 0 of 112 (0.00%) | 136 of 136 (100.00%) |\n"
+        "| PostToolUse | MCP tools (1 server) | 0 of 112 (0.00%) | 136 of 136 (100.00%) |\n\n"
+        "### Release notes that may be related\n\n"
+        "- 2.1.261: Hooks now run on subagent tool calls\n\n"
+        "### Environment\n\n"
+        "- Claude Code: 2.1.261 (entrypoint cli)\n"
+        "- Models during: claude-opus-5 (100.00% of responses)\n"
+        "- Subagents: cache tier not logged, effort not logged\n"
+        "- OS: macOS 26.5.2\n"
+        f"- Measured with ccdrift {__version__} from local session transcripts (aggregates only)\n\n"
+        "### How this was measured\n\n"
+        "ccdrift reads Claude Code's local session transcripts. For each CLI transcript it counts the calls of each "
+        "tool, an MCP server's tools together, and whether Claude Code logged a PreToolUse or PostToolUse hook record "
+        "on each. A transcript is hooked for an event and tool when a hook record came on at least half of its calls, "
+        "with at least 3 of them. A project's transcripts in one thread, for one event and tool, make a stream; a "
+        "change is reported when its last 3 transcripts all turned the other way from 100% of the 10 before them. "
+        "Changes in one thread and direction starting within 14 days of each other are one alert.\n")
+    # The hook commands, tool ids, MCP server and projects are the user's own.
+    for private in ("vault", "alpha", "beta", "gamma", "toolu_", PRIVATE_PATH, PRIVATE_TEXT):
+        assert private not in text
+
+
+def test_the_draft_command_takes_a_hook_change_the_check_recorded_without_alerting(tmp_path, capsys):
+    # A first check long after the change records it quietly; it is still the one to file.
+    tables, records = hooks_started(tmp_path, today=date(2026, 10, 20))
+    assert records and not any(record["alerted"] for record in records)
+    save_state(tmp_path / "state.json", {**new_state(), "hook_changes": records})
+    assert main(["incident", "draft", "hooks", "2026-09-17", "--source", str(tmp_path / "logs"),
+                 "--state", str(tmp_path / "state.json")]) == 0
+    assert capsys.readouterr().out.startswith("Hooks started running on subagent tool calls from Claude Code 2.1.261\n")
+    # An alert is named by the day it starts, not by a later stream's; one the history
+    # doesn't show, in that direction or near that day, can't be drafted.
+    later = [{**records[0], "since": "2026-09-19"}, *records[1:]]
+    save_state(tmp_path / "state.json", {**new_state(), "hook_changes": later})
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "hook_changes", "2026-09-19",
+                     today=date(2026, 10, 20)) == 2
+    for changed in ({"direction": "stopped"}, {"since": "2026-08-20", "after": "2026-08-20"}):
+        save_state(tmp_path / "state.json", {**new_state(), "hook_changes": [{**r, **changed} for r in records]})
+        assert run_draft(tmp_path / "logs", tmp_path / "state.json", "hook_changes", today=date(2026, 10, 20)) == 2
+    assert capsys.readouterr().err == ("No hooks alert starts on 2026-09-19.\n"
+                                       "The history no longer holds the hooks alert from 2026-09-17.\n"
+                                       "The history no longer holds the hooks alert from 2026-08-20.\n")
+
+
+def test_a_hook_change_on_some_events_and_tools_counts_only_the_streams_that_changed(tmp_path):
+    # PostToolUse hooks ran on every subagent call throughout, and PreToolUse ones on the MCP
+    # server's; 2.1.261 started PreToolUse hooks on Bash and Read alone.
+    always = frozenset({("PostToolUse", tool) for tool in HOOK_TOOLS} | {("PreToolUse", "mcp__vault__read")})
+    tables, records = hooks_started(tmp_path, before=always, after=ALL_HOOKS)
+    facts = alert_facts(tables, "hook_changes", find_alert(hook_groups(records)), {}, date(2026, 10, 8),
+                        "macOS 26.5.2")
+    assert (facts["change"]["events"], facts["counts"]) == (["PreToolUse"], {"before": (0, 56), "after": (68, 68)})
+    assert "Before 2026-09-17, PreToolUse hooks ran on 0 of 224 CLI subagent tool calls; from then, on 272 of 272." \
+        in draft_text(facts)
