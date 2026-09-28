@@ -42,8 +42,11 @@ the time it did (`check-state.json.last-failure-notice`) in `~/.ccdrift`. The hi
 counts, models, versions and settings, plus each transcript's path (which includes
 your project folder names) and session id; no prompt or response text. Only you can
 read the history and the log, as with Claude Code's transcripts; a log an older ccdrift
-made becomes private when you run `ccdrift schedule install` again. ccdrift sends
-nothing anywhere, unless you give it a command to run with `--exec`.
+made becomes private when you run `ccdrift schedule install` again. If your status line
+passes ccdrift its JSON (see [Quota samples](#quota-samples)), `~/.ccdrift/quota.jsonl`
+keeps how much of your usage limits was used and when, with the Claude Code version and
+model, and nothing else from it: no session id, path, project, repository or branch.
+ccdrift sends nothing anywhere, unless you give it a command to run with `--exec`.
 
 ## Install
 
@@ -186,6 +189,27 @@ days without cache values, transcripts it couldn't read or found no responses in
 fields that stopped or started being logged, early warnings, tool-loop warnings, failed
 requests and responses cut short.
 
+### Quota samples
+
+Claude Code's transcripts don't record how much of your plan's usage limits you have
+used, but the JSON it hands your status line command does, on Pro and Max plans: the
+share of the 5-hour and 7-day limits used and when each resets. Pass that JSON on to
+ccdrift and it keeps a sample whenever those numbers change, at most once a minute:
+
+```sh
+input="$(cat)"
+# ... the rest of your status line ...
+printf '%s' "$input" | ccdrift status --short --stdin
+```
+
+`--stdin` prints the same line `--short` does. Each sample, one line of
+`~/.ccdrift/quota.jsonl` (beside the state file), holds its time, the Claude Code version,
+the model and the limits' numbers, and nothing else from the JSON. Nothing alerts on the
+samples yet: a rule on how fast a limit fills for the tokens you use needs weeks of them,
+which is why collecting starts first. `ccdrift status` counts them. With no samples after a
+few responses, your plan's limits aren't in the JSON, which Claude Code sends only on Pro
+and Max plans.
+
 ## Alerts elsewhere
 
 `--exec` runs a command through the shell for each alert, with `CCDRIFT_ALERT` (`flag`,
@@ -212,7 +236,7 @@ stop the check.
 ccdrift check [--notify] [--exec CMD] [--no-digest] [--source DIR] [--state FILE]   what the schedule runs
 ccdrift report [--days N] [--by day|version] [--json | --html FILE] [--source DIR] [--state FILE]
 ccdrift cost [--days N] [--by thread|agent|skill|plugin|mcp|model|project|branch] [--json] [--source DIR] [--state FILE]
-ccdrift status [--short] [--state FILE]
+ccdrift status [--short [--stdin]] [--state FILE]
 ccdrift incident list [--source DIR] [--state FILE]
 ccdrift incident add {cache|haiku} START..END [--state FILE]
 ccdrift incident close {cache|haiku} [--state FILE]

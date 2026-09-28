@@ -172,6 +172,13 @@ On 2026-09-22 the owner's main thread moved from claude-opus-5 to claude-opus-5-
 
 These counts come from a one-off measurement with no in-repo reproduction path.
 
+## Usage limits, 2026-09-28
+
+The loudest Claude Code complaint of 2026 is usage limits filling faster, and the transcripts can't show it. Surveyed read-only over the owner's 2,463 transcripts on 2026-09-28: no record, system message or API error banner mentions a usage limit, a 5-hour or weekly window, or a 429; the 5 `system/api_error` records carry an `error.rateLimits` field, null on every one. The status line JSON has carried the numbers since Claude Code 2.1.251, on Pro and Max plans only: `rate_limits.five_hour` and `rate_limits.seven_day`, each a `used_percentage` and a `resets_at`.
+
+- **So 0.19.0 collects before it judges.** `ccdrift status --short --stdin` keeps a sample of those numbers beside the state file when they change, at most once a minute. A rule on how fast a limit fills for the tokens used, judged against the history store, needs weeks of samples on both sides of any change, and nothing records them otherwise.
+- **Why the status line rather than OpenTelemetry.** The metrics Claude Code's OpenTelemetry export documents count tokens, cost, sessions, lines, commits and pull requests, none of them a usage limit, and reading them needs a collector running. The status line is already called on every refresh, and ccdrift is already on it.
+
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
 
 Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).
