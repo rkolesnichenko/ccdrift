@@ -44,7 +44,8 @@ import pandas as pd
 
 from ccdrift.logs import default_source, judged_turns, parse_all
 from ccdrift.state import new_state
-from ccdrift.thinking import BASELINE_DAYS, DAYS, MIN_BASELINE_DAYS, RATIO, counted, thinking_counts, thinking_rises
+from ccdrift.thinking import (BASELINE_DAYS, DAYS, MIN_BASELINE_DAYS, MIN_MEDIAN, RATIO, counted, thinking_counts,
+                              thinking_rises)
 
 RATIO_GRID = (2, 2.5, 3, 4)
 DAYS_GRID = (1, 2, 3)
@@ -65,9 +66,12 @@ def level_lines(counts: pd.DataFrame, model: str) -> list[str]:
     lines = []
     for i, (day, responses, level) in enumerate(zip(days["day"].astype(str), days["responses"], levels)):
         before = levels[max(0, i - BASELINE_DAYS):i]
-        judged = (f"{level / statistics.median(before):.2f}x the median of the {len(before)} counted days before"
-                  if len(before) >= MIN_BASELINE_DAYS and statistics.median(before) > 0
-                  else f"not judged: {len(before)} counted days before")
+        if len(before) < MIN_BASELINE_DAYS:
+            judged = f"not judged: {len(before)} counted days before"
+        elif statistics.median(before) < MIN_MEDIAN:
+            judged = f"not judged: a median of {statistics.median(before):.0f} is under {MIN_MEDIAN}"
+        else:
+            judged = f"{level / statistics.median(before):.2f}x the median of the {len(before)} counted days before"
         lines.append(f"  {day} {int(responses)} responses, level {level:.0f}, {judged}")
     return lines
 

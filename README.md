@@ -29,13 +29,13 @@ your usage limits:
   hide as a quiet week.
 
 Each alert names the Claude Code version that was running, and what a regression has
-cost: tokens re-cached, or extra Haiku responses, and quotes the matching lines of
-Claude Code's own release notes in the log. Claude Code keeps them in the config
-folder that holds the transcripts: `~/.claude/cache/changelog.md`, or
+cost: tokens re-cached, extra Haiku responses or extra thinking tokens, and quotes the
+matching lines of Claude Code's own release notes in the log. Claude Code keeps them in
+the config folder that holds the transcripts: `~/.claude/cache/changelog.md`, or
 `$CLAUDE_CONFIG_DIR/cache/changelog.md` when that variable is set.
 
-It can't tell you whether responses think less: in one person's logs, effort swings
-more from day to day than a 70% cut in thinking moves it. See
+It tells you when responses think far more, but not whether they think less: in one
+person's logs, effort swings more from day to day than a 70% cut in thinking moves it. See
 [docs/findings.md](https://github.com/rkolesnichenko/ccdrift/blob/main/docs/findings.md).
 
 Everything stays on your machine. ccdrift reads the transcripts and keeps a state
@@ -370,7 +370,8 @@ Thinking is judged per model, on days with 50 or more main-thread responses of w
 logged a thinking token count: a day's mean count is compared with the median of the
 model's 14 such days before it (at least 5), when that median is 100 tokens or more. A day
 at twice the median or more is a rise, reported once and only when that day is within the
-last 2 weeks. A rise that starts within 2 weeks of the model's last raised day is the same one
+last 2 weeks, or, for a check that first runs later, when the rise is still going on the
+model's latest day. A rise that starts within 2 weeks of the model's last raised day is the same one
 going on unless it is twice that day's level, so a heavy day that recurs, say every week, is
 reported once. The setting was measured in [lab/thinking.py](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/thinking.py) (G16) on one person's logs, whose
 2026-09-10 rise it catches on its first day.
