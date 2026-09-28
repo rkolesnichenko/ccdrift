@@ -4,7 +4,8 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from lab.thinking import COUNT_COLUMNS, counted, thinking_counts, thinking_rises
+from lab.thinking import (COUNT_COLUMNS, counted, gate, plant, plant_run, plant_starts, replay, rows,
+                          thinking_counts, thinking_rises)
 from tests.helpers import nth_day
 
 
@@ -93,3 +94,81 @@ def test_a_baseline_of_no_thinking_raises_nothing():
 def test_only_days_before_today_are_judged():
     counts = history([250] * 8 + [1500, 1500])
     assert thinking_rises(counts, {}, date.fromisoformat(nth_day(9)), ratio=3, days=2) == []
+
+
+def test_the_plant_multiplies_only_the_next_three_counted_days_of_that_model():
+    counts = pd.concat([history([250] * 10), history([400] * 10, model="claude-sonnet-5")], ignore_index=True)
+    quiet = (counts["model"] == "claude-opus-5") & (counts["day"] == nth_day(6))
+    counts.loc[quiet, "responses"] = 10
+    counts.loc[quiet, "logged"] = 10
+    assert plant_run(counts, "claude-opus-5", nth_day(5)) == [nth_day(5), nth_day(7), nth_day(8)]
+    planted = plant(counts, "claude-opus-5", nth_day(5), 3)
+    changed = planted[planted["thinking"] != counts["thinking"]]
+    assert list(zip(changed["model"], changed["day"])) == [("claude-opus-5", nth_day(5)), ("claude-opus-5", nth_day(7)),
+                                                           ("claude-opus-5", nth_day(8))]
+    assert (changed["thinking"] == 3 * 250 * 100).all()
+
+
+def test_a_plant_starts_on_a_counted_day_with_a_baseline_before_it_and_room_after_it():
+    assert plant_starts(history([250] * 10), "claude-opus-5") == [nth_day(5), nth_day(6), nth_day(7)]
+
+
+def test_the_replay_judges_each_day_the_morning_after_and_reports_each_rise_once():
+    found = replay(history([250] * 8 + [1500, 1800, 2000]), ratio=3, days=2)
+    assert [(r["since"], r["on"], r["reported_on"]) for r in found] == [(nth_day(8), nth_day(9), nth_day(10))]
+
+
+def gate_history():
+    """14 days swinging 200-300, and the same with a three-day episode at 2000 after them."""
+    clean = history([200, 300] * 7)
+    full = pd.concat([clean, history([2000] * 3, start=14)], ignore_index=True)
+    return clean, full, [nth_day(14), nth_day(15), nth_day(16)]
+
+
+def test_a_setting_passes_quiet_on_a_clean_history_catching_every_plant_and_the_episode():
+    clean, full, episode = gate_history()
+    [steady, jumpy] = rows(clean, full, episode, ratios=(2, 1.1), days_grid=(1,), plants=(1.5, 3))
+    assert (steady["alarms"], steady["caught"][3], steady["starts"], steady["episode"]) == ([], 7, 7, nth_day(14))
+    assert steady["caught"][1.5] < 7 and steady["passes"]
+    assert jumpy["alarms"] and not jumpy["passes"]
+
+
+def test_a_plant_the_clean_history_already_reports_is_not_a_catch():
+    # At 1.1 every 300 day starts a rise, and a plant on the day after it only lengthens that
+    # rise, which the clean replay reported first: no plant is caught.
+    clean, full, episode = gate_history()
+    [jumpy] = rows(clean, full, episode, ratios=(1.1,), days_grid=(1,), plants=(3,))
+    assert (len(jumpy["alarms"]), jumpy["caught"][3], jumpy["starts"]) == (5, 0, 7)
+
+
+def test_the_episode_counts_only_when_reported_by_its_third_counted_day():
+    clean, _, _ = gate_history()
+    full = pd.concat([clean, history([2000] * 4, start=14)], ignore_index=True)
+    episode = [nth_day(day) for day in range(14, 18)]
+    found = rows(clean, full, episode, ratios=(2,), days_grid=(3, 4), plants=(3,))
+    assert [row["episode"] for row in found] == [nth_day(16), None]
+
+
+def test_the_gate_names_the_passing_settings():
+    clean, full, episode = gate_history()
+    ok, notes = gate(rows(clean, full, episode, ratios=(2, 1.1), days_grid=(1,), plants=(3,)))
+    assert ok and notes == ["passing settings: ratio=2 days=1"]
+
+
+def test_the_gate_fails_when_no_setting_passes_and_names_the_closest():
+    clean, full, episode = gate_history()
+    # 1.1 alarms on every 300 day; 6 alarms on none and catches no plant of x3: fewer false
+    # alarms come first, so 6 is the closest.
+    ok, notes = gate(rows(clean, full, episode, ratios=(1.1, 6), days_grid=(1,), plants=(3,)))
+    assert not ok
+    assert notes == ["no setting passes; closest: ratio=6 days=1: 0 false alarm(s), plants of x3 or more caught "
+                     "0 of 7, episode on 2026-09-15"]
+
+
+def test_a_setting_that_raises_a_false_alarm_fails_even_catching_everything_else():
+    clean = history([200, 300] * 6 + [800, 300])
+    full = pd.concat([clean, history([2000] * 3, start=14)], ignore_index=True)
+    [row] = rows(clean, full, [nth_day(14), nth_day(15), nth_day(16)], ratios=(2,), days_grid=(1,), plants=(3,))
+    assert (row["alarms"], row["caught"][3], row["starts"], row["episode"]) == (["claude-opus-5 2026-09-13"], 7, 7,
+                                                                               nth_day(14))
+    assert not row["passes"]
