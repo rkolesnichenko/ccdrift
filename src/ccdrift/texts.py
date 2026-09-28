@@ -790,6 +790,7 @@ COMMAND_LINES = {"no_scheduler": "ccdrift can't set up a scheduled job on this s
                  "first_run": "A first run has started. Check `ccdrift schedule status` in a minute.",
                  "not_removed": "Nothing removed: {error}",
                  "removed": "Removed the ccdrift job.",
+                 "replaced": "Removed the {old} job an earlier install left, so the {new} job is the only one.",
                  "nothing_to_remove": "No ccdrift job was installed.",
                  "schedule_unreadable": "Couldn't read the schedule: {error}",
                  "state_unchangeable": "Can't change the state file {path}: {error}",
