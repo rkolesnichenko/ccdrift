@@ -382,6 +382,30 @@ def no_responses_message(episode: dict[str, Any], lines: int) -> str:
             "run `ccdrift peek`.")
 
 
+def blank_cache_line(first: str) -> str:
+    return f"no usable cache values from {first}"
+
+
+def unread_episode_line(kind: str, episode: dict[str, Any]) -> str:
+    """An unreadable or no-responses episode for the long `ccdrift status`."""
+    what = (f"parser failed on {_transcripts(episode['transcripts'])}" if kind == "unreadable"
+            else f"{_transcripts(episode['transcripts'])} without responses")
+    return f"{what} from {episode['since']}, last on {episode['last']}"
+
+
+def blind_status(kind: str, record: Any) -> str:
+    """The status line for a check that can't see what it judges: `record` is the first
+    day of a blank-cache stretch, an unreadable or no-responses episode, or a field gap."""
+    if kind == "blank_cache":
+        return f"ccdrift: no cache values since {record[5:]}"
+    if kind == "unreadable":
+        return f"ccdrift: parser failed on {_transcripts(record['transcripts'])}"
+    if kind == "no_responses":
+        return f"ccdrift: {_transcripts(record['transcripts'])} without responses"
+    where = "" if record["version"] == "unknown" else f" on {record['version']}"
+    return f"ccdrift: {record['field']} not logged{where}"
+
+
 def unread_lines(found: Sequence[tuple[str, Any]], lines: bool) -> list[str]:
     """The transcripts behind an unreadable or no-responses alert, for the log alone:
     their paths name project folders."""

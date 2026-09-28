@@ -77,7 +77,8 @@ installed keeps running once a day until you do.
 
 Claude Code deletes transcripts after 30 days by default. From its first run on,
 ccdrift keeps its own history of every response it has read, so later deletions don't
-affect it; the history grows by about 65 MB a year for a heavy user. Each check reads
+affect it; the history grows by about 200 MB a year for a heavy user, one with about
+2,400 responses a day, subagents' included. Each check reads
 its last 90 days, or its last 60 days of use when those reach further back, and back
 to an older incident whose cost it works out; `ccdrift report` and `ccdrift incident
 list` read all of it. Its first run can only see what's still on disk, and it replays
@@ -166,9 +167,11 @@ ccdrift replay                                      the incidents the check woul
 ## Status line
 
 `ccdrift status --short` prints one line when something needs attention, and nothing
-otherwise: no check yet, a failing check, no check for 3 days, an open incident, failing
-hooks, cache misses rising, or tool-loop cache misses rising on the main thread or in
-subagents. A state file it can't read shows as `ccdrift: can't read state`.
+otherwise: no check yet, a failing check, no check for 3 days, a check that can't see
+what it judges (no cache values, transcripts it couldn't read or found no responses in,
+or a field Claude Code stopped logging, for 3 days from the last check that found it), an
+open incident, failing hooks, cache misses rising, or tool-loop cache misses rising on
+the main thread. A state file it can't read shows as `ccdrift: can't read state`.
 
 ```console
 $ ccdrift status --short
@@ -178,6 +181,7 @@ ccdrift: cache ratio down since 08-18
 It reads only the state file and always exits 0, so it's cheap and safe to call from
 the command your Claude Code status line runs. `ccdrift status` shows the last run,
 open and recent incidents, setting changes, and other changes: session start, hooks,
+days without cache values, transcripts it couldn't read or found no responses in,
 fields that stopped or started being logged, early warnings, tool-loop warnings, failed
 requests and responses cut short.
 
@@ -318,12 +322,13 @@ A tool-loop turn is a response that doesn't open with a prompt, doesn't follow a
 compaction and comes within 5 minutes of the previous response in its transcript. It
 misses the cache when it reads less than half of what that response had cached.
 
-Every run follows these turns one by one on the main thread and in subagents, each
-apart, with the same kind of CUSUM against the usual miss rate of the 14 days before the
-last week (at least 1,000 turns): on the main thread against 2% with h = 3, and in
-subagents against 2% with h = 8 (measured in [lab/loop_cache.py](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/loop_cache.py)). It
-warns when the sum passes h within the last day, at most once a week per stream, and
-also while a cache incident is open.
+Every run follows these turns one by one on the main thread with the same kind of CUSUM
+against the usual miss rate of the 14 days before the last week (at least 1,000 turns),
+against 2% with h = 3 (measured in [lab/loop_cache.py](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/loop_cache.py)). It
+warns when the sum passes h within the last day, at most once a week, and also while a
+cache incident is open. Subagents' turns get no warning: no setting measured there caught
+a planted rise quickly enough without false alarms, so their misses stay in `ccdrift
+report` and the weekly summary.
 
 A session's start is the prompt size (input plus cache tokens) of its first response.
 The latest 3 sessions are compared with the 10 before them: a change is at least 25%,

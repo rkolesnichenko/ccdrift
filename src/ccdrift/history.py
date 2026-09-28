@@ -3,7 +3,7 @@
 Claude Code deletes transcripts after 30 days by default, so ccdrift keeps every
 response it has read (token counts, model, version and settings; no text) in
 SQLite next to its state file, and reads only transcripts that are new or changed
-since. A year of one heavy user's responses takes about 65 MB."""
+since. A year of one heavy user's responses takes about 200 MB."""
 
 from __future__ import annotations
 
@@ -55,8 +55,10 @@ COMPACTION_COLUMNS = ("version", "entrypoint", "is_sidechain", "trigger", "pre_t
 FAILURE_COLUMNS = ("version", "entrypoint", "is_sidechain", "kind", "status")
 USAGE_COLUMNS = ("model",) + USAGE_COUNTS + ("cost_usd",)
 
-# Integer keys, microsecond timestamps and file ids keep a year of responses near
-# 65 MB; text keys, text timestamps and a path per row made it four times larger.
+# Integer keys, microsecond timestamps and file ids keep the store small: on 2026-09-28 it
+# held the owner's 95,694 responses of 53 days in 22.7 MB, about 237 bytes each, so about
+# 200 MB a year at their last 30 days' 2,380 responses a day. Text keys, text timestamps and
+# a path per row made it four times larger.
 # files.last_ts is the latest time among a transcript's responses, so the check finds
 # recent transcripts without reading every response.
 SCHEMA = """

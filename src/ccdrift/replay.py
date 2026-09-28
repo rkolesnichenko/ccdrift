@@ -45,10 +45,14 @@ def replay_incidents(responses: pd.DataFrame, today: date, cfg: DetectorConfig,
     turns = judged_turns(responses, today)
     if turns.empty:
         return []
+    # What the check judged on each day is these turns before it, as judged_turns(responses,
+    # day) would give. Judging the whole history again for every day made the replay grow with
+    # days times responses: 1.7s of `ccdrift replay`'s 2.8s over the owner's 53 days.
+    days = turns["day"].astype(str)
     events = []
     day = date.fromisoformat(str(turns["day"].min())) + timedelta(days=1)
     while day <= today:
-        for event in update_incidents(judged_turns(responses, day), state, day, cfg):
+        for event in update_incidents(turns[days < day.isoformat()], state, day, cfg):
             if event.kind == "flag":
                 event.incident["source"] = REPLAY_SOURCE
             events.append((day.isoformat(), event))
@@ -109,9 +113,9 @@ def run_replay(source: Path, state_path: Path, today: Optional[date] = None,
     events = replay_incidents(responses, today, cfg, state)
     first = date.fromisoformat(str(turns["day"].min())) + timedelta(days=1)
     lines = [REPLAY_LINES["header"].format(first=first.isoformat(), today=today.isoformat()), REPLAY_LINES["quiet"], ""]
+    days = turns["day"].astype(str)
     for day, event in events:
-        _, title, message, _, _ = describe(event, judged_turns(responses, date.fromisoformat(day)),
-                                           state["incidents"], cfg)
+        _, title, message, _, _ = describe(event, turns[days < day], state["incidents"], cfg)
         lines.append(REPLAY_LINES["event"].format(day=day, title=title, message=message))
     if not events:
         lines.append(REPLAY_LINES["none"])
