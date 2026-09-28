@@ -69,8 +69,10 @@ def thinking_rises(counts: pd.DataFrame, state: dict[str, Any], today: date, rat
     that median is MIN_MEDIAN or more; a rise is reported on the day it has lasted `days`
     counted days in a row, once, if that day is within RECENT_DAYS of today. A counted day that
     isn't raised ends the run; a day that doesn't count is skipped. Raised days stay in the
-    baseline, so a rise that lasts becomes the level. A rise's `extra` is the thinking over the
-    median on its days so far."""
+    baseline, so a rise that lasts becomes the level. A run that starts within RECENT_DAYS of the
+    model's last raised day is the same rise going on unless it starts at `ratio` times that day's
+    level: a heavy day that recurs every week would otherwise be a new rise every week. A rise's
+    `extra` is the thinking over the median on its days so far."""
     rises = state["thinking_rises"]
     judged = counted(counts[counts["day"].astype(str) < today.isoformat()])
     recent = (today - timedelta(days=RECENT_DAYS)).isoformat()
@@ -78,16 +80,22 @@ def thinking_rises(counts: pd.DataFrame, state: dict[str, Any], today: date, rat
     for model, group in judged.groupby("model", sort=True):
         levels = list(zip(group["day"].astype(str), group["level"].astype(float), group["logged"].astype(int)))
         run: list[tuple[str, float, float, int]] = []
+        last: tuple[str, float] | None = None  # the model's latest raised day before the current run
         for i, (day, level, logged) in enumerate(levels):
             before = [value for _, value, _ in levels[max(0, i - BASELINE_DAYS):i]]
             if len(before) < MIN_BASELINE_DAYS:
                 continue
             median = statistics.median(before)
             if median < MIN_MEDIAN or level < ratio * median:
+                last = (run[-1][0], run[-1][1]) if run else last
                 run = []
                 continue
             run.append((day, level, median, logged))
             if len(run) != days or day < recent:
+                continue
+            start = date.fromisoformat(run[0][0])
+            if (last is not None and last[0] >= (start - timedelta(days=RECENT_DAYS)).isoformat()
+                    and run[0][1] < ratio * last[1]):
                 continue
             rise = {"model": str(model), "since": run[0][0], "on": day, "days": [one[0] for one in run],
                     "median": round(run[0][2], 1), "levels": [round(one[1], 1) for one in run],

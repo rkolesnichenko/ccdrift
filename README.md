@@ -370,7 +370,9 @@ Thinking is judged per model, on days with 50 or more main-thread responses of w
 logged a thinking token count: a day's mean count is compared with the median of the
 model's 14 such days before it (at least 5), when that median is 100 tokens or more. A day
 at twice the median or more is a rise, reported once and only when that day is within the
-last 2 weeks. The setting was measured in [lab/thinking.py](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/thinking.py) (G16) on one person's logs, whose
+last 2 weeks. A rise that starts within 2 weeks of the model's last raised day is the same one
+going on unless it is twice that day's level, so a heavy day that recurs, say every week, is
+reported once. The setting was measured in [lab/thinking.py](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/thinking.py) (G16) on one person's logs, whose
 2026-09-10 rise it catches on its first day.
 
 For each Claude Code version first seen in the last 2 weeks with 50 or more

@@ -78,9 +78,26 @@ def test_two_models_are_judged_apart_so_a_switch_to_a_model_that_thinks_more_is_
     assert replayed(counts) == []
 
 
-def test_a_second_run_after_a_day_that_isnt_raised_is_reported_again():
-    found = replayed(history([250] * 8 + [1500, 1500, 250, 1500, 1500]), ratio=3, days=2)
-    assert [(r["since"], r["on"]) for r in found] == [(nth_day(8), nth_day(9)), (nth_day(11), nth_day(12))]
+def test_a_second_run_more_than_two_weeks_after_the_first_is_reported_again():
+    found = replayed(history([250] * 8 + [1500, 1500] + [250] * 15 + [1500, 1500]), ratio=3, days=2)
+    assert [(r["since"], r["on"]) for r in found] == [(nth_day(8), nth_day(9)), (nth_day(25), nth_day(26))]
+
+
+def test_a_heavy_day_that_recurs_every_week_is_reported_once():
+    # Found in the 0.20.0 review: a quiet day ends a run, so a weekly design day at twice the
+    # usual thinking was a new rise, and a notification, every week for good.
+    week = [250] * 6 + [500]
+    assert [r["since"] for r in replayed(history(week * 12))] == [nth_day(6)]
+
+
+def test_a_rise_broken_by_one_quiet_day_is_one_rise():
+    # Had 2026-09-12 held a normal day, the real episode would have alerted twice.
+    assert [r["since"] for r in replayed(history([250] * 8 + [1500, 250, 1500]))] == [nth_day(8)]
+
+
+def test_a_raised_day_at_twice_the_last_one_within_two_weeks_is_a_new_rise():
+    found = replayed(history(([250] * 6 + [500]) * 2 + [250] * 6 + [1000]))
+    assert [(r["since"], r["levels"]) for r in found] == [(nth_day(6), [500.0]), (nth_day(20), [1000.0])]
 
 
 def test_a_day_that_doesnt_count_neither_raises_nor_ends_a_run():

@@ -53,11 +53,13 @@ def test_a_setting_passes_quiet_on_a_clean_history_catching_every_plant_and_the_
 
 
 def test_a_plant_the_clean_history_already_reports_is_not_a_catch():
-    # At 1.1 every 300 day starts a rise, and a plant on the day after it only lengthens that
-    # rise, which the clean replay reported first: no plant is caught.
+    # At 1.1 the first 300 day is a rise and every later one is the same rise going on. A plant
+    # starting on that first day only lengthens the rise the clean replay reported first, so it
+    # isn't caught; a plant on a 200 day lands at twice the last raised day and is a new rise.
     clean, full, episode = gate_history()
     [jumpy] = rows(clean, full, episode, ratios=(1.1,), days_grid=(1,), plants=(3,))
-    assert (len(jumpy["alarms"]), jumpy["caught"][3], jumpy["starts"]) == (5, 0, 7)
+    assert (jumpy["alarms"], jumpy["caught"][3], jumpy["starts"]) == (["claude-opus-5 2026-09-06"], 3, 7)
+    assert nth_day(5) in jumpy["missed"][3]
 
 
 def test_each_setting_names_the_plant_starts_it_missed():
@@ -66,7 +68,7 @@ def test_each_setting_names_the_plant_starts_it_missed():
     clean, full, episode = gate_history()
     [steady, jumpy] = rows(clean, full, episode, ratios=(2, 1.1), days_grid=(1,), plants=(1.5, 3))
     assert steady["missed"][3] == [] and len(steady["missed"][1.5]) == 7 - steady["caught"][1.5]
-    assert jumpy["missed"][3] == [nth_day(day) for day in range(5, 12)]
+    assert jumpy["missed"][3] == [nth_day(day) for day in (5, 6, 8, 10)]
 
 
 def test_each_counted_day_is_printed_with_its_level_against_the_median_before_it():
@@ -96,9 +98,8 @@ def test_the_gate_fails_the_shipped_setting_and_names_the_ones_that_pass():
     ok, notes = gate(rows(clean, full, episode, ratios=(1.1, 2), days_grid=(1,), plants=(3,)),
                      {"ratio": 1.1, "days": 1})
     assert not ok
-    assert notes == ["ships ratio=1.1 days=1: 5 false alarm(s) (claude-opus-5 2026-09-06, claude-opus-5 2026-09-08, "
-                     "claude-opus-5 2026-09-10, claude-opus-5 2026-09-12, claude-opus-5 2026-09-14), plants of x3 or "
-                     "more caught 0 of 7, episode missed", "passing settings: ratio=2 days=1"]
+    assert notes == ["ships ratio=1.1 days=1: 1 false alarm(s) (claude-opus-5 2026-09-06), plants of x3 or more "
+                     "caught 3 of 7, episode missed", "passing settings: ratio=2 days=1"]
 
 
 def test_the_gate_says_when_no_setting_passes_or_the_shipped_one_is_not_in_the_grid():
