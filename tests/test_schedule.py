@@ -12,7 +12,7 @@ import pytest
 
 from ccdrift.cli import main
 from ccdrift.schedule import (Cron, Launchd, ScheduleError, Systemd, choose_backend, cron_line, install,
-                              launchd_plist, make_job, parse_at, systemd_units)
+                              launchd_plist, make_job, parse_at, run_command, systemd_units)
 
 
 class FakeRun:
@@ -619,3 +619,89 @@ def test_schedule_install_without_a_time_sets_up_an_hourly_job(tmp_path, monkeyp
 def test_job_carries_no_digest_given_to_install():
     job = make_job("09:00", notify=True, no_digest=True, python="/venv/bin/python", environ={})
     assert job.argv() == ["/venv/bin/python", "-m", "ccdrift", "check", "--notify", "--no-digest"]
+
+
+# ---------------------------------------------------------------------------
+# Paths the audit of 2026-09-25 found no test ran
+# ---------------------------------------------------------------------------
+
+def test_launchd_status_says_when_the_agent_is_installed_but_not_loaded(tmp_path):
+    run, backend = launchd(tmp_path)
+    backend.install(job_for(tmp_path))
+    run.results[("launchctl", "print")] = (113, "")
+    lines = backend.status()
+    assert lines[:2] == ["installed: launchd agent io.github.rkolesnichenko.ccdrift, daily at 09:00",
+                         "not loaded; run `ccdrift schedule install` again"]
+
+
+def test_schedule_install_with_cron_says_what_cron_cant_do_and_starts_a_first_run(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CCDRIFT_HOME", str(tmp_path / "data"))
+    table, started = FakeCrontab(None), []
+    backend = Cron(run=table, spawn=lambda argv, log: started.append((argv, log)))
+    monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: backend)
+    assert main(["schedule", "install", "--at", "06:05", "--no-notify"]) == 0
+    log = tmp_path / "data" / "check.log"
+    assert capsys.readouterr().out.splitlines() == [
+        "Installed a cron job: `ccdrift check` runs daily at 06:05.",
+        f"Log: {log}",
+        "A first run has started. Check `ccdrift schedule status` in a minute.",
+        "Cron doesn't catch up on runs missed while the machine was off.",
+    ]
+    job = make_job("06:05", notify=False, environ={"CCDRIFT_HOME": str(tmp_path / "data")})
+    assert (table.table, started) == (cron_line(job) + "\n", [(job.argv(), log)])
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+
+
+def test_cron_warns_that_notifications_rarely_show_only_when_the_job_sends_them():
+    notes = Cron(run=FakeCrontab(None)).install_notes
+    assert len(notes(make_job("06:05", notify=True, environ={}))) == 2
+    assert notes(make_job("06:05", notify=False, environ={})) == [
+        "Cron doesn't catch up on runs missed while the machine was off."]
+
+
+def test_a_failed_launchd_reinstall_whose_old_agent_wont_load_again_says_so(tmp_path):
+    run, backend = launchd(tmp_path)
+    backend.install(make_job("09:00", notify=True, python="/venv/bin/python", environ={}))
+    before = backend.plist.read_bytes()
+    run.results[("launchctl", "bootstrap")] = (5, "")
+    with pytest.raises(ScheduleError, match="back in place but didn't load; `ccdrift schedule status` shows it"):
+        backend.install(job_for(tmp_path))
+    assert backend.plist.read_bytes() == before
+
+
+def test_a_failed_systemd_reinstall_whose_old_timer_wont_enable_again_says_so(tmp_path):
+    run, backend = systemd(tmp_path)
+    backend.install(make_job("09:00", notify=True, python="/venv/bin/python", environ={}))
+    before = {path.name: path.read_text() for path in (backend.timer, backend.service)}
+    run.results[("systemctl", "--user", "enable")] = (1, "")
+    with pytest.raises(ScheduleError, match="back in place but couldn't be enabled"):
+        backend.install(make_job(None, notify=False, python="/venv/bin/python", environ={}))
+    assert {path.name: path.read_text() for path in (backend.timer, backend.service)} == before
+
+
+def test_systemd_remove_and_status_say_when_nothing_is_installed(tmp_path):
+    run, backend = systemd(tmp_path)
+    assert (backend.remove(), backend.status(), run.calls) == (False, ["not installed"], [])
+
+
+def test_a_scheduler_command_that_isnt_installed_reads_as_a_failure_not_a_traceback(tmp_path):
+    result = run_command([str(tmp_path / "no-such-command")])
+    assert (result.returncode, result.stdout) == (127, "")
+    assert "no-such-command" in result.stderr
+
+
+def test_a_scheduler_file_that_fails_to_write_leaves_the_old_one_and_no_temporary_file(tmp_path, monkeypatch):
+    run, backend = launchd(tmp_path)
+    backend.install(make_job("09:00", notify=True, python="/venv/bin/python", environ={}))
+    before = backend.plist.read_bytes()
+    run.calls.clear()
+
+    def refuse(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("ccdrift.schedule.os.replace", refuse)
+    with pytest.raises(ScheduleError, match="Can't write .*: disk full"):
+        backend.install(job_for(tmp_path))
+    assert backend.plist.read_bytes() == before
+    assert [p.name for p in backend.plist.parent.iterdir()] == [backend.plist.name]
+    assert run.calls == []

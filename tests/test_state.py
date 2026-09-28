@@ -3,12 +3,15 @@
 import json
 import os
 import stat
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from ccdrift.state import load_state, new_state, record_run, save_state
+from ccdrift.cli import main
+from ccdrift.state import load_state, new_state, record_run, save_state, state_lock
 
 
 def test_a_missing_state_file_reads_as_a_fresh_state(tmp_path):
@@ -136,3 +139,67 @@ def test_the_state_reaches_the_disk_before_it_replaces_the_last_one(tmp_path, mo
     save_state(tmp_path / "state.json", new_state())
     assert calls[-2:] == ["fsync", "replace"]
     assert load_state(tmp_path / "state.json") == new_state()
+
+
+
+def test_a_second_command_waits_for_the_state_lock_saying_so_and_goes_on_once_it_is_released(tmp_path, capfd):
+    fcntl = pytest.importorskip("fcntl")
+    path = tmp_path / "state.json"
+    held = open(tmp_path / "state.json.lock", "a")
+    fcntl.flock(held, fcntl.LOCK_EX)
+    entered = threading.Event()
+
+    def second():
+        with state_lock(path):
+            entered.set()
+
+    waiting = threading.Thread(target=second)
+    waiting.start()
+    assert not entered.wait(0.3)
+    held.close()  # releases the lock
+    waiting.join(5)
+    assert entered.is_set()
+    assert f"Waiting for another ccdrift command to finish with {path}..." in capfd.readouterr().err
+
+
+def test_an_incident_added_while_a_check_holds_the_state_is_kept_along_with_the_checks_own_change(tmp_path, capsys):
+    # The check reads the state, works for a while and saves it; `ccdrift incident add` run
+    # meanwhile must wait for it, or one of them saves over the other's change.
+    path = tmp_path / "state.json"
+    save_state(path, new_state())
+    loaded, adding = threading.Event(), threading.Event()
+
+    def check():
+        with state_lock(path):
+            state = load_state(path)
+            loaded.set()
+            adding.wait(5)
+            time.sleep(0.3)
+            state["blank_cache"] = ["2026-09-01"]
+            save_state(path, state)
+
+    checking = threading.Thread(target=check)
+    checking.start()
+    loaded.wait(5)
+    codes = []
+
+    def add():
+        adding.set()
+        codes.append(main(["incident", "add", "cache", "2026-08-16..2026-09-04", "--state", str(path)]))
+
+    incident = threading.Thread(target=add)
+    incident.start()
+    checking.join(5)
+    incident.join(5)
+    state = load_state(path)
+    assert (codes, state["blank_cache"], [i["start"] for i in state["incidents"]]) == (
+        [0], ["2026-09-01"], ["2026-08-16"])
+
+
+def test_a_save_that_fails_leaves_the_last_state_and_no_temporary_file(tmp_path):
+    path = tmp_path / "state.json"
+    save_state(path, {**new_state(), "blank_cache": ["2026-09-01"]})
+    with pytest.raises(TypeError):
+        save_state(path, {**new_state(), "blank_cache": {"not", "json"}})
+    assert load_state(path)["blank_cache"] == ["2026-09-01"]
+    assert [p.name for p in tmp_path.iterdir()] == ["state.json"]
