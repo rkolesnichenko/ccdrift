@@ -179,6 +179,19 @@ The loudest Claude Code complaint of 2026 is usage limits filling faster, and th
 - **So 0.19.0 collects before it judges.** `ccdrift status --short --stdin` keeps a sample of those numbers beside the state file when they change, at most once a minute. A rule on how fast a limit fills for the tokens used, judged against the history store, needs weeks of samples on both sides of any change, and nothing records them otherwise.
 - **Why the status line rather than OpenTelemetry.** The metrics Claude Code's OpenTelemetry export documents count tokens, cost, sessions, lines, commits and pull requests, none of them a usage limit, and reading them needs a collector running. The status line is already called on every refresh, and ccdrift is already on it.
 
+## Thinking that rises (G16), 2026-09-28
+
+From 2026-09-10 to 09-15, on Claude Code 2.1.267 to 2.1.272, the owner's main thread thought 6 to 9 times as much per response as on any other day, and nothing noticed. G16 asks whether a rule could have: each model's mean logged thinking tokens per main-thread CLI response on a day with at least 50 responses, 90% of them logging a count, raised at a ratio to the median of the model's previous 14 counted days and reported once it lasts some counted days in a row. Measured with `python -m lab.thinking --today 2026-09-28` over the owner's transcripts, aggregates only.
+
+- **The level.** claude-opus-5 has 32 counted days from 08-17 to 09-23. Outside the episode its level runs from 144 to 388 tokens per response; the episode's counted days read 1,547 (09-10), 2,378 (09-11), 2,070 (09-14) and 2,671 (09-15), with 09-12 and 09-13 too quiet to count. claude-opus-5-5 has 5 counted days from 09-22, at 140 to 289.
+- **G16 fails at the bar it was given.** None of the 12 settings (ratio 2, 2.5, 3 or 4, over 1, 2 or 3 days) raises no false alarm on the history without the episode, catches every plant of 3 times the thinking or more from all 21 starting days within 3 counted days, and reports the episode by its third counted day. Every setting reports the real episode, on the counted day that completes its run.
+- **The closest is ratio 3 over 1 day**: no false alarm, every plant of 4 or 6 times caught from all 21 starts, 16 of 21 at 3 times, and the episode reported on its first counted day, 09-10.
+- **Why 3 times is out of reach.** A plant multiplies a day's own level, and a quiet day sits well under the median: 144 against about 250, so three times it is 432, under the 750 that ratio 3 asks for. Catching every 3-times plant would take a ratio under about 1.7, and ratio 2 already raises a false alarm.
+- **The false alarm is the episode's tail.** At ratio 2 over 1 or 2 days and ratio 2.5 over 1 day, the one false alarm is 2026-09-16 at 710, 2.8 times the usual level, on 2.1.273, the release that brought thinking back down; 09-17 read 544. A higher ratio or a longer run keeps it quiet.
+- **A real rise lifts the quiet days too.** It raised the share of responses that think at all, from 0.34-0.65 to 0.81-0.94, as well as how much each one thought, which is why every setting catches it while multiplying a quiet day's thinking by 3 does not.
+
+No alert ships on this. Ratio 3 over 1 day would clear a bar of 4 times; whether 4 times is the rise worth being told about is a decision, not a measurement, and belongs to the alert's own release.
+
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
 
 Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).
