@@ -93,3 +93,11 @@ def test_the_digest_line_is_worded_from_plain_numbers_the_status_path_can_import
         "Week of 09-14: 70 responses on 2.1.261–2.1.270; cache ratio 0.976 (1.4% misses); no Haiku; "
         "tool-loop misses 2 of 1,880, no subagent loop turns; 3 failed requests, 1 response cut short; "
         "1 open incident; no setting changes; 2 new fields; check ran on 6 of 7 days.")
+
+
+def test_the_weekly_summary_says_while_ccdrift_cost_withholds_its_total():
+    state = {**new_state(), "withheld": {"since": "2026-09-18", "models": [["claude-opus-5-5", 0.1436]]}}
+    assert weekly_digest(pd.DataFrame(), state, date(2026, 9, 14)) == (
+        "Week of 09-14: no responses; no open incidents; no setting changes; no new fields; `ccdrift cost` total "
+        "withheld: no price for claude-opus-5-5, 14.4% of the window's tokens; check ran on 0 of 7 days.")
+    assert "withheld" not in weekly_digest(pd.DataFrame(), new_state(), date(2026, 9, 14))

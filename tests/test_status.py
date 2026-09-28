@@ -255,3 +255,12 @@ def test_status_short_loads_neither_pandas_nor_numpy(tmp_path):
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                             env={**os.environ, "PYTHONPATH": str(root / "src")})
     assert result.stdout.splitlines() == ["ccdrift: no check yet", "[]"], result.stderr
+
+
+def test_the_long_status_says_while_ccdrift_cost_withholds_its_total(tmp_path):
+    state = {**new_state(), **ran(), "last_ok": "2026-09-20T09:00:02+03:00",
+             "withheld": {"since": "2026-09-18", "models": [["claude-opus-5-5", 0.1436], ["claude-x-1", 0.0214]]}}
+    report = status_report(state, NOW)
+    assert ("  `ccdrift cost` has withheld its total since 2026-09-18: no price for claude-opus-5-5 and claude-x-1, "
+            "16.5% of the window's tokens\n") in report
+    assert "withheld" not in status_report({**state, "withheld": None}, NOW)

@@ -88,7 +88,7 @@ def new_state() -> dict[str, Any]:
     return {"version": STATE_VERSION, "incidents": [], "settings": [], "blank_cache": [], "reported": {},
             "field_gaps": [], "new_fields": [], "hook_failures": [], "context_changes": [], "early_warnings": [],
             "loop_warnings": [], "failed_requests": [], "cut_short": [], "hook_changes": [], "unreadable": [],
-            "no_responses": [], "context_rule": CONTEXT_RULE, "runs": []}
+            "no_responses": [], "withheld": None, "context_rule": CONTEXT_RULE, "runs": []}
 
 
 def load_state(path: Path) -> dict[str, Any]:

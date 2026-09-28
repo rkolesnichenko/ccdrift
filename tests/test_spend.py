@@ -1,19 +1,20 @@
 """Partitioning the history by where its tokens went."""
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import pandas as pd
 import pytest
 
 from ccdrift.cli import main
+from ccdrift.check import run_check
 from ccdrift.history import load_history
-from ccdrift.logs import parse_source
+from ccdrift.logs import parse_all, parse_source
 from ccdrift.prices import Price
 from ccdrift.spend import (DEFAULT_ORDER, DIMENSIONS, MATERIAL_SHARE, PRIVATE_DIMENSIONS, TOKEN_COLUMNS,
                            branch_projects, priced_total, record_write_tiers, response_dollars, run_spend,
-                           spend_json, spend_rows, spend_turns, total_tokens)
-from ccdrift.state import new_state, save_state
+                           spend_json, spend_rows, spend_turns, total_tokens, withheld_total)
+from ccdrift.state import load_state, new_state, save_state
 from ccdrift.texts import DIMENSION_NAMES
 from tests.helpers import at, cost_state, line, text, write
 
@@ -897,3 +898,41 @@ def test_the_project_count_stays_out_of_the_json(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert "branch" in payload["withheld"]
     assert all("projects" not in row for rows in payload["dimensions"].values() for row in rows)
+
+
+# Too few plain records for claude-opus-5-5, costing twice its 1M price: unpriced, and at
+# half the window's tokens, the total is withheld.
+BLANK = {"keys": {"claude-opus-5-5": "claude-opus-5-5[1m]"}, "rates": {"claude-opus-5-5": (8e-6, 40e-6, 0.05, 3)}}
+
+
+def test_withheld_total_names_the_models_that_blank_the_total_and_nothing_once_it_prints(tmp_path):
+    two_cache_ratios_corpus(tmp_path / "blank", **BLANK)
+    withheld = withheld_total(parse_all(tmp_path / "blank"), TODAY)
+    assert [model for model, _ in withheld] == ["claude-opus-5-5"] and withheld[0][1] >= MATERIAL_SHARE
+    two_cache_ratios_corpus(tmp_path / "priced")
+    assert withheld_total(parse_all(tmp_path / "priced"), TODAY) is None
+    # An unpriced model under MATERIAL_SHARE leaves the total printed, so nothing is withheld.
+    money_corpus(tmp_path / "immaterial", unpriced_out=100)
+    assert withheld_total(parse_all(tmp_path / "immaterial"), TODAY) is None
+    # With no cost records at all nothing is priced, and cost reports tokens without saying it
+    # withheld anything: a Claude Code that writes none mustn't be told so every week.
+    write(tmp_path / "none" / "p" / "s1.jsonl", [line("m1", text(40), ts=at(0), entrypoint="cli")])
+    assert withheld_total(parse_all(tmp_path / "none"), TODAY) is None
+
+
+def test_the_check_records_while_cost_withholds_its_total_and_clears_it_once_cost_prints_it(tmp_path):
+    # claude-opus-5-5 went unpriced on 2026-09-25 and nothing said so for three days: the
+    # check now keeps what cost would withhold, for status and the weekly summary to say.
+    save_state(tmp_path / "state.json", {**new_state(), "last_ok": "2026-09-01T09:00:00+00:00"})
+    two_cache_ratios_corpus(tmp_path / "logs", **BLANK)
+
+    def check(day):
+        run_check(tmp_path / "logs", tmp_path / "state.json", today=day, digest=False,
+                  now=datetime(day.year, day.month, day.day, 9, tzinfo=timezone.utc))
+        return load_state(tmp_path / "state.json")["withheld"]
+
+    first = check(date(2026, 9, 4))
+    assert (first["since"], [model for model, _ in first["models"]]) == ("2026-09-04", ["claude-opus-5-5"])
+    assert check(date(2026, 9, 5)) == first
+    two_cache_ratios_corpus(tmp_path / "logs", keys=BLANK["keys"])   # the plain records gone: priced from 1M
+    assert check(date(2026, 9, 6)) is None
