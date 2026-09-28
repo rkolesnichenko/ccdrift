@@ -219,6 +219,12 @@ def failure_line(episode: dict[str, Any]) -> str:
             f"{f' ({named})' if named else ''}, {before_text(episode['before'])}")
 
 
+def thinking_line(rise: dict[str, Any]) -> str:
+    level = rise["levels"][0]
+    return (f"thinking on {rise['model']} up {level / rise['median']:.1f}x from {rise['since']}: "
+            f"{level:,.0f} tokens per response against {rise['median']:,.0f}")
+
+
 def cut_short_line(episode: dict[str, Any]) -> str:
     worse = episode.get("worse_than")
     tail = f", {worse_text(worse)}" if worse else run_text(episode.get("run_days", 0))
@@ -337,7 +343,7 @@ ALERT_TITLES = {"flag": "ccdrift flag", "recovered": "ccdrift: back to normal",
                 "context_dropped": "ccdrift: a recorded session-start change was dropped",
                 "hooks": "ccdrift: hooks failing", "hook_coverage": "ccdrift: hooks changed",
                 "failed_requests": "ccdrift: requests failing",
-                "cut_short": "ccdrift: responses cut short", "fields": "ccdrift: Claude Code stopped logging a field",
+                "cut_short": "ccdrift: responses cut short", "thinking": "ccdrift: thinking rose", "fields": "ccdrift: Claude Code stopped logging a field",
                 "new_fields": "ccdrift: Claude Code logs a field ccdrift doesn't read",
                 "blank_cache": "ccdrift can't compute the cache metric", "digest": "ccdrift: weekly summary",
                 "unreadable": "ccdrift couldn't read a transcript",
@@ -477,6 +483,13 @@ def requests_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
     return (f"{episode['requests']} requests failed on {episode['since']}"
             f"{f' ({named})' if named else ''}, {before}{_on_versions(versions)}. Claude Code retries these itself; a run "
             "of them points at the API or your connection, not your setup.")
+
+
+def thinking_message(rise: dict[str, Any], versions: Sequence[str]) -> str:
+    level = rise["levels"][0]
+    return (f"{rise['model']} on the main thread thought {level:,.0f} tokens per response on {rise['since']}, "
+            f"{level / rise['median']:.1f} times its usual {rise['median']:,.0f}{_on_versions(versions)}; "
+            f"~{approx(rise['extra'])} more thinking tokens than usual so far. Thinking is billed as output.")
 
 
 def cut_short_message(episode: dict[str, Any], versions: Sequence[str]) -> str:

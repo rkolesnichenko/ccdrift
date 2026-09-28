@@ -38,7 +38,8 @@ from ccdrift.texts import (ALERT_TITLES, CHECK_LINES, blank_cache_message, chang
                            context_dropped_message, context_message, cut_short_message, early_message, gap_message,
                            history_message, hook_coverage_lines, hook_coverage_message, hook_failure_message,
                            loop_message, new_fields_message, no_responses_message, no_transcripts_message, note_lines,
-                           requests_message, state_unreadable, unread_lines, unreadable_message)
+                           requests_message, state_unreadable, thinking_message, unread_lines, unreadable_message)
+from ccdrift.thinking import thinking_counts, thinking_rises
 from ccdrift.unread import unread_episode
 
 # kind, title, message, and lines for the log only
@@ -247,6 +248,9 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     for episode in cut_short(counts, state, today):
         versions, notes = _change_notes(turns, changelog, episode, "errors")
         alerts.append(("cut_short", ALERT_TITLES["cut_short"], cut_short_message(episode, versions), notes))
+    for rise in thinking_rises(thinking_counts(turns), state, today):
+        versions, notes = _change_notes(turns, changelog, rise, "thinking")
+        alerts.append(("thinking", ALERT_TITLES["thinking"], thinking_message(rise, versions), notes))
     for gap in field_gaps(turns, state, today):
         notes = release_notes(changelog, [] if gap["version"] == "unknown" else [gap["version"]], "fields")
         alerts.append(("fields", ALERT_TITLES["fields"], gap_message(gap), note_lines(notes)))
