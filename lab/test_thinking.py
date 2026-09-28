@@ -84,20 +84,28 @@ def test_the_episode_counts_only_when_reported_by_its_third_counted_day():
     assert [row["episode"] for row in found] == [nth_day(16), None]
 
 
-def test_the_gate_names_the_passing_settings():
+def test_the_gate_judges_the_setting_ccdrift_ships():
     clean, full, episode = gate_history()
     ok, notes = gate(rows(clean, full, episode, ratios=(2, 1.1), days_grid=(1,), plants=(3,)))
-    assert ok and notes == ["passing settings: ratio=2 days=1"]
+    assert ok and notes == ["ships ratio=2 days=1: 0 false alarm(s), plants of x3 or more caught 7 of 7, "
+                            "episode on 2026-09-15"]
 
 
-def test_the_gate_fails_when_no_setting_passes_and_names_the_closest():
+def test_the_gate_fails_the_shipped_setting_and_names_the_ones_that_pass():
     clean, full, episode = gate_history()
-    # 1.1 alarms on every 300 day; 6 alarms on none and catches no plant of x3: fewer false
-    # alarms come first, so 6 is the closest.
-    ok, notes = gate(rows(clean, full, episode, ratios=(1.1, 6), days_grid=(1,), plants=(3,)))
+    ok, notes = gate(rows(clean, full, episode, ratios=(1.1, 2), days_grid=(1,), plants=(3,)),
+                     {"ratio": 1.1, "days": 1})
     assert not ok
-    assert notes == ["no setting passes; closest: ratio=6 days=1: 0 false alarm(s), plants of x3 or more caught "
-                     "0 of 7, episode on 2026-09-15"]
+    assert notes == ["ships ratio=1.1 days=1: 5 false alarm(s) (claude-opus-5 2026-09-06, claude-opus-5 2026-09-08, "
+                     "claude-opus-5 2026-09-10, claude-opus-5 2026-09-12, claude-opus-5 2026-09-14), plants of x3 or "
+                     "more caught 0 of 7, episode missed", "passing settings: ratio=2 days=1"]
+
+
+def test_the_gate_says_when_no_setting_passes_or_the_shipped_one_is_not_in_the_grid():
+    clean, full, episode = gate_history()
+    table = rows(clean, full, episode, ratios=(1.1, 6), days_grid=(1,), plants=(3,))
+    assert gate(table, {"ratio": 6, "days": 1})[1][-1] == "no setting in the grid passes"
+    assert gate(table) == (False, ["the setting ccdrift ships isn't in the grid"])
 
 
 def test_a_setting_that_raises_a_false_alarm_fails_even_catching_everything_else():

@@ -23,8 +23,8 @@ Last, it replays the full history and asks whether the episode is reported by it
 counted day.
 
 A setting passes with no false alarm, every plant of BAR times or more caught, and the
-episode caught. Nothing ships yet, so the verdict names the settings that pass, or the one
-that came closest; once an alert ships it will judge that setting, as G3, G8 and G9 do.
+episode caught. The verdict judges the setting ccdrift ships, RATIO over DAYS, as G3, G8 and
+G9 do, and names the settings that pass when it fails.
 Output is aggregate: models, days, levels and counts.
 
 Run from the repo root:
@@ -44,7 +44,7 @@ import pandas as pd
 
 from ccdrift.logs import default_source, judged_turns, parse_all
 from ccdrift.state import new_state
-from ccdrift.thinking import BASELINE_DAYS, MIN_BASELINE_DAYS, counted, thinking_counts, thinking_rises
+from ccdrift.thinking import BASELINE_DAYS, DAYS, MIN_BASELINE_DAYS, RATIO, counted, thinking_counts, thinking_rises
 
 RATIO_GRID = (2, 2.5, 3, 4)
 DAYS_GRID = (1, 2, 3)
@@ -52,8 +52,8 @@ PLANT_GRID = (1.5, 2, 3, 4, 6)
 PLANT_RUN = 3           # counted days a planted rise lasts; the real one lasted four
 BAR = 3                 # every plant this many times the thinking or more must be caught
 PLANT_MODEL = "claude-opus-5"  # the owner's main-thread model for all but the last week
-EPISODE = "2026-09-10..2026-09-15"  # 2.1.267 to 2.1.272, 6 to 11 times the usual thinking; the
-                                    # tail on 09-16 and 09-17 counts as clean, see docs/findings.md
+EPISODE = "2026-09-10..2026-09-17"  # 2.1.267 to 2.1.273: 6 to 11 times the usual thinking, then 2.9 and
+                                    # 2.2 times as 2.1.273 took over; the owner's cut, see docs/findings.md
 
 
 def level_lines(counts: pd.DataFrame, model: str) -> list[str]:
@@ -149,20 +149,26 @@ def _setting(row: dict[str, Any]) -> str:
     return f"ratio={row['ratio']:g} days={row['days']}"
 
 
-def gate(rows: list[dict[str, Any]]) -> tuple[bool, list[str]]:
-    """Whether any setting passes, and which, or the one that came closest: fewest false
-    alarms, then most plants of BAR times or more caught, then the episode caught."""
-    passing = [row for row in rows if row["passes"]]
-    if passing:
-        return True, [f"passing settings: {'; '.join(_setting(row) for row in passing)}"]
-    def big(row: dict[str, Any]) -> int:
-        return sum(n for times, n in row["caught"].items() if times >= BAR)
-    closest = min(rows, key=lambda row: (len(row["alarms"]), -big(row), row["episode"] is None))
-    plants = closest["starts"] * sum(1 for times in closest["caught"] if times >= BAR)
-    return False, [f"no setting passes; closest: {_setting(closest)}: {len(closest['alarms'])} false alarm(s)"
-                   + (f" ({', '.join(closest['alarms'])})" if closest["alarms"] else "")
-                   + f", plants of x{BAR:g} or more caught {big(closest)} of {plants}"
-                   + f", episode {'on ' + closest['episode'] if closest['episode'] else 'missed'}"]
+def _big(row: dict[str, Any]) -> int:
+    return sum(n for times, n in row["caught"].items() if times >= BAR)
+
+
+def gate(rows: list[dict[str, Any]], chosen: dict[str, Any] | None = None) -> tuple[bool, list[str]]:
+    """Whether the setting ccdrift ships (RATIO over DAYS, or `chosen`) passes, what it did,
+    and, when it fails, the settings that pass instead."""
+    chosen = chosen or {"ratio": RATIO, "days": DAYS}
+    row = next((r for r in rows if r["ratio"] == chosen["ratio"] and r["days"] == chosen["days"]), None)
+    if row is None:
+        return False, ["the setting ccdrift ships isn't in the grid"]
+    plants = row["starts"] * sum(1 for times in row["caught"] if times >= BAR)
+    notes = [f"ships {_setting(row)}: {len(row['alarms'])} false alarm(s)"
+             + (f" ({', '.join(row['alarms'])})" if row["alarms"] else "")
+             + f", plants of x{BAR:g} or more caught {_big(row)} of {plants}"
+             + f", episode {'on ' + row['episode'] if row['episode'] else 'missed'}"]
+    if not row["passes"]:
+        passing = [_setting(r) for r in rows if r["passes"]]
+        notes.append(f"passing settings: {'; '.join(passing)}" if passing else "no setting in the grid passes")
+    return bool(row["passes"]), notes
 
 
 def counts_of(source: Path, today: date) -> pd.DataFrame:

@@ -23,6 +23,8 @@ your usage limits:
 - **Stop hooks start failing**, as they can when an update changes what hooks receive.
 - **Requests start failing**, or **responses start stopping at the token limit**, far
   more often than on the days before.
+- **A model starts thinking far more per response**: thinking is billed as output, so
+  it costs money and usage limits.
 - **Claude Code stops logging a field** ccdrift relies on, so a silent change can't
   hide as a quiet week.
 
@@ -114,6 +116,7 @@ set this in `~/.claude/settings.json`:
 | **ccdrift: hooks changed** | The hooks on a tool's calls stopped or started running. In one project's main-thread sessions or its subagents, the latest 3 transcripts with at least 3 calls of the tool all had a PreToolUse (or PostToolUse) hook, or none did, where each of the 10 before was the other way. Changes in one thread and direction within 2 weeks are one alert. The logs can't tell whether Claude Code stopped running the hooks or stopped logging them. Hooks scoped to an agent type or a skill run only in some transcripts, so on another machine they can read as a start or a stop; the owner's logs hold none, so G15 couldn't measure it. Agent SDK sessions are left out. | If you didn't change your hooks, read the named Claude Code version's release notes, and `ccdrift incident draft hooks` prints an issue draft. The check's log names the projects and tools; the notification names neither a project nor an MCP server. |
 | **ccdrift: requests failing** | A day had at least 5 failed requests (API errors Claude Code showed, or requests it retried), at least twice the busiest of the judged days in the 2 weeks before, with at least 5 such days to compare with. Banners blaming your Mac for going to sleep are counted in `ccdrift report` but never alert. | Usually the API or your connection, not your setup. `ccdrift report` shows the days; check status.claude.com. |
 | **ccdrift: responses cut short** | At least 5 responses stopped at the token limit (or were refused) on a day, on at least 0.5% of that day's main-thread responses and 3 times the worst share of the judged days before, a clean fortnight counting as 0.1%. The comparison leaves out the days of the same run, so a regression that starts on a quiet day is still reported. | A Claude Code update may have changed the output limit. `ccdrift report --by version` compares versions; `ccdrift incident draft cut-short` prints an issue draft. |
+| **ccdrift: thinking rose** | A model on the main thread thought at least twice its usual number of thinking tokens per response on a day, against the median of its last 14 days with 50 or more responses that logged a count. It names the model, the level against the usual one, the Claude Code version and the extra thinking tokens so far; once per rise, which becomes the usual level if it lasts. A usual level under 100 tokens per response isn't judged. | If you didn't raise the effort level, a Claude Code update may have. `ccdrift report --by version` compares versions. |
 | **ccdrift: Claude Code stopped logging a field** | A new Claude Code version logs a field ccdrift reads on under 10% of responses. | `ccdrift peek` shows what it reads. Please open an issue. |
 | **ccdrift: Claude Code logs a field ccdrift doesn't read** | A Claude Code version first seen in the last 2 weeks carries a field on 90% or more of its responses that under 10% of the responses in the 2 weeks before it carried. It goes to the log, the weekly summary and `ccdrift status`, never a notification: a field arriving breaks nothing. | Nothing. Please open an issue if ccdrift should read it. |
 | **ccdrift can't compute the cache metric** | 3 busy days had no response with cache token counts, or no prompt ccdrift recognised. Claude Code's log format has most likely changed. | `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it, with text, ids and paths shown only as their length, and each content block as its type and the size of the rest. Please open an issue with what it prints. |
@@ -214,7 +217,7 @@ and Max plans.
 
 `--exec` runs a command through the shell for each alert, with `CCDRIFT_ALERT` (`flag`,
 `recovered`, `persistent`, `history`, `early`, `loop`, `subagent_loop`, `setting`,
-`context`, `hooks`, `hook_coverage`, `failed_requests`, `cut_short`, `fields`, `blank_cache`,
+`context`, `hooks`, `hook_coverage`, `failed_requests`, `cut_short`, `thinking`, `fields`, `blank_cache`,
 `unreadable`, `no_responses`, `digest` or
 `failed`), `CCDRIFT_TITLE` and `CCDRIFT_MESSAGE` set. The `new_fields` and
 `context_dropped` alerts go to the log only and never run `--exec`. For example, to send
@@ -362,6 +365,13 @@ with each of the 3 more than 12.5% off on the same side.
 Stop hooks count on days with 10 or more runs. They are failing when at least half
 the runs report an error on 2 such days in a row, after at least 5 such days in the 2
 weeks before without that.
+
+Thinking is judged per model, on days with 50 or more main-thread responses of which 90%
+logged a thinking token count: a day's mean count is compared with the median of the
+model's 14 such days before it (at least 5), when that median is 100 tokens or more. A day
+at twice the median or more is a rise, reported once and only when that day is within the
+last 2 weeks. The setting was measured in [lab/thinking.py](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/thinking.py) (G16) on one person's logs, whose
+2026-09-10 rise it catches on its first day.
 
 For each Claude Code version first seen in the last 2 weeks with 50 or more
 responses, a field logged on at least 90% of the responses in the 2 weeks before it
