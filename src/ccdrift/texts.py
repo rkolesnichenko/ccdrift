@@ -142,8 +142,17 @@ def incident_line(incident: dict, cost: Optional[float] = None) -> str:
     return f"{SHORT_NAMES[incident['metric']]:<5}  {span:<24}  {'; '.join(parts)}"
 
 
+MAIN_THREAD = "the main thread"
+
+
+def _change_whom(change: dict[str, Any]) -> str:
+    """"for <model>", or "on the main thread" for a change judged over the whole of it; a
+    record from before 0.18.0 has no scope and is a model's."""
+    return f"on {MAIN_THREAD}" if change.get("scope") == "thread" else f"for {change['model']}"
+
+
 def change_line(change: dict[str, Any]) -> str:
-    return (f"{SETTING_NAMES[change['setting']]} for {change['model']}: {change['from']} -> {change['to']} "
+    return (f"{SETTING_NAMES[change['setting']]} {_change_whom(change)}: {change['from']} -> {change['to']} "
             f"from {change['since']}")
 
 
@@ -697,10 +706,13 @@ def context_message(change: dict[str, Any], versions: Sequence[str],
 
 def change_message(change: dict[str, Any], versions: list[str]) -> str:
     on = f", on Claude Code {', '.join(versions)}" if versions else ""
+    if change.get("from_model", change.get("to_model")) != change.get("to_model"):
+        on += f", as its model moved from {change['from_model']} to {change['to_model']}"
+    whom = _change_whom(change)
     if change["setting"] == "cache_tier":
         old, new = (TIER_NAMES.get(change[k], change[k]) for k in ("from", "to"))
-        return f"Cache writes for {change['model']} moved from the {old} to the {new} cache from {change['since']}{on}."
-    return (f"Effort for {change['model']} changed from {change['from']} to {change['to']} from "
+        return f"Cache writes {whom} moved from the {old} to the {new} cache from {change['since']}{on}."
+    return (f"Effort {whom} changed from {change['from']} to {change['to']} from "
             f"{change['since']}{on}. If you didn't change it, Claude Code's default did.")
 
 
