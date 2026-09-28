@@ -112,6 +112,10 @@ def build_parser() -> argparse.ArgumentParser:
     status = commands.add_parser("status", help="how the last check went and what ccdrift is following")
     status.add_argument("--short", action="store_true",
                         help="one line when something needs attention, nothing otherwise (for a status line)")
+    status.add_argument("--stdin", action="store_true",
+                        help="with --short: read the JSON Claude Code gives a status line command from standard "
+                             "input and keep a quota sample from it")
+    status.set_defaults(_parser=status)
     _add_state(status)
 
     incident = commands.add_parser("incident", help="list incidents, add, close or dismiss one, or draft an issue about one")
@@ -291,6 +295,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         return run_spend(_source(args), _state(args), days=args.days, by=args.by, as_json=args.json)
     if args.command == "status":
         from ccdrift.status import run_status
+        if args.stdin and not args.short:
+            args._parser.error(COMMAND_LINES["stdin_short"])
+        if args.stdin:
+            from ccdrift.quota import read_payload
+            return run_status(_state(args), short=True, sample=read_payload(sys.stdin))
         return run_status(_state(args), short=args.short)
     if args.command == "incident":
         return _incident(args)
