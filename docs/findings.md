@@ -152,6 +152,16 @@ On 2026-09-25 Claude Code wrote claude-opus-5-5's first 3 cost records under its
 
 These counts come from a one-off measurement with no in-repo reproduction path.
 
+## The store's size, the replay's time and attachment types, 2026-09-28
+
+Measured read-only on the owner's store and transcripts on 2026-09-28, the timings on a copy of the store.
+
+- **The history store grows about three times faster than the 65 MB a year recorded above.** It held 95,694 responses from 2026-08-06 to 2026-09-28 in 22.7 MB, about 237 bytes each, 15.3 MB of it the responses table. The last 30 days brought 71,411, 2,380 a day, subagents' included, which comes to about 200 MB a year.
+- **`ccdrift replay` spent 1.7 s of its 2.8 s judging the whole history again for every day.** Judged once and cut by day, it takes 1.4 to 1.5 s and prints the same lines. `report` (1.2 s) and `cost` (1.5 s) spend about 0.8 s of that loading the store, which bounding their reads would shorten at the risk of moving a baseline, so they still read all of it.
+- **An attachment type Claude Code starts writing is not, on its own, a sign of a format change.** The transcripts hold 42 attachment types. 29 first appeared after the first week on disk, one every 1.5 days from 2026-08-15 to 2026-09-24, and many follow from what the owner did rather than from a new version: `plan_mode_reentry`, `hook_blocking_error`, `max_turns_reached`, `opened_file_in_ide`. The field census counts assistant records only, so `thinking_drop`, `thinking_stripped` and `credential_org` arrived without a word, but a rule reporting every first-seen type would mostly report the owner's own actions. Such a rule needs a measured cutoff of its own.
+
+These counts come from a one-off measurement with no in-repo reproduction path.
+
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
 
 Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).

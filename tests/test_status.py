@@ -245,6 +245,71 @@ def test_short_status_shows_rising_tool_loop_misses_for_a_day_main_thread_first(
     assert short_status(path, NOW + timedelta(hours=hours_later)) == expected
 
 
+def episode(since="2026-09-18", last="2026-09-20", transcripts=2):
+    return {"since": since, "last": last, "transcripts": transcripts}
+
+
+def field_gap(version="2.1.280", reported_on="2026-09-19"):
+    return {"field": "effort", "version": version, "share_before": 1.0, "share": 0.0, "responses": 312,
+            "reported_on": reported_on}
+
+
+@pytest.mark.parametrize("blind, expected", [
+    ({"blank_cache": ["2026-09-01", "2026-09-14"], "blank_cache_seen": "2026-09-17"}, "ccdrift: no cache values since 09-14"),
+    ({"blank_cache": ["2026-09-14"], "blank_cache_seen": "2026-09-16"}, ""),
+    ({"unreadable": [episode()]}, "ccdrift: parser failed on 2 transcripts"),
+    ({"unreadable": [episode(last="2026-09-16")]}, ""),
+    ({"no_responses": [episode(transcripts=1)]}, "ccdrift: 1 transcript without responses"),
+    ({"no_responses": [episode(transcripts=1, last="2026-09-16")]}, ""),
+    ({"field_gaps": [field_gap()]}, "ccdrift: effort not logged on 2.1.280"),
+    ({"field_gaps": [field_gap(version="unknown") | {"field": "version"}]}, "ccdrift: version not logged"),
+    ({"field_gaps": [field_gap(reported_on="2026-09-16")]}, ""),
+])
+def test_short_status_says_for_three_days_when_the_check_cannot_see_what_it_judges(tmp_path, blind, expected):
+    # Before 0.17.6 none of these reached the status line, so a check that had gone blind
+    # left it empty, which reads as all being well.
+    path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00", **blind)
+    assert short_status(path, NOW) == expected
+
+
+@pytest.mark.parametrize("drop, expected", [
+    ((), "ccdrift: no cache values since 09-14"),
+    (("blank_cache_seen",), "ccdrift: parser failed on 2 transcripts"),
+    (("blank_cache_seen", "unreadable"), "ccdrift: 3 transcripts without responses"),
+    (("blank_cache_seen", "unreadable", "no_responses"), "ccdrift: effort not logged on 2.1.280"),
+    (("blank_cache_seen", "unreadable", "no_responses", "field_gaps"), "ccdrift: cache ratio down since 09-14"),
+])
+def test_short_status_puts_a_blind_check_before_open_incidents_the_whole_metric_first(tmp_path, drop, expected):
+    # An open incident's recovery is judged by the same check, so a blind check is the more
+    # pressing line.
+    state = {**ran(), "last_ok": "2026-09-20T09:00:02+03:00", "incidents": [incident()],
+             "blank_cache": ["2026-09-14"], "blank_cache_seen": "2026-09-19", "unreadable": [episode()],
+             "no_responses": [episode(transcripts=3)], "field_gaps": [field_gap()]}
+    path = state_file(tmp_path, **{key: value for key, value in state.items() if key not in drop})
+    assert short_status(path, NOW) == expected
+
+
+def test_short_status_says_a_check_is_stale_before_it_says_it_is_blind(tmp_path):
+    path = state_file(tmp_path, **ran(when="2026-09-16T09:00:00+03:00"), last_ok="2026-09-16T09:00:00+03:00",
+                      unreadable=[episode(last="2026-09-19")])
+    assert short_status(path, NOW) == "ccdrift: no check for 4 days"
+
+
+def test_the_long_status_lists_a_blind_check_of_the_last_30_days(tmp_path, capsys):
+    path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00",
+                      blank_cache=["2026-08-01", "2026-09-14"], blank_cache_seen="2026-09-19",
+                      unreadable=[episode(since="2026-08-02", last="2026-08-03"), episode()],
+                      no_responses=[episode(since="2026-08-19", last="2026-08-25", transcripts=1)])
+    run_status(path, now=NOW)
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[lines.index("Other changes in the last 30 days:"):] == [
+        "Other changes in the last 30 days:",
+        "  no usable cache values from 2026-09-14",
+        "  parser failed on 2 transcripts from 2026-09-18, last on 2026-09-20",
+        "  1 transcript without responses from 2026-08-19, last on 2026-08-25",
+    ]
+
+
 def test_status_short_loads_neither_pandas_nor_numpy(tmp_path):
     # It runs on every status line refresh; importing pandas took ~0.3 s of it.
     root = Path(__file__).resolve().parents[1]

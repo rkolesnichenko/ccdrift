@@ -10,13 +10,18 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ccdrift.state import load_state
-from ccdrift.texts import (COMMAND_LINES, LIVE_NAMES, LOOP_NAMES, STATUS_LINES, change_line, clock_text,
-                           context_change_line, cut_short_line, early_warning_line, failure_line, field_gap_line,
-                           hook_change_line, hook_failure_line, incident_line, loop_warning_line, new_field_line,
-                           withheld_line)
+from ccdrift.texts import (COMMAND_LINES, LIVE_NAMES, LOOP_NAMES, STATUS_LINES, blank_cache_line, blind_status,
+                           change_line, clock_text, context_change_line, cut_short_line, early_warning_line,
+                           failure_line, field_gap_line, hook_change_line, hook_failure_line, incident_line,
+                           loop_warning_line, new_field_line, unread_episode_line, withheld_line)
 
 STALE_DAYS = 3
 HOOK_DAYS = 3
+# A check that can't see what it judges stays on the status line as long as failing hooks
+# do, counted from the last day a check found it: a blank-cache stretch and an unreadable or
+# no-responses episode are carried forward on every run that still finds them, a field gap
+# is recorded once.
+BLIND_DAYS = HOOK_DAYS
 RECENT_DAYS = 30
 RISING_HOURS = 24
 # What the long form can raise on a state it can't read, or one that parses but isn't shaped
@@ -28,10 +33,25 @@ def _when(stamp: str) -> datetime:
     return datetime.fromisoformat(stamp)
 
 
+def _blind(state: dict[str, Any], recent: str) -> Optional[str]:
+    """The status line for a check that can't see what it judges, found on or after
+    `recent`: no cache values, transcripts it couldn't read, transcripts without
+    responses, then a field Claude Code stopped logging. None when there is none."""
+    seen = state.get("blank_cache_seen")
+    if seen and seen >= recent and state["blank_cache"]:
+        return blind_status("blank_cache", max(state["blank_cache"]))
+    for kind in ("unreadable", "no_responses"):
+        if state[kind] and state[kind][-1]["last"] >= recent:
+            return blind_status(kind, state[kind][-1])
+    gaps = [gap for gap in state["field_gaps"] if gap["reported_on"] >= recent]
+    return blind_status("field_gap", gaps[-1]) if gaps else None
+
+
 def short_status(state_path: Path, now: datetime) -> str:
     """One line for a status line, or "" when nothing needs attention. First match
     wins: an unreadable or malformed state, no check yet, a failed check, no successful
-    check for more than STALE_DAYS days, open incidents, hooks failing since within
+    check for more than STALE_DAYS days, a check that can't see what it judges within
+    the last BLIND_DAYS days (see _blind), open incidents, hooks failing since within
     the last HOOK_DAYS days, cache misses rising, tool-loop cache misses rising (the
     main thread, then subagents)."""
     try:
@@ -44,6 +64,9 @@ def short_status(state_path: Path, now: datetime) -> str:
         since_ok = now - _when(state["last_ok"])
         if since_ok > timedelta(days=STALE_DAYS):
             return STATUS_LINES["stale"].format(days=since_ok.days)
+        blind = _blind(state, (now.date() - timedelta(days=BLIND_DAYS)).isoformat())
+        if blind:
+            return blind
         live = [STATUS_LINES["live"].format(name=LIVE_NAMES[i["metric"]], since=i["start"][5:])
                 for i in state["incidents"] if i["status"] == "open"]
         if live:
@@ -103,6 +126,9 @@ def status_report(state: dict[str, Any], now: datetime) -> str:
     other = ([context_change_line(c) for c in state.get("context_changes", []) if c["reported_on"] >= since]
              + [hook_failure_line(f) for f in state.get("hook_failures", []) if f["reported_on"] >= since]
              + _hook_changes(state.get("hook_changes", []), since)
+             + [blank_cache_line(first) for first in state.get("blank_cache", []) if first >= since]
+             + [unread_episode_line(kind, e) for kind in ("unreadable", "no_responses")
+                for e in state.get(kind, []) if e["last"] >= since]
              + [field_gap_line(g) for g in state.get("field_gaps", []) if g["reported_on"] >= since]
              + [new_field_line(r) for r in state.get("new_fields", []) if r["reported_on"] >= since]
              + [early_warning_line(w) for w in state.get("early_warnings", []) if w["reported_on"] >= since]

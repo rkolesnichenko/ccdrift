@@ -5,10 +5,11 @@ from datetime import date
 
 import pytest
 
+from ccdrift import replay
 from ccdrift.cli import main
 from ccdrift.detector import DetectorConfig
 from ccdrift.incidents import add_incident, dismiss_incident
-from ccdrift.logs import parse_source
+from ccdrift.logs import judged_turns, parse_source
 from ccdrift.replay import first_run, replay_incidents, run_replay
 from ccdrift.state import new_state, save_state
 from ccdrift.texts import history_message, replayed_line
@@ -60,6 +61,27 @@ def test_a_replayed_regression_that_lasts_30_days_closes_as_persistent_on_its_30
     assert events == [("2026-09-18", "flag"), ("2026-10-15", "persistent")]
     found = state["incidents"][0]
     assert (found["status"], found["end"], found["closed_on"]) == ("persistent", "2026-10-14", "2026-10-15")
+
+
+def test_a_replay_judges_the_history_once_rather_than_again_for_every_day(tmp_path, monkeypatch, capsys):
+    # Judged again for every day, `ccdrift replay` grew with days times responses: 1.7s of
+    # its 2.8s over the owner's 53 days, before 0.17.6.
+    calls = []
+    monkeypatch.setattr(replay, "judged_turns", lambda df, today: calls.append(today) or judged_turns(df, today))
+    assert replayed(tmp_path, REGRESSION, TODAY)[1] == [("2026-09-18", "flag"), ("2026-09-23", "recovered")]
+    assert calls == [TODAY]
+    calls.clear()
+    assert run_replay(tmp_path / "logs", tmp_path / "state.json", today=TODAY) == 0
+    assert "2026-09-18  ccdrift flag: " in capsys.readouterr().out
+    assert calls == [TODAY, TODAY]
+
+
+def test_replay_costs_each_alert_as_of_its_own_day_and_the_incident_as_of_today(tmp_path, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 14 + [{"haiku": 12}] * 10)
+    run_replay(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 10, 1))
+    out = capsys.readouterr().out
+    assert "on Claude Code 2.1.226 (since 09-01). ~36 extra Haiku responses so far." in out
+    assert "  haiku  2026-09-15..now           open; ~120 extra Haiku responses; " in out
 
 
 def test_a_replay_of_too_little_history_finds_nothing(tmp_path):
