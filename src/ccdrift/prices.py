@@ -92,6 +92,19 @@ class Price:
                 + cache_read * self.cache_read_rate + output_tokens * self.output_rate)
 
 
+def explains(price: Price, records: pd.DataFrame) -> bool:
+    """Whether `price` accounts for what the cost records `records` cost (usage rows with
+    `cache_1h`, as fit_prices takes) within MAX_RESIDUAL, the bar a fit of its own must
+    clear. False for records that cost nothing: they can't tell one price from another."""
+    rows = records.dropna(subset=["cost_usd"])
+    costs = rows["cost_usd"].to_numpy(dtype=float)
+    if not len(rows) or costs.sum() <= 0:
+        return False
+    charged = price.charge(rows["input_tokens"], rows["cache_creation"], rows["cache_read"], rows["output_tokens"],
+                           cache_1h=rows["cache_1h"]).to_numpy(dtype=float)
+    return float(np.abs(charged - costs).sum() / costs.sum()) <= MAX_RESIDUAL
+
+
 def fit_prices(usage: pd.DataFrame) -> dict[str, Price]:
     """A price per model, from the per-model cost records in `usage` (History.model_usage
     with the `cache_1h` column spend.record_write_tiers adds).

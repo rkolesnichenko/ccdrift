@@ -10,13 +10,13 @@ import json
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import Optional, Sequence
 
 import pandas as pd
 
 from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import outside_sdk
-from ccdrift.prices import Price, fit_prices
+from ccdrift.prices import Price, explains, fit_prices
 from ccdrift.sessions import project_of
 from ccdrift.texts import (ABSENT_NAMES, COST_LINES, DETACHED_NAME, DIMENSION_NAMES, THREAD_NAMES, approx,
                            no_transcripts_message, project_path, spend_line, unpriced_line)
@@ -112,20 +112,27 @@ HOUR_WRITES = "cache_1h"
 LONG_CONTEXT = "[1m]"
 
 
-def joined_prices(prices: dict[str, Price], recorded: Iterable[str]) -> dict[str, Price]:
+def joined_prices(prices: dict[str, Price], usage: pd.DataFrame) -> dict[str, Price]:
     """`prices` keyed as responses name their model. A cost-state key is the model's own
     name, except that its 1M-context tier is keyed apart with LONG_CONTEXT, which
-    message.model never carries. A model whose cost records name only that tier is joined to
-    it: claude-opus-5-5, whose first record on 2026-09-24 was keyed claude-opus-5-5[1m] while
-    all 3,001 of its responses said claude-opus-5-5, so no response could ever be priced. A
-    model with a plain key in `recorded` (every model name the cost records carry) keeps the
-    plain price, or none when its fit was refused: its 1M tier is a price of its own, and a
-    response can't say which tier it ran on."""
-    names = set(recorded)
+    message.model never carries. A model whose cost records (`usage`, as fit_prices takes
+    them) name only that tier is joined to it: claude-opus-5-5, whose first record on
+    2026-09-24 was keyed claude-opus-5-5[1m] while all 3,001 of its responses said
+    claude-opus-5-5, so no response could ever be priced. A model with a plain key keeps the
+    plain price: a response can't say which tier it ran on, and a tier can be a price of its
+    own (claude-opus-5's explain each other's records only to 1.39% and 2.39%, measured on
+    2026-09-28). One whose plain fit was refused, too few records as a new key starts with,
+    takes the 1M price only when that price explains the plain records as a fit must
+    (prices.explains): claude-opus-5-5's first 3 plain records, on 2026-09-25, to 0.21%.
+    Without that, a model at 14.4% of the window went unpriced and withheld the total."""
+    models = usage["model"].astype(str) if "model" in usage else pd.Series(dtype="object")
+    names = set(models)
     joined = dict(prices)
     for key, price in prices.items():
         plain = key[:-len(LONG_CONTEXT)]
-        if key.endswith(LONG_CONTEXT) and plain not in names:
+        if not key.endswith(LONG_CONTEXT) or plain in prices:
+            continue
+        if plain not in names or explains(price, usage[models == plain]):
             joined[plain] = price
     return joined
 
@@ -343,7 +350,7 @@ def run_spend(source: Path, state_path: Path, days: Optional[int] = None, by: Op
     window = sorted(turns["day"].astype(str).unique())[-(days or DEFAULT_DAYS):]
     turns = turns[turns["day"].astype(str).isin(window)]
     usage = record_write_tiers(tables.model_usage, tables.responses)
-    prices = joined_prices(fit_prices(usage), usage["model"].astype(str) if "model" in usage else ())
+    prices = joined_prices(fit_prices(usage), usage)
     dimensions = [by] if by else list(DEFAULT_ORDER)
     if as_json:
         # The default view's DEFAULT_ORDER never asks for project or branch, but the JSON
