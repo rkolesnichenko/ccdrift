@@ -33,7 +33,7 @@ RATIO = 2
 DAYS = 1
 MIN_MEDIAN = 100        # tokens per response a baseline needs to be judged: under it a model barely
                         # thinks and a doubling is a handful of tokens. The owner's lowest counted
-                        # day is 144, so the floor silences nothing real
+                        # day is 140, on claude-opus-5-5, so the floor silences nothing real
 RECENT_DAYS = 14        # a rise finished longer ago isn't news, as for the setting alert; the first
                         # check after an upgrade reads 90 days and would announce old ones
 
@@ -67,12 +67,15 @@ def thinking_rises(counts: pd.DataFrame, state: dict[str, Any], today: date, rat
     state["thinking_rises"]. Per model, each counted day with MIN_BASELINE_DAYS counted days
     before it is raised at `ratio` times the median level of up to BASELINE_DAYS of them, when
     that median is MIN_MEDIAN or more; a rise is reported on the day it has lasted `days`
-    counted days in a row, once, if that day is within RECENT_DAYS of today. A counted day that
-    isn't raised ends the run; a day that doesn't count is skipped. Raised days stay in the
-    baseline, so a rise that lasts becomes the level. A run that starts within RECENT_DAYS of the
-    model's last raised day is the same rise going on unless it starts at `ratio` times that day's
-    level: a heavy day that recurs every week would otherwise be a new rise every week. A rise's
-    `extra` is the thinking over the median on its days so far."""
+    counted days in a row, once, if that day is within RECENT_DAYS of today. A rise that began
+    earlier and is still going on the model's latest counted day, within RECENT_DAYS, is
+    reported then, for a check that first runs long after it began; one that has ended, or whose
+    model hasn't been used since RECENT_DAYS ago, stays quiet. A counted day that isn't raised ends the run; a day that doesn't count is skipped.
+    Raised days stay in the baseline, so a rise that lasts becomes the level, and the median
+    never falls during a run. A run that starts within RECENT_DAYS of the model's last raised day
+    is the same rise going on unless it starts at `ratio` times that day's level: a heavy day
+    that recurs every week would otherwise be a new rise every week. A rise's `extra` is the
+    thinking over each day's median on the days it covers when reported."""
     rises = state["thinking_rises"]
     judged = counted(counts[counts["day"].astype(str) < today.isoformat()])
     recent = (today - timedelta(days=RECENT_DAYS)).isoformat()
@@ -81,6 +84,21 @@ def thinking_rises(counts: pd.DataFrame, state: dict[str, Any], today: date, rat
         levels = list(zip(group["day"].astype(str), group["level"].astype(float), group["logged"].astype(int)))
         run: list[tuple[str, float, float, int]] = []
         last: tuple[str, float] | None = None  # the model's latest raised day before the current run
+
+        def report(covered: list[tuple[str, float, float, int]]) -> None:
+            start = date.fromisoformat(covered[0][0])
+            if (last is not None and last[0] >= (start - timedelta(days=RECENT_DAYS)).isoformat()
+                    and covered[0][1] < ratio * last[1]):
+                return
+            rise = {"model": str(model), "since": covered[0][0], "on": covered[-1][0],
+                    "days": [one[0] for one in covered], "median": round(covered[0][2], 1),
+                    "levels": [round(one[1], 1) for one in covered],
+                    "extra": round(sum((one[1] - one[2]) * one[3] for one in covered)),
+                    "reported_on": today.isoformat()}
+            if not any(r["model"] == rise["model"] and r["since"] == rise["since"] for r in rises):
+                rises.append(rise)
+                new.append(rise)
+
         for i, (day, level, logged) in enumerate(levels):
             before = [value for _, value, _ in levels[max(0, i - BASELINE_DAYS):i]]
             if len(before) < MIN_BASELINE_DAYS:
@@ -91,16 +109,8 @@ def thinking_rises(counts: pd.DataFrame, state: dict[str, Any], today: date, rat
                 run = []
                 continue
             run.append((day, level, median, logged))
-            if len(run) != days or day < recent:
-                continue
-            start = date.fromisoformat(run[0][0])
-            if (last is not None and last[0] >= (start - timedelta(days=RECENT_DAYS)).isoformat()
-                    and run[0][1] < ratio * last[1]):
-                continue
-            rise = {"model": str(model), "since": run[0][0], "on": day, "days": [one[0] for one in run],
-                    "median": round(run[0][2], 1), "levels": [round(one[1], 1) for one in run],
-                    "extra": round(sum((one[1] - one[2]) * one[3] for one in run)), "reported_on": today.isoformat()}
-            if not any(r["model"] == rise["model"] and r["since"] == rise["since"] for r in rises):
-                rises.append(rise)
-                new.append(rise)
+            if len(run) == days and day >= recent:
+                report(run)
+        if len(run) > days and run[days - 1][0] < recent <= run[-1][0]:
+            report(run)
     return new

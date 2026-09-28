@@ -78,6 +78,13 @@ def test_each_counted_day_is_printed_with_its_level_against_the_median_before_it
     assert lines[-1] == "  2026-09-06 100 responses, level 1500, 6.00x the median of the 5 counted days before"
 
 
+def test_a_day_whose_median_is_under_the_floor_is_printed_as_not_judged():
+    # Found in the 0.20.0 review: the printed ratio judged at any median above 0, not at the
+    # rule's own floor, so it could annotate a day the rule doesn't judge.
+    lines = level_lines(history([90] * 5 + [400]), "claude-opus-5")
+    assert lines[-1] == "  2026-09-06 100 responses, level 400, not judged: a median of 90 is under 100"
+
+
 def test_the_episode_counts_only_when_reported_by_its_third_counted_day():
     clean, _, _ = gate_history()
     full = pd.concat([clean, history([2000] * 4, start=14)], ignore_index=True)

@@ -83,6 +83,33 @@ def test_a_second_run_more_than_two_weeks_after_the_first_is_reported_again():
     assert [(r["since"], r["on"]) for r in found] == [(nth_day(8), nth_day(9)), (nth_day(25), nth_day(26))]
 
 
+def sparse(levels_by_day):
+    """Counted days only on the given day numbers, as for someone who uses Claude Code weekly."""
+    return pd.concat([history([level], start=day) for day, level in levels_by_day], ignore_index=True)
+
+
+def test_a_rise_still_going_when_a_check_first_runs_long_after_it_began_is_reported():
+    # Found in the 0.20.0 review: a rise is reported on the day it completes, and later raised
+    # days only lengthen it, so a first check more than two weeks in never said anything.
+    counts = sparse([(day, 250) for day in range(0, 40, 5)] + [(day, 1500) for day in (40, 45, 50, 55)])
+    [rise] = thinking_rises(counts, new_state(), date.fromisoformat(nth_day(56)))
+    assert (rise["since"], rise["on"], rise["days"]) == (nth_day(40), nth_day(55),
+                                                        [nth_day(day) for day in (40, 45, 50, 55)])
+    assert rise["extra"] == 4 * 1250 * 100
+
+
+def test_a_rise_that_ended_before_the_first_check_stays_quiet():
+    # What keeps the owner's first 0.20.0 check from announcing the 2026-09-10 rise.
+    counts = sparse([(day, 250) for day in range(0, 40, 5)] + [(day, 1500) for day in (40, 45, 50)] + [(55, 250)])
+    assert thinking_rises(counts, new_state(), date.fromisoformat(nth_day(56))) == []
+
+
+def test_a_rise_on_a_model_no_longer_used_is_not_reported_late():
+    # Its last counted day, still raised, was more than two weeks ago: the model was replaced.
+    counts = sparse([(day, 250) for day in range(0, 40, 5)] + [(day, 1500) for day in (40, 45)])
+    assert thinking_rises(counts, new_state(), date.fromisoformat(nth_day(70))) == []
+
+
 def test_a_heavy_day_that_recurs_every_week_is_reported_once():
     # Found in the 0.20.0 review: a quiet day ends a run, so a weekly design day at twice the
     # usual thinking was a new rise, and a notification, every week for good.
@@ -117,7 +144,7 @@ def test_a_raised_day_stays_in_the_baseline_so_a_rise_that_lasts_becomes_the_lev
 
 def test_a_baseline_under_100_tokens_a_response_raises_nothing_and_at_100_it_can():
     # A model that barely thinks would alarm on a handful of tokens; the owner's lowest counted
-    # day is 144, so the floor silences nothing real.
+    # day is 140, on claude-opus-5-5, so the floor silences nothing real.
     assert replayed(history([99] * 8 + [800])) == []
     assert [r["since"] for r in replayed(history([100] * 8 + [800]))] == [nth_day(8)]
     assert replayed(history([0] * 8 + [500])) == []
@@ -142,4 +169,7 @@ def test_the_message_names_the_model_level_and_usual_level_and_what_it_cost():
             "median": 244.0, "levels": [1547.0], "extra": 324_000, "reported_on": "2026-09-11"}
     assert thinking_message(rise, []) == (
         "claude-opus-5 on the main thread thought 1,547 tokens per response on 2026-09-10, 6.3 times its usual "
-        "244; ~320k more thinking tokens than usual so far. Thinking is billed as output.")
+        "244; ~320k more thinking tokens than usual that day. Thinking is billed as output.")
+    longer = {**rise, "on": "2026-09-14", "days": ["2026-09-10", "2026-09-11", "2026-09-14"], "extra": 1_300_000}
+    assert thinking_message(longer, []).endswith(
+        "; ~1.3M more thinking tokens than usual over its 3 days to 2026-09-14. Thinking is billed as output.")

@@ -465,7 +465,7 @@ def test_check_alerts_once_when_a_model_starts_thinking_twice_as_much(tmp_path, 
     out = capsys.readouterr().out
     assert ("ccdrift: thinking rose: claude-opus-5 on the main thread thought 1,500 tokens per response on "
             "2026-09-15, 6.0 times its usual 250, on Claude Code 2.1.267 (since 09-15); ~75k more thinking "
-            "tokens than usual so far. Thinking is billed as output.") in out
+            "tokens than usual that day. Thinking is billed as output.") in out
     assert "    release notes 2.1.267: Extended thinking now runs on every turn" in out
     assert "prompt cache misses" not in out
     sent.clear()
