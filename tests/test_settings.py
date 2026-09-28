@@ -61,6 +61,69 @@ def test_a_cache_tier_change_names_both_caches():
     assert change_line(change) == "cache tier for claude-opus-5: 1h -> 5m from 2026-09-20"
 
 
+def model_switch(setting="effort", before="xhigh", after="high", days_after=2):
+    """14 days of claude-opus-5 at `before`, then `days_after` days of claude-opus-5-5 at `after`."""
+    new = responses([{}] * 14 + [{after: 40}] * days_after, setting=setting, model="claude-opus-5-5")
+    return pd.concat([responses([{before: 40}] * 14, setting=setting), new], ignore_index=True)
+
+
+def test_a_setting_that_arrives_with_a_new_model_is_reported_for_the_main_thread():
+    # On 2026-09-22 the main thread moved from claude-opus-5 at xhigh to claude-opus-5-5 at
+    # high. Judged per model, one had no days after and the other none before, so nothing fired.
+    changes = setting_changes(model_switch(), new_state(), date(2026, 9, 17))
+    assert changes == [{"setting": "effort", "scope": "thread", "model": None, "from": "xhigh", "to": "high",
+                        "since": "2026-09-15", "days": ["2026-09-15", "2026-09-16"],
+                        "from_model": "claude-opus-5", "to_model": "claude-opus-5-5", "reported_on": "2026-09-17"}]
+    assert change_message(changes[0], ["2.1.280 (since 09-15)"]) == (
+        "Effort on the main thread changed from xhigh to high from 2026-09-15, on Claude Code 2.1.280 "
+        "(since 09-15), as its model moved from claude-opus-5 to claude-opus-5-5. If you didn't change it, "
+        "Claude Code's default did.")
+    assert change_line(changes[0]) == "effort on the main thread: xhigh -> high from 2026-09-15"
+
+
+def test_a_cache_tier_that_arrives_with_a_new_model_is_reported_for_the_main_thread_too():
+    [change] = setting_changes(model_switch("cache_tier", "1h", "5m"), new_state(), date(2026, 9, 17))
+    assert change_message(change, []) == ("Cache writes on the main thread moved from the 1-hour to the 5-minute "
+                                          "cache from 2026-09-15, as its model moved from claude-opus-5 to "
+                                          "claude-opus-5-5.")
+
+
+def test_a_main_thread_change_on_one_model_names_no_model_move():
+    change = {"setting": "effort", "scope": "thread", "model": None, "from": "xhigh", "to": "high",
+              "since": "2026-09-15", "from_model": "claude-opus-5", "to_model": "claude-opus-5"}
+    assert change_message(change, []) == ("Effort on the main thread changed from xhigh to high from 2026-09-15. "
+                                          "If you didn't change it, Claude Code's default did.")
+
+
+def test_a_change_on_one_model_is_reported_for_that_model_and_not_again_for_the_main_thread():
+    state = new_state()
+    changes = setting_changes(responses([{"xhigh": 40}] * 14 + [{"high": 40}] * 2, setting="effort"), state,
+                              date(2026, 9, 17))
+    assert [(c["model"], c.get("scope")) for c in changes] == [("claude-opus-5", None)]
+    assert len(state["settings"]) == 1
+
+
+def test_a_main_thread_change_already_reported_holds_back_the_same_change_on_one_model():
+    # An earlier run reported the change for the main thread; the model's own judgement of the
+    # same change, reached on a later run, isn't a second alert.
+    state = new_state()
+    state["settings"].append({"setting": "effort", "scope": "thread", "model": None, "from": "xhigh",
+                              "to": "high", "since": "2026-09-15", "days": ["2026-09-15", "2026-09-16"],
+                              "from_model": "claude-opus-5", "to_model": "claude-opus-5-5",
+                              "reported_on": "2026-09-17"})
+    turns = responses([{"xhigh": 40}] * 14 + [{"high": 40}] * 2, setting="effort")
+    assert setting_changes(turns, state, date(2026, 9, 17)) == []
+
+
+def test_a_main_thread_that_alternates_between_two_models_settings_raises_nothing():
+    # Two guards keep it quiet, each enough alone: no usual value on a mixed baseline, and a
+    # pair of days never both off it. Only removing both fails this test.
+    turns = pd.concat([responses([{"xhigh": 40}, {}] * 8, setting="effort"),
+                       responses([{}, {"high": 40}] * 8, setting="effort", model="claude-opus-5-5")],
+                      ignore_index=True)
+    assert setting_changes(turns, new_state(), date(2026, 9, 17)) == []
+
+
 def test_the_settings_summary_lists_shares_and_day_to_day_changes():
     turns = pd.concat([responses([{"1h": 30}, {"5m": 30}]),
                        responses([{"xhigh": 30}] * 2, setting="effort")], axis=1)

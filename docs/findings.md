@@ -162,6 +162,16 @@ Measured read-only on the owner's store and transcripts on 2026-09-28, the timin
 
 These counts come from a one-off measurement with no in-repo reproduction path.
 
+## A setting that arrives with a new model, 2026-09-28
+
+On 2026-09-22 the owner's main thread moved from claude-opus-5 to claude-opus-5-5, Claude Code's default Opus model since 2.1.280, and its effort moved with it: every claude-opus-5 response had logged `xhigh`, every claude-opus-5-5 response logs `high`, subagents' included. No alert came, because the setting alert judged each model against its own days: claude-opus-5 had no days after the move and claude-opus-5-5 none before it. Measured read-only on a copy of the store, replaying `setting_changes` day by day over the 23,580 judged turns from 2026-08-06 to 2026-09-27.
+
+- **Judged per model, as shipped until 0.18.0, the rule raises nothing on either setting in 53 days.**
+- **Judged for the main thread as a whole as well, with the same numbers, it raises one alert, and it is this change:** effort `xhigh` -> `high` from 2026-09-23, reported on 09-25. On 09-22 claude-opus-5-5 answered 138 of 2,149 judged turns, so that day still counts as `xhigh`. The cache tier raises nothing either way.
+- **What this can't measure.** The owner switches models on the main thread only when a new one arrives (3 switches inside a transcript, all to claude-opus-5-5), so a `/model` switch of the user's own lasting 2 or more active days is unmeasured here. It would alert, and the alert names the models the main thread moved between so that it can be recognised.
+
+These counts come from a one-off measurement with no in-repo reproduction path.
+
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
 
 Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).
