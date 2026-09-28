@@ -150,3 +150,9 @@ def test_new_versions_are_those_first_seen_in_the_window():
     turns = pd.DataFrame({"day": [nth_day(0), nth_day(3), nth_day(5), nth_day(9)],
                           "version": ["2.1.99", "2.1.233", "2.1.99", "2.1.240"]})
     assert new_versions(turns, nth_day(2), nth_day(9)) == ["2.1.233", "2.1.240"]
+
+
+def test_a_thinking_alert_quotes_the_release_notes_about_thinking():
+    # "thinking" alone is enough to quote a line; "reasoning" alone is not.
+    changelog = {"2.1.267": ["Show thinking tokens in /cost", "Improved reasoning about imports", "Fixed a typo in /help"]}
+    assert release_notes(changelog, ["2.1.267"], "thinking") == [("2.1.267", "Show thinking tokens in /cost")]

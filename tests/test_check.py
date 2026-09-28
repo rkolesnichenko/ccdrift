@@ -454,6 +454,25 @@ def test_check_alerts_when_the_main_thread_moves_to_the_5_minute_cache(tmp_path,
             "cache from 2026-09-15, on Claude Code 2.1.280 (since 09-15).") in capsys.readouterr().out
 
 
+def test_check_alerts_once_when_a_model_starts_thinking_twice_as_much(tmp_path, sent, capsys):
+    main_thread_days(tmp_path / "logs", [{"thinking": 250}] * 14 + [{"thinking": 1500, "version": "2.1.267"}])
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "cache" / "changelog.md").write_text(
+        "## 2.1.267\n\n- Extended thinking now runs on every turn\n- Fixed prompt cache misses after a tool call\n")
+    kinds = tmp_path / "kinds.txt"
+    check_logs(tmp_path, today=date(2026, 9, 16), exec_command=f'echo "$CCDRIFT_ALERT" >> "{kinds}"')
+    assert sent == ["ccdrift: thinking rose"] and kinds.read_text() == "thinking\n"
+    out = capsys.readouterr().out
+    assert ("ccdrift: thinking rose: claude-opus-5 on the main thread thought 1,500 tokens per response on "
+            "2026-09-15, 6.0 times its usual 250, on Claude Code 2.1.267 (since 09-15); ~75k more thinking "
+            "tokens than usual so far. Thinking is billed as output.") in out
+    assert "    release notes 2.1.267: Extended thinking now runs on every turn" in out
+    assert "prompt cache misses" not in out
+    sent.clear()
+    check_logs(tmp_path, today=date(2026, 9, 17))
+    assert sent == []
+
+
 def test_check_runs_the_exec_command_for_each_alert(tmp_path, sent, capsys):
     (tmp_path / "logs").mkdir()
     out = tmp_path / "alerts.txt"

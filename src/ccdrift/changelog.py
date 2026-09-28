@@ -29,6 +29,7 @@ TOPICS: dict[str, dict[str, int]] = {
     "haiku": {"haiku": 2, "small model": 2, "small-model": 2, "fallback model": 2, "default model": 2},
     "effort": {"effort level": 2, "default effort": 2, "default-effort": 2, "reasoning effort": 2,
                "effortlevel": 2, "thinking budget": 2, "effort": 1, "defaults to": 1},
+    "thinking": {"thinking": 2, "extended thinking": 2, "thinking budget": 2, "effort level": 2, "reasoning": 1},
     "context": {"system prompt": 2, "tool definition": 2, "tool list": 2, "deferred": 2},
     "hooks": {"hook": 2, "stop hook": 1, "hook input": 1},
     "subagents": {"subagent model": 2, "subagent_model": 2},

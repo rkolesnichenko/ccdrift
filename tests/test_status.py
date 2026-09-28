@@ -315,6 +315,19 @@ QUOTA = {"version": "2.1.283", "model": {"id": "claude-opus-5-5"}, "session_id":
          "rate_limits": {"five_hour": {"used_percentage": 23.5, "resets_at": 1790600400}}}
 
 
+def test_the_long_status_lists_each_rise_in_thinking_of_the_last_30_days(tmp_path, capsys):
+    rise = {"model": "claude-opus-5", "since": "2026-09-10", "on": "2026-09-10", "days": ["2026-09-10"],
+            "median": 244.0, "levels": [1547.0], "extra": 324_000, "reported_on": "2026-09-11"}
+    old = {**rise, "since": "2026-08-01", "on": "2026-08-01", "reported_on": "2026-08-02"}
+    path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00", thinking_rises=[old, rise])
+    run_status(path, now=NOW)
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[lines.index("Other changes in the last 30 days:"):] == [
+        "Other changes in the last 30 days:",
+        "  thinking on claude-opus-5 up 6.3x from 2026-09-10: 1,547 tokens per response against 244",
+    ]
+
+
 @pytest.mark.parametrize("flags", [[], ["--stdin"]])
 def test_status_short_loads_neither_pandas_nor_numpy(tmp_path, flags):
     # It runs on every status line refresh; importing pandas took ~0.3 s of it. With --stdin

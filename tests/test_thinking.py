@@ -5,6 +5,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 from ccdrift.state import new_state
+from ccdrift.texts import thinking_message
 from ccdrift.thinking import COUNT_COLUMNS, DAYS, RATIO, counted, thinking_counts, thinking_rises
 from tests.helpers import nth_day
 
@@ -117,3 +118,11 @@ def test_a_rise_older_than_two_weeks_is_neither_reported_nor_recorded():
     assert thinking_rises(counts, state, date.fromisoformat(nth_day(8)) + timedelta(days=15)) == []
     assert state["thinking_rises"] == []
     assert thinking_rises(counts, state, date.fromisoformat(nth_day(8)) + timedelta(days=14)) != []
+
+
+def test_the_message_names_the_model_level_and_usual_level_and_what_it_cost():
+    rise = {"model": "claude-opus-5", "since": "2026-09-10", "on": "2026-09-10", "days": ["2026-09-10"],
+            "median": 244.0, "levels": [1547.0], "extra": 324_000, "reported_on": "2026-09-11"}
+    assert thinking_message(rise, []) == (
+        "claude-opus-5 on the main thread thought 1,547 tokens per response on 2026-09-10, 6.3 times its usual "
+        "244; ~320k more thinking tokens than usual so far. Thinking is billed as output.")

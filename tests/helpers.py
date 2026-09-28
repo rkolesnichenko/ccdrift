@@ -356,7 +356,8 @@ def main_thread_days(path, days, per_day=60, first_day=0):
     `tier` ("1h" or "5m" cache writes, default "1h"), `effort` (default "xhigh"),
     `entrypoint` (default "cli"), `reason` (the cache-miss reason Claude Code recorded
     that day, default None), `reasons` (how many of the day's responses carry it,
-    default 0) and `extra` (top-level keys ccdrift does not read, default None)."""
+    default 0), `thinking` (the thinking tokens each response logs, default None: not
+    logged) and `extra` (top-level keys ccdrift does not read, default None)."""
     for d, spec in enumerate(days, start=first_day):
         tier = spec.get("tier", "1h")
         records = []
@@ -370,7 +371,8 @@ def main_thread_days(path, days, per_day=60, first_day=0):
                              cache_read=read, cache_creation=written,
                              cache_1h=written if tier == "1h" else 0, cache_5m=written if tier == "5m" else 0,
                              version=spec.get("version", "2.1.226"), entrypoint=spec.get("entrypoint", "cli"),
-                             effort=spec.get("effort", "xhigh"), miss_reason=reason, extra=spec.get("extra"))]
+                             effort=spec.get("effort", "xhigh"), miss_reason=reason,
+                             thinking_logged=spec.get("thinking"), extra=spec.get("extra"))]
         write(path / f"s{d}.jsonl", records)
 
 
