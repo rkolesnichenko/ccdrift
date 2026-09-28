@@ -58,6 +58,10 @@ uv run --group lab python -m lab.components --with-sdk
 
 # G15: does the hook coverage rule find hooks that stop or start running, and nothing else?
 uv run --group lab python -m lab.hook_coverage
+
+# G16: does a rule on thinking tokens per response catch a rise, planted or the real one of
+# 2026-09-10, without false alarms? Reads the transcripts; no alert ships on it yet
+uv run --group lab python -m lab.thinking
 ```
 
 Each gate's last line is its verdict on the setting ccdrift ships (`G3: PASS h=4`, or
