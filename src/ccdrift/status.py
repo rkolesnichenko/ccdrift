@@ -12,7 +12,8 @@ from typing import Any, Optional
 from ccdrift.state import load_state
 from ccdrift.texts import (COMMAND_LINES, LIVE_NAMES, LOOP_NAMES, STATUS_LINES, change_line, clock_text,
                            context_change_line, cut_short_line, early_warning_line, failure_line, field_gap_line,
-                           hook_change_line, hook_failure_line, incident_line, loop_warning_line, new_field_line)
+                           hook_change_line, hook_failure_line, incident_line, loop_warning_line, new_field_line,
+                           withheld_line)
 
 STALE_DAYS = 3
 HOOK_DAYS = 3
@@ -107,7 +108,8 @@ def status_report(state: dict[str, Any], now: datetime) -> str:
              + [early_warning_line(w) for w in state.get("early_warnings", []) if w["reported_on"] >= since]
              + [loop_warning_line(w) for w in state.get("loop_warnings", []) if w["reported_on"] >= since]
              + [failure_line(f) for f in state.get("failed_requests", []) if f["reported_on"] >= since]
-             + [cut_short_line(c) for c in state.get("cut_short", []) if c["reported_on"] >= since])
+             + [cut_short_line(c) for c in state.get("cut_short", []) if c["reported_on"] >= since]
+             + ([withheld_line(state["withheld"])] if state.get("withheld") else []))
     lines += _section(STATUS_LINES["other"].format(days=RECENT_DAYS), other)
     return "\n".join(lines) + "\n"
 

@@ -30,6 +30,7 @@ from ccdrift.loops import STREAMS, loop_counts, loop_warning
 from ccdrift.notify import notify, run_exec
 from ccdrift.replay import REPLAY_SOURCE, first_run, replay_incidents
 from ccdrift.sessions import context_found, rejudged, session_starts
+from ccdrift.spend import withheld_total
 from ccdrift.settings import setting_changes
 from ccdrift.state import (CONTEXT_RULE, LOG_FILE, load_state, make_stream_private, record_run,
                            save_state, state_lock)
@@ -146,6 +147,12 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     if df.empty:
         raise RuntimeError(no_transcripts_message(source))
     turns = judged_turns(df, today)
+    # What `ccdrift cost` would withhold, kept for status and the weekly summary: the day
+    # this check first found it, until cost prints its total again.
+    models = withheld_total(tables, today)
+    kept = state.get("withheld")
+    state["withheld"] = None if models is None else {
+        "since": kept["since"] if kept else today.isoformat(), "models": [[model, share] for model, share in models]}
     changelog = load_changelog(changelog_path(source))
     incidents = state["incidents"]
     alerts: list[Alert] = []

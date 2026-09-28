@@ -15,7 +15,7 @@ from typing import Optional, Sequence
 import pandas as pd
 
 from ccdrift.history import HistoryError, load_history
-from ccdrift.logs import outside_sdk
+from ccdrift.logs import Tables, outside_sdk
 from ccdrift.prices import Price, explains, fit_prices
 from ccdrift.sessions import project_of
 from ccdrift.texts import (ABSENT_NAMES, COST_LINES, DETACHED_NAME, DIMENSION_NAMES, THREAD_NAMES, approx,
@@ -333,6 +333,32 @@ def spend_lines(turns: pd.DataFrame, dimension: str, prices: dict[str, Price]) -
     return lines
 
 
+def window_prices(tables: Tables, today: date, days: Optional[int] = None) -> tuple[pd.DataFrame, list[str],
+                                                                                   dict[str, Price]]:
+    """The responses of the window (the last `days`, DEFAULT_DAYS by default, complete UTC
+    days with any), its days, and the prices fitted from the history's cost records, keyed
+    as responses name their model: what `ccdrift cost` and withheld_total both work from."""
+    turns = spend_turns(tables.responses, today)
+    window = sorted(turns["day"].astype(str).unique())[-(days or DEFAULT_DAYS):]
+    turns = turns[turns["day"].astype(str).isin(window)]
+    usage = record_write_tiers(tables.model_usage, tables.responses)
+    return turns, window, joined_prices(fit_prices(usage), usage)
+
+
+def withheld_total(tables: Tables, today: date) -> Optional[list[tuple[str, float]]]:
+    """The models with no price and their shares of the window's tokens when `ccdrift cost`
+    would withhold its total, as it does once they carry MATERIAL_SHARE between them; None
+    when it prints one. The check keeps this for status and the weekly summary to say: on
+    2026-09-25 claude-opus-5-5 went unpriced at 14.4% of the window and nothing said so
+    for three days."""
+    turns, _, prices = window_prices(tables, today)
+    # With no model priced there is no total to withhold, only none to give, as cost says
+    # nothing of it: a Claude Code that writes no cost records isn't a gap to report.
+    if turns.empty or not priced_in_window(turns, prices) or priced_total(turns, prices) is not None:
+        return None
+    return unpriced_models(turns, prices)
+
+
 def run_spend(source: Path, state_path: Path, days: Optional[int] = None, by: Optional[str] = None,
               as_json: bool = False, today: Optional[date] = None) -> int:
     """Print where the window's tokens went. Reads the history like `report`, saves no
@@ -346,11 +372,7 @@ def run_spend(source: Path, state_path: Path, days: Optional[int] = None, by: Op
         print(no_transcripts_message(source), file=sys.stderr)
         return 2
     today = today or datetime.now(timezone.utc).date()
-    turns = spend_turns(tables.responses, today)
-    window = sorted(turns["day"].astype(str).unique())[-(days or DEFAULT_DAYS):]
-    turns = turns[turns["day"].astype(str).isin(window)]
-    usage = record_write_tiers(tables.model_usage, tables.responses)
-    prices = joined_prices(fit_prices(usage), usage)
+    turns, window, prices = window_prices(tables, today, days)
     dimensions = [by] if by else list(DEFAULT_ORDER)
     if as_json:
         # The default view's DEFAULT_ORDER never asks for project or branch, but the JSON

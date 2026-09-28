@@ -703,6 +703,19 @@ def week_failures_text(counted: int, cut: int) -> str:
     return ", ".join(parts)
 
 
+def withheld_text(models: Sequence[Sequence[Any]]) -> str:
+    """"no price for claude-opus-5-5, 14.4% of the window's tokens": why `ccdrift cost`
+    withholds its total, from the models (name, share) the check found unpriced."""
+    names = [str(model) for model, _ in models]
+    share = sum(float(value) for _, value in models)
+    return f"no price for {_joined(names)}, {share:.1%} of the window's tokens"
+
+
+def withheld_line(record: dict[str, Any]) -> str:
+    """`ccdrift status`'s line while `ccdrift cost` withholds its total."""
+    return f"`ccdrift cost` has withheld its total since {record['since']}: {withheld_text(record['models'])}"
+
+
 def digest_text(summary: dict[str, Any]) -> str:
     """"Week of 09-14: 70 responses on 2.1.261–2.1.270; cache ratio 0.976 (1.4% misses);
     ..." from the numbers digest.week_summary counts."""
@@ -730,6 +743,8 @@ def digest_text(summary: dict[str, Any]) -> str:
     parts.append(_count_text(summary["open_incidents"], "open incident"))
     parts.append(_count_text(summary["setting_changes"], "setting change"))
     parts.append(_count_text(summary["new_fields"], "new field"))
+    if summary.get("withheld"):
+        parts.append(f"`ccdrift cost` total withheld: {withheld_text(summary['withheld'])}")
     parts.append(f"check ran on {summary['ran']} of 7 days")
     return f"Week of {summary['week_start'][5:]}: " + "; ".join(parts) + "."
 
