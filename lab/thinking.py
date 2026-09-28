@@ -1,7 +1,8 @@
 """Does thinking that rises get caught? (G16)
 
 From 2026-09-10 to 09-15, on Claude Code 2.1.267 to 2.1.272, the owner's main thread thought
-6 to 9 times as much per response as on any other day, and came back down on 2.1.273.
+6 to 11 times as much per response as the median of the days before, then 2.9 and 2.2 times
+it on 09-16 and 09-17 as 2.1.273 took over, and was back to usual on 09-18.
 Thinking is billed as output, so it cost money and usage limits, and nothing noticed.
 docs/findings.md rules effort out as undetectable, but that measured a drop in a normalised
 level, not a multifold rise in raw tokens.
@@ -58,7 +59,8 @@ PLANT_GRID = (1.5, 2, 3, 4, 6)
 PLANT_RUN = 3           # counted days a planted rise lasts; the real one lasted four
 BAR = 3                 # every plant this many times the thinking or more must be caught
 PLANT_MODEL = "claude-opus-5"  # the owner's main-thread model for all but the last week
-EPISODE = "2026-09-10..2026-09-15"  # 2.1.267 to 2.1.272, 6 to 9 times the usual thinking
+EPISODE = "2026-09-10..2026-09-15"  # 2.1.267 to 2.1.272, 6 to 11 times the usual thinking; the
+                                    # tail on 09-16 and 09-17 counts as clean, see docs/findings.md
 
 
 def thinking_counts(turns: pd.DataFrame) -> pd.DataFrame:
@@ -118,6 +120,22 @@ def thinking_rises(counts: pd.DataFrame, state: dict[str, Any], today: date, rat
     return new
 
 
+def level_lines(counts: pd.DataFrame, model: str) -> list[str]:
+    """Every counted day of `model` with its responses, level, and ratio to the median of the up
+    to BASELINE_DAYS counted days before it, the yardstick the rule uses: the lines a findings
+    entry is written from."""
+    days = counted(counts[counts["model"] == model])
+    levels = days["level"].astype(float).tolist()
+    lines = []
+    for i, (day, responses, level) in enumerate(zip(days["day"].astype(str), days["responses"], levels)):
+        before = levels[max(0, i - BASELINE_DAYS):i]
+        judged = (f"{level / statistics.median(before):.2f}x the median of the {len(before)} counted days before"
+                  if len(before) >= MIN_BASELINE_DAYS and statistics.median(before) > 0
+                  else f"not judged: {len(before)} counted days before")
+        lines.append(f"  {day} {int(responses)} responses, level {level:.0f}, {judged}")
+    return lines
+
+
 def plant_run(counts: pd.DataFrame, model: str, first: str, run: int = PLANT_RUN) -> list[str]:
     """`first` and the counted days of `model` after it, `run` in all: the days a plant covers."""
     days = [str(day) for day in counted(counts[counts["model"] == model])["day"]]
@@ -153,8 +171,11 @@ def replay(counts: pd.DataFrame, ratio: float, days: int) -> list[dict[str, Any]
 def rows(clean: pd.DataFrame, full: pd.DataFrame, episode: list[str], ratios=RATIO_GRID, days_grid=DAYS_GRID,
          plants=PLANT_GRID, model: str = PLANT_MODEL) -> list[dict[str, Any]]:
     """One row per setting: its false alarms on the clean history, the plants of each size it
-    catches out of how many, the most counted days a catch took, and the day it reports the
-    episode (the counted days of `model` in `full` it covers) by its PLANT_RUN-th, or None."""
+    catches out of how many and the starts it missed, the most counted days a catch took, and
+    the day it reports the episode (the counted days of `model` in `full` it covers) by its
+    PLANT_RUN-th, or None. A plant that lands inside a run the clean history already reported
+    is missed by definition, so the missed starts say which misses are that and which the rule
+    didn't see."""
     starts = plant_starts(clean, model)
     out = []
     for ratio in ratios:
@@ -163,8 +184,10 @@ def rows(clean: pd.DataFrame, full: pd.DataFrame, episode: list[str], ratios=RAT
             seen = {(r["model"], r["since"]) for r in alarms}
             caught: dict[float, int] = {}
             slowest: dict[float, int] = {}
+            missed: dict[float, list[str]] = {}
             for times in plants:
                 caught[times] = slowest[times] = 0
+                missed[times] = []
                 for first in starts:
                     within = plant_run(clean, model, first)
                     hits = [r for r in replay(plant(clean, model, first, times), ratio, days)
@@ -173,10 +196,13 @@ def rows(clean: pd.DataFrame, full: pd.DataFrame, episode: list[str], ratios=RAT
                     if hits:
                         caught[times] += 1
                         slowest[times] = max(slowest[times], within.index(hits[0]["on"]) + 1)
+                    else:
+                        missed[times].append(first)
             found = [r["on"] for r in replay(full, ratio, days)
                      if r["model"] == model and r["since"] in episode and r["on"] in episode[:PLANT_RUN]]
             row = {"ratio": ratio, "days": days, "alarms": [f"{r['model']} {r['since']}" for r in alarms],
-                   "caught": caught, "slowest": slowest, "starts": len(starts), "episode": found[0] if found else None}
+                   "caught": caught, "slowest": slowest, "missed": missed, "starts": len(starts),
+                   "episode": found[0] if found else None}
             row["passes"] = (not row["alarms"] and bool(starts) and row["episode"] is not None
                              and all(caught[times] == len(starts) for times in plants if times >= BAR))
             out.append(row)
@@ -229,6 +255,9 @@ def main(argv: list[str] | None = None) -> int:
                                           & judged["day"].astype(str).between(start, end)]["day"]]
     levels = judged.set_index(["model", "day"])["level"]
     print(f"episode {start}..{end}: " + ", ".join(f"{day} {levels[(PLANT_MODEL, day)]:.0f}" for day in episode))
+    print(f"{PLANT_MODEL} by counted day:")
+    for line in level_lines(full, PLANT_MODEL):
+        print(line)
     table = rows(clean, full, episode)
     for row in table:
         print(f"G16 {_setting(row):<16} false-alarms={len(row['alarms'])} "
@@ -236,6 +265,9 @@ def main(argv: list[str] | None = None) -> int:
               + f" slowest(x>={BAR:g})={max(d for t, d in row['slowest'].items() if t >= BAR)}"
               + f" episode={row['episode'] or 'missed'}"
               + (f"  alarms: {', '.join(row['alarms'])}" if row["alarms"] else ""))
+        for times, starts in row["missed"].items():
+            if times >= BAR and starts:
+                print(f"    x{times:g} missed from {', '.join(starts)}")
     ok, notes = gate(table)
     print(f"G16: {'PASS' if ok else 'FAIL'}")
     for note in notes:

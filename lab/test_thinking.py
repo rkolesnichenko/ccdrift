@@ -4,8 +4,8 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from lab.thinking import (COUNT_COLUMNS, counted, gate, plant, plant_run, plant_starts, replay, rows,
-                          thinking_counts, thinking_rises)
+from lab.thinking import (COUNT_COLUMNS, counted, gate, level_lines, plant, plant_run, plant_starts, replay,
+                          rows, thinking_counts, thinking_rises)
 from tests.helpers import nth_day
 
 
@@ -139,6 +139,22 @@ def test_a_plant_the_clean_history_already_reports_is_not_a_catch():
     clean, full, episode = gate_history()
     [jumpy] = rows(clean, full, episode, ratios=(1.1,), days_grid=(1,), plants=(3,))
     assert (len(jumpy["alarms"]), jumpy["caught"][3], jumpy["starts"]) == (5, 0, 7)
+
+
+def test_each_setting_names_the_plant_starts_it_missed():
+    # Found in the G16 review: a count of catches hid which plants were missed, so a plant lost
+    # to a run the clean history had already reported read like a rise the rule couldn't see.
+    clean, full, episode = gate_history()
+    [steady, jumpy] = rows(clean, full, episode, ratios=(2, 1.1), days_grid=(1,), plants=(1.5, 3))
+    assert steady["missed"][3] == [] and len(steady["missed"][1.5]) == 7 - steady["caught"][1.5]
+    assert jumpy["missed"][3] == [nth_day(day) for day in range(5, 12)]
+
+
+def test_each_counted_day_is_printed_with_its_level_against_the_median_before_it():
+    # Found in the G16 review: the findings quoted levels the gate never printed, two of them wrong.
+    lines = level_lines(history([200, 300, 250, 250, 1000, 1500]), "claude-opus-5")  # median 250, mean 400
+    assert lines[0] == "  2026-09-01 100 responses, level 200, not judged: 0 counted days before"
+    assert lines[-1] == "  2026-09-06 100 responses, level 1500, 6.00x the median of the 5 counted days before"
 
 
 def test_the_episode_counts_only_when_reported_by_its_third_counted_day():
