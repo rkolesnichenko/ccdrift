@@ -1,5 +1,6 @@
 """ccdrift status: how the last check went and what it follows, from the state file alone."""
 
+import io
 import json
 import os
 import subprocess
@@ -310,16 +311,81 @@ def test_the_long_status_lists_a_blind_check_of_the_last_30_days(tmp_path, capsy
     ]
 
 
-def test_status_short_loads_neither_pandas_nor_numpy(tmp_path):
-    # It runs on every status line refresh; importing pandas took ~0.3 s of it.
+QUOTA = {"version": "2.1.283", "model": {"id": "claude-opus-5-5"}, "session_id": "SESSION-ID-MARKER",
+         "rate_limits": {"five_hour": {"used_percentage": 23.5, "resets_at": 1790600400}}}
+
+
+@pytest.mark.parametrize("flags", [[], ["--stdin"]])
+def test_status_short_loads_neither_pandas_nor_numpy(tmp_path, flags):
+    # It runs on every status line refresh; importing pandas took ~0.3 s of it. With --stdin
+    # it keeps a quota sample too, from 0.19.0.
     root = Path(__file__).resolve().parents[1]
     code = ("import sys\n"
             "from ccdrift.cli import main\n"
-            f"main(['status', '--short', '--state', {str(tmp_path / 'state.json')!r}])\n"
+            f"main(['status', '--short', *{flags!r}, '--state', {str(tmp_path / 'state.json')!r}])\n"
             "print(sorted(m for m in sys.modules if m.split('.')[0] in ('pandas', 'numpy')))\n")
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, input=json.dumps(QUOTA),
                             env={**os.environ, "PYTHONPATH": str(root / "src")})
     assert result.stdout.splitlines() == ["ccdrift: no check yet", "[]"], result.stderr
+    assert (tmp_path / "quota.jsonl").exists() == bool(flags)
+
+
+def stdin_of(monkeypatch, data: bytes):
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(data)))
+
+
+def test_status_short_with_stdin_keeps_a_quota_sample_beside_the_state_and_prints_its_line(tmp_path, monkeypatch,
+                                                                                           capsys):
+    stdin_of(monkeypatch, json.dumps(QUOTA).encode())
+    path = state_file(tmp_path, **ran(), last_ok=datetime.now(timezone.utc).isoformat(), incidents=[incident()])
+    assert main(["status", "--short", "--stdin", "--state", str(path)]) == 0
+    assert capsys.readouterr().out == "ccdrift: cache ratio down since 09-14\n"
+    [line] = (tmp_path / "quota.jsonl").read_text().splitlines()
+    assert json.loads(line)["five_hour"] == QUOTA["rate_limits"]["five_hour"] and "SESSION" not in line
+
+
+@pytest.mark.parametrize("data", [b"", b"{", b"\xff\xfe", b"[1, 2]", b"x" * (70 * 1024)])
+def test_status_short_with_stdin_prints_its_line_whatever_arrives(tmp_path, monkeypatch, capsys, data):
+    stdin_of(monkeypatch, data)
+    assert main(["status", "--short", "--stdin", "--state", str(tmp_path / "state.json")]) == 0
+    assert capsys.readouterr().out == "ccdrift: no check yet\n"
+    assert not (tmp_path / "quota.jsonl").exists()
+
+
+class Unreadable:
+    def isatty(self):
+        return False
+
+    def read(self, *args):
+        raise AssertionError("stdin was read")
+
+    buffer = property(lambda self: self)
+
+
+def test_status_short_reads_no_stdin_without_the_flag(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "stdin", Unreadable())
+    assert main(["status", "--short", "--state", str(tmp_path / "state.json")]) == 0
+    assert capsys.readouterr().out == "ccdrift: no check yet\n"
+
+
+def test_stdin_works_only_with_short(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exited:
+        main(["status", "--stdin", "--state", str(tmp_path / "state.json")])
+    assert exited.value.code == 2
+    assert "--stdin keeps a quota sample for a status line; add --short" in capsys.readouterr().err
+
+
+def test_the_long_status_counts_the_quota_samples_and_says_when_they_were_taken(tmp_path, capsys):
+    path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00")
+    run_status(path, now=NOW)
+    assert "Quota samples" not in capsys.readouterr().out
+    (tmp_path / "quota.jsonl").write_text(
+        '{"at": "2026-09-18T06:00:00+00:00", "five_hour": {"used_percentage": 1, "resets_at": 1}}\n'
+        'not json\n'
+        '{"at": "2026-09-20T08:41:00+00:00", "five_hour": {"used_percentage": 9, "resets_at": 1}}\n')
+    run_status(path, now=NOW)
+    assert capsys.readouterr().out.splitlines()[-1] == \
+        "Quota samples: 2 since 2026-09-18 06:00 UTC, the last at 2026-09-20 08:41 UTC"
 
 
 def test_the_long_status_says_while_ccdrift_cost_withholds_its_total(tmp_path):

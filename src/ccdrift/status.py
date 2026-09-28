@@ -9,11 +9,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
+from ccdrift.quota import quota_path, record_sample, samples_summary
 from ccdrift.state import load_state
 from ccdrift.texts import (COMMAND_LINES, LIVE_NAMES, LOOP_NAMES, STATUS_LINES, blank_cache_line, blind_status,
                            change_line, clock_text, context_change_line, cut_short_line, early_warning_line,
                            failure_line, field_gap_line, hook_change_line, hook_failure_line, incident_line,
-                           loop_warning_line, new_field_line, unread_episode_line, withheld_line)
+                           loop_warning_line, new_field_line, sample_time, unread_episode_line, withheld_line)
 
 STALE_DAYS = 3
 HOOK_DAYS = 3
@@ -108,7 +109,9 @@ def _hook_changes(records: list[dict[str, Any]], since: str) -> list[str]:
     return [hook_change_line(thread, direction, first) for (_, thread, direction), first in sorted(alerts.items())]
 
 
-def status_report(state: dict[str, Any], now: datetime) -> str:
+def status_report(state: dict[str, Any], now: datetime, samples: Optional[dict[str, Any]] = None) -> str:
+    """The long status of `state` at `now`, ending with how many quota samples there are when
+    `samples` (quota.samples_summary) is given."""
     last = state.get("last_run")
     if last is None:
         return STATUS_LINES["not_run"]
@@ -137,18 +140,26 @@ def status_report(state: dict[str, Any], now: datetime) -> str:
              + [cut_short_line(c) for c in state.get("cut_short", []) if c["reported_on"] >= since]
              + ([withheld_line(state["withheld"])] if state.get("withheld") else []))
     lines += _section(STATUS_LINES["other"].format(days=RECENT_DAYS), other)
+    if samples:
+        lines.append(STATUS_LINES["samples"].format(count=samples["count"], first=sample_time(samples["first"]),
+                                                    last=sample_time(samples["last"])))
     return "\n".join(lines) + "\n"
 
 
-def run_status(state_path: Path, short: bool = False, now: Optional[datetime] = None) -> int:
+def run_status(state_path: Path, short: bool = False, now: Optional[datetime] = None,
+               sample: Optional[str] = None) -> int:
+    """Print the long status, or with `short` the status line's one line. `sample`, the JSON
+    Claude Code gave the status line, is kept as a quota sample beside the state file first."""
     now = now or datetime.now().astimezone()
+    if sample is not None:
+        record_sample(sample, quota_path(state_path), now)
     if short:
         line = short_status(state_path, now)
         if line:
             print(line)
         return 0
     try:
-        report = status_report(load_state(state_path), now)
+        report = status_report(load_state(state_path), now, samples_summary(quota_path(state_path)))
     except MALFORMED as exc:
         print(COMMAND_LINES["state_unreadable"].format(path=state_path, error=exc), file=sys.stderr)
         return 1

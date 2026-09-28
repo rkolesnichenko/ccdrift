@@ -391,6 +391,11 @@ def no_responses_message(episode: dict[str, Any], lines: int) -> str:
             "run `ccdrift peek`.")
 
 
+def sample_time(stamp: str) -> str:
+    """A quota sample's time, "2026-09-28T13:55:00+00:00", as "2026-09-28 13:55 UTC"."""
+    return f"{stamp[:16].replace('T', ' ')} UTC"
+
+
 def blank_cache_line(first: str) -> str:
     return f"no usable cache values from {first}"
 
@@ -811,7 +816,8 @@ STATUS_LINES = {"no_check": "ccdrift: no check yet",
                 "settings": "Setting changes in the last {days} days",
                 "other": "Other changes in the last {days} days",
                 "section": "{title}:",
-                "empty_section": "{title}: none"}
+                "empty_section": "{title}: none",
+                "samples": "Quota samples: {count} since {first}, the last at {last}"}
 
 
 # ---------------------------------------------------------------------------
@@ -834,6 +840,7 @@ COMMAND_LINES = {"no_scheduler": "ccdrift can't set up a scheduled job on this s
                  "unchanged": "Nothing changed: {error}",
                  "added": "Added {metric} {start}..{end}. `ccdrift incident list` shows what it cost.",
                  "html_by_version": "--html draws the day view; drop --by version",
+                 "stdin_short": "--stdin keeps a quota sample for a status line; add --short",
                  "bad_days": "expected a whole number of days, 1 or more, not {text!r}",
                  "bad_day": "expected a day like 2026-08-18, not {text!r}",
                  "unhandled": "unhandled command: {command}"}
