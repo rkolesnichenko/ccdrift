@@ -236,9 +236,13 @@ class Launchd:
     def _loaded(self) -> bool:
         return self.run(["launchctl", "print", self.service]).returncode == 0
 
+    def holds(self) -> bool:
+        """Whether a ccdrift job is here: its plist, or its agent still loaded without one."""
+        return self.plist.exists() or self._loaded()
+
     def remove(self) -> bool:
         # A plist deleted by hand leaves its agent loaded, running the check until logout.
-        if not self.plist.exists() and not self._loaded():
+        if not self.holds():
             return False
         self.run(["launchctl", "bootout", self.service])
         self.plist.unlink(missing_ok=True)
@@ -333,8 +337,12 @@ class Systemd:
         self.service.unlink(missing_ok=True)
         self.run(["systemctl", "--user", "daemon-reload"])
 
+    def holds(self) -> bool:
+        """Whether a ccdrift job is here: its timer's unit file, which needs no user bus to see."""
+        return self.timer.exists()
+
     def remove(self) -> bool:
-        if not self.timer.exists():
+        if not self.holds():
             return False
         self._delete()
         return True
@@ -438,6 +446,11 @@ class Cron:
             self._write(lines)
             raise ScheduleError(SCHEDULE_LINES["first_run_failed"].format(error=exc)) from exc
 
+    def holds(self) -> bool:
+        """Whether a ccdrift job is here: its marked line in the crontab. Raises ScheduleError
+        when the crontab can't be read."""
+        return any(self._ours(line) for line in self._lines())
+
     def remove(self) -> bool:
         lines = self._lines()
         kept = [line for line in lines if not self._ours(line)]
@@ -477,6 +490,20 @@ def install(job: Job, backend, send: Callable[[str, str], None] = send_notificat
     backend.install(job)
     if job.notify:
         send(SCHEDULE_LINES["test_title"], SCHEDULE_LINES["test_message"].format(when=job.when()))
+
+
+def job_backends(chosen, platform: str = sys.platform, run: Run = run_command,
+                 which: Callable[[str], Optional[str]] = shutil.which) -> list:
+    """Where to look for a ccdrift job: `chosen` first, then on Linux every other scheduler
+    this machine could have put one in. Which one choose_backend picks depends on the session
+    a command runs from: an install over SSH with no user bus writes a cron line, and a
+    remove from the desktop, choosing systemd, would find no timer and leave cron running
+    the check."""
+    backends = [chosen]
+    if platform.startswith("linux"):
+        others = [Systemd(run=run)] + ([Cron(run=run)] if which("crontab") else [])
+        backends += [backend for backend in others if backend.name != chosen.name]
+    return backends
 
 
 def choose_backend(platform: str = sys.platform, run: Run = run_command,

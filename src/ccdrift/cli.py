@@ -21,6 +21,13 @@ def choose_backend():
     return choose()
 
 
+def job_backends(backend):
+    """Where to look for a ccdrift job, `backend` first (see ccdrift.schedule.job_backends);
+    a name here so tests can replace it."""
+    from ccdrift.schedule import job_backends as backends
+    return backends(backend)
+
+
 def _add_source(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source", help="folder of Claude Code transcripts "
                         "(default: $CLAUDE_CONFIG_DIR/projects, otherwise ~/.claude/projects)")
@@ -171,6 +178,7 @@ def _schedule(args: argparse.Namespace) -> int:
         print(COMMAND_LINES["no_scheduler"], file=sys.stderr)
         print("  " + " ".join(shlex.quote(arg) for arg in job.argv()), file=sys.stderr)
         return 2
+    backends = job_backends(backend)
     if args.action == "install":
         try:
             install_job(job, backend)
@@ -182,17 +190,32 @@ def _schedule(args: argparse.Namespace) -> int:
         print(COMMAND_LINES["first_run"])
         for note in backend.install_notes(job):
             print(note)
+        # One job runs: an install from another session may have left one elsewhere.
+        for other in backends[1:]:
+            try:
+                if other.remove():
+                    print(COMMAND_LINES["replaced"].format(old=other.name, new=backend.name))
+            except ScheduleError as exc:
+                print(COMMAND_LINES["schedule_unreadable"].format(error=exc), file=sys.stderr)
         return 0
     if args.action == "remove":
-        try:
-            removed = backend.remove()
-        except ScheduleError as exc:
-            print(COMMAND_LINES["not_removed"].format(error=exc), file=sys.stderr)
-            return 1
-        print(COMMAND_LINES["removed" if removed else "nothing_to_remove"])
-        return 0
+        removed, errors = False, []
+        for each in backends:
+            try:
+                removed = each.remove() or removed
+            except ScheduleError as exc:
+                errors.append(exc)
+        if removed:
+            print(COMMAND_LINES["removed"])
+        elif not errors:
+            print(COMMAND_LINES["nothing_to_remove"])
+        for exc in errors:
+            print(COMMAND_LINES["schedule_unreadable" if removed else "not_removed"].format(error=exc),
+                  file=sys.stderr)
+        return 1 if errors else 0
     try:
-        status = backend.status()
+        holding = [each for each in backends if each.holds()]
+        status = [line for each in holding or [backend] for line in each.status()]
     except ScheduleError as exc:
         print(COMMAND_LINES["schedule_unreadable"].format(error=exc), file=sys.stderr)
         return 1

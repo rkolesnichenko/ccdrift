@@ -347,6 +347,9 @@ draft`, and no rule turns on them.
 - The timer's units go in `$XDG_CONFIG_HOME/systemd/user`, otherwise in `~/.config/systemd/user`.
 - The timer appends to the log with `StandardOutput=append:`, which needs systemd 240 or newer.
 - A timer catches up on a run missed while the machine was off; cron doesn't.
+- Which scheduler `ccdrift schedule install` uses depends on the session: a systemd timer when a user
+  session answers, cron otherwise (over SSH, say). `remove` and `status` look in both, and `install`
+  removes a job the other one holds, so exactly one runs.
 - Notifications use `notify-send`. They usually appear from a systemd timer but not
   from cron, so with cron, watch the log or use `--exec`.
 - CI installs, checks and removes a real systemd timer on Ubuntu on every push; cron

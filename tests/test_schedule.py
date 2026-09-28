@@ -12,7 +12,7 @@ import pytest
 
 from ccdrift.cli import main
 from ccdrift.schedule import (Cron, Launchd, ScheduleError, Systemd, choose_backend, cron_line, install,
-                              launchd_plist, make_job, parse_at, run_command, systemd_units)
+                              job_backends, launchd_plist, make_job, parse_at, run_command, systemd_units)
 
 
 class FakeRun:
@@ -29,6 +29,13 @@ class FakeRun:
             if tuple(argv[:len(prefix)]) == prefix:
                 return subprocess.CompletedProcess(argv, code, stdout=stdout, stderr="failed" if code else "")
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+
+@pytest.fixture(autouse=True)
+def one_scheduler(monkeypatch):
+    """The CLI looks only in the scheduler a test chose: on Linux job_backends would add the
+    machine's own systemd and crontab, and a test must never remove a real job."""
+    monkeypatch.setattr("ccdrift.cli.job_backends", lambda backend: [backend])
 
 
 def launchd(tmp_path, results=None, sleep=lambda seconds: None):
@@ -705,3 +712,78 @@ def test_a_scheduler_file_that_fails_to_write_leaves_the_old_one_and_no_temporar
     assert backend.plist.read_bytes() == before
     assert [p.name for p in backend.plist.parent.iterdir()] == [backend.plist.name]
     assert run.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Linux: the scheduler a command picks depends on the session it runs from
+# ---------------------------------------------------------------------------
+
+def test_linux_looks_for_a_job_in_every_scheduler_it_could_have_used_and_macos_in_launchd():
+    run, which = FakeRun(), (lambda name: f"/usr/bin/{name}")
+    chosen = Systemd(run=run)
+    assert [b.name for b in job_backends(chosen, platform="linux", run=run, which=which)] == ["systemd", "cron"]
+    assert [b.name for b in job_backends(Cron(run=run), platform="linux", run=run, which=which)] == ["cron", "systemd"]
+    no_crontab = (lambda name: None if name == "crontab" else f"/usr/bin/{name}")
+    assert [b.name for b in job_backends(chosen, platform="linux", run=run, which=no_crontab)] == ["systemd"]
+    launchd = Launchd(run=run)
+    assert job_backends(launchd, platform="darwin", run=run, which=which) == [launchd]
+
+
+def linux(monkeypatch, chosen, *others):
+    """Commands run from a session that picks `chosen`, with `others` holding what an
+    install from another session may have left."""
+    monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: chosen)
+    monkeypatch.setattr("ccdrift.cli.job_backends", lambda backend: [backend, *others])
+
+
+def cron_holding(tmp_path):
+    table = FakeCrontab("0 1 * * * backup.sh\n")
+    Cron(run=table, spawn=lambda argv, log: None).install(job_for(tmp_path))
+    return table, Cron(run=table, spawn=lambda argv, log: None)
+
+
+def test_schedule_remove_from_a_desktop_session_removes_the_cron_job_an_ssh_session_installed(tmp_path, monkeypatch,
+                                                                                               capsys):
+    # Installed over SSH, with no user bus, so cron; removed from the desktop, which picks
+    # systemd and found no timer: "No ccdrift job was installed" while cron kept running it.
+    table, cron = cron_holding(tmp_path)
+    linux(monkeypatch, systemd(tmp_path)[1], cron)
+    assert main(["schedule", "remove"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["Removed the ccdrift job."]
+    assert table.table == "0 1 * * * backup.sh\n"
+
+
+def test_schedule_status_finds_the_job_in_the_scheduler_that_holds_it(tmp_path, monkeypatch, capsys):
+    table, cron = cron_holding(tmp_path)
+    linux(monkeypatch, systemd(tmp_path)[1], cron)
+    assert main(["schedule", "status"]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == "installed: crontab line, daily at 09:00"
+    table.table = "0 1 * * * backup.sh\n"
+    assert main(["schedule", "status"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["not installed"]
+
+
+def test_schedule_install_replaces_the_job_another_scheduler_holds_so_one_runs(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CCDRIFT_HOME", str(tmp_path / "data"))
+    table, cron = cron_holding(tmp_path)
+    run, chosen = systemd(tmp_path)
+    linux(monkeypatch, chosen, cron)
+    assert main(["schedule", "install", "--no-notify"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert "Removed the cron job an earlier install left, so the systemd job is the only one." in out
+    assert table.table == "0 1 * * * backup.sh\n" and chosen.timer.exists()
+
+
+def test_a_scheduler_that_cant_be_read_doesnt_keep_the_others_job_from_being_removed(tmp_path, monkeypatch, capsys):
+    # The session picks cron, whose table can't be read; the timer an earlier install left
+    # is still removed, and the command exits 1 for what it couldn't check.
+    run, timer = systemd(tmp_path)
+    timer.install(job_for(tmp_path))
+    unreadable = Cron(run=FakeRun({("crontab", "-l"): (1, "")}))
+    linux(monkeypatch, unreadable, timer)
+    assert main(["schedule", "remove"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == ["Removed the ccdrift job."]
+    assert captured.err.startswith("Couldn't read the schedule: `crontab -l` exited with 1")
+    assert not timer.timer.exists()
+
