@@ -613,15 +613,52 @@ def test_a_model_with_a_plain_key_is_charged_at_it_beside_its_1m_context_tier(tm
     assert "$3.00" in bucket_line(capsys.readouterr().out, "claude-opus-5")
 
 
-def test_a_model_whose_plain_key_went_unpriced_does_not_borrow_its_1m_context_price(tmp_path, capsys):
-    # With a plain key on record the 1M tier is a different price, not a second name for the
-    # same one: too few plain records leave the model unpriced rather than charged as 1M.
+def test_a_model_whose_plain_records_cost_otherwise_does_not_borrow_its_1m_context_price(tmp_path, capsys):
+    # With a plain key on record the 1M tier may be a different price: claude-opus-5's two
+    # tiers explain each other's records only to 1.39% and 2.39%, measured on 2026-09-28.
+    # Too few plain records, costing twice the 1M price, leave the model unpriced.
     state = tmp_path / "state.json"
     save_state(state, new_state())
     two_cache_ratios_corpus(tmp_path / "logs", keys={"claude-opus-5-5": "claude-opus-5-5[1m]"},
-                            rates={"claude-opus-5-5": (4e-6, 20e-6, 0.05, 1)})
+                            rates={"claude-opus-5-5": (8e-6, 40e-6, 0.05, 3)})
     run_spend(tmp_path / "logs", state, today=TODAY)
     assert bucket_line(capsys.readouterr().out, "claude-opus-5-5").endswith("no price")
+
+
+def test_a_model_whose_plain_records_its_1m_price_explains_is_charged_at_it_while_too_few_to_fit(tmp_path, capsys):
+    # On 2026-09-25 Claude Code wrote claude-opus-5-5's first 3 cost records under its plain
+    # key, one short of a fit; the 1M price explained them to 0.21%, yet every response of a
+    # model at 14.4% of the window went unpriced and withheld the total.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    two_cache_ratios_corpus(tmp_path / "logs", keys={"claude-opus-5-5": "claude-opus-5-5[1m]"},
+                            rates={"claude-opus-5-5": (4e-6, 20e-6, 0.05, 3)})
+    run_spend(tmp_path / "logs", state, today=TODAY)
+    out = capsys.readouterr().out
+    assert "$5.20" in out.splitlines()[0]                      # 3.00005 + 2.20004
+    assert "$2.20" in bucket_line(out, "claude-opus-5-5") and "no price" not in out
+
+
+def test_a_model_priced_from_its_own_plain_records_keeps_that_price_though_its_1m_price_is_close(tmp_path, capsys):
+    # The 1M tier 0.5% cheaper would explain the plain records, but a model priced from its
+    # own keeps its own: borrowing is for a plain key too new to fit.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    two_cache_ratios_corpus(tmp_path / "logs", rates={"claude-opus-5-5[1m]": (4e-6 * 0.995, 20e-6 * 0.995, 0.05, 4)})
+    run_spend(tmp_path / "logs", state, today=TODAY)
+    assert "$2.20" in bucket_line(capsys.readouterr().out, "claude-opus-5-5")
+
+
+@pytest.mark.parametrize("dearer, borrowed", [(1.005, True), (1.02, False)])
+def test_a_1m_price_is_borrowed_only_within_the_residual_a_fit_is_allowed(tmp_path, capsys, dearer, borrowed):
+    # The same bar a fit must clear (MAX_RESIDUAL, 1%): plain records 0.5% dearer than the 1M
+    # price are that price, 2% dearer are another one.
+    state = tmp_path / "state.json"
+    save_state(state, new_state())
+    two_cache_ratios_corpus(tmp_path / "logs", keys={"claude-opus-5-5": "claude-opus-5-5[1m]"},
+                            rates={"claude-opus-5-5": (4e-6 * dearer, 20e-6 * dearer, 0.05, 3)})
+    run_spend(tmp_path / "logs", state, today=TODAY)
+    assert bucket_line(capsys.readouterr().out, "claude-opus-5-5").endswith("no price") is not borrowed
 
 
 def test_a_rounding_error_model_no_longer_blanks_the_bucket_it_landed_in(tmp_path, capsys):

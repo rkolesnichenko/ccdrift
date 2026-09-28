@@ -143,6 +143,15 @@ An audit on 2026-09-25 noted that hook coverage, unlike responses, never removes
 
 These counts come from a one-off measurement with no in-repo reproduction path.
 
+## A new plain key beside a 1M-context price, 2026-09-28
+
+On 2026-09-25 Claude Code wrote claude-opus-5-5's first 3 cost records under its plain key, beside the 7 under `claude-opus-5-5[1m]` that had priced it since 0.13.0. Three records are one short of a fit, and the join priced a model from its 1M tier only when the cost records carried no plain key, so every claude-opus-5-5 response lost its price: 14.4% of the 30-day window, and `ccdrift cost` withheld the window's total. Measured read-only over every transcript on disk on 2026-09-28, through the shipped fit and charge.
+
+- **The two tiers of claude-opus-5-5 are one price; those of claude-opus-5 are not.** The 1M price ($3.99 in, $0.201 cache read, $19.25 out per Mtok, 7 records, residual 0.03%) accounts for the 3 plain records to 0.21%. claude-opus-5's two tiers account for each other's records only to 1.39% (the 1M price on 6 plain records) and 2.39% (the plain price on 25 1M records), past the 1% a fit may miss by. So borrowing the 1M price whenever the plain fit is refused would charge claude-opus-5 at the wrong tier the day its plain fit failed.
+- **A plain key too new to fit now takes the 1M price only when that price explains its records within MAX_RESIDUAL**, the same bar its own fit would have to clear. A model with a plain price of its own keeps it, whatever its 1M price. On these logs the window's total prints again, $10,436.81, claude-opus-5-5's share of it $948.70; every other model's dollars are unchanged.
+
+These counts come from a one-off measurement with no in-repo reproduction path.
+
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
 
 Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).
