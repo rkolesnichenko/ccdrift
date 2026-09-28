@@ -139,6 +139,18 @@ def test_a_last_line_that_doesnt_parse_counts_as_no_last_sample(tmp_path):
     assert json.loads(lines(path)[-1])["five_hour"] == FIVE
 
 
+@pytest.mark.parametrize("at", ["yesterday", "2026-09-27T13:55:00"])
+def test_a_last_line_whose_time_doesnt_parse_counts_as_no_last_sample(tmp_path, at):
+    # Found in the 0.19.0 review: a time that isn't an ISO stamp with a zone raised in the
+    # interval check, which record_sample swallowed on every refresh, so sampling stopped
+    # for good and nothing said so.
+    path = tmp_path / "quota.jsonl"
+    path.write_text(json.dumps({"at": at, "five_hour": {"used_percentage": 1.0, "resets_at": 1}}) + "\n")
+    assert last_sample(path) is None
+    assert record_sample(json.dumps(payload()), path, NOW)
+    assert len(lines(path)) == 2
+
+
 def test_the_last_sample_is_read_from_the_end_of_a_long_file(tmp_path):
     path = tmp_path / "quota.jsonl"
     older = json.dumps(sample_from(payload(five={"used_percentage": 1.0, "resets_at": 1}), NOW - timedelta(days=9)))

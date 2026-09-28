@@ -63,15 +63,19 @@ def sample_from(payload: Any, now: datetime) -> Optional[dict[str, Any]]:
 
 def last_sample(path: Path) -> Optional[dict[str, Any]]:
     """The file's last sample, from its last TAIL_BYTES; None when the file is missing,
-    empty, or its last line doesn't parse as one."""
+    empty, or its last line doesn't parse as one, a time with its zone included: a time
+    record_sample can't compare with now would otherwise stop every sample after it."""
     try:
         with path.open("rb") as file:
             file.seek(max(0, file.seek(0, os.SEEK_END) - TAIL_BYTES))
             tail = file.read().decode("utf-8").splitlines()
         sample = json.loads(tail[-1]) if tail else None
+        if not (isinstance(sample, dict) and isinstance(sample.get("at"), str)):
+            return None
+        at = datetime.fromisoformat(sample["at"])
     except (OSError, ValueError):
         return None
-    return sample if isinstance(sample, dict) and isinstance(sample.get("at"), str) else None
+    return sample if at.utcoffset() is not None else None
 
 
 def _windows(sample: dict[str, Any]) -> dict[str, Any]:
