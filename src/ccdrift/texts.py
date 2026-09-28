@@ -989,6 +989,7 @@ DRAFT_LINES = {"no_incident_on": "No {name} incident starts on {start}.",
                "no_alert_on": "No {name} alert starts on {start}.",
                "no_alert": "No {name} alert is recorded.",
                "no_alert_days": "The history no longer holds the {name} alert from {start}.",
+               "several": "{count} {name} alerts start on {start}; each is drafted below.",
                "macos": "macOS {version}",
                "system": "{system} {release}"}
 

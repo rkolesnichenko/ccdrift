@@ -149,8 +149,9 @@ draft also shows what a missed turn looks like.
 It drafts four alerts that point at Claude Code itself the same way: `session-start`,
 `hooks`, `tool-loop` and `cut-short`, the latest of that kind or the one starting on the
 day given. A session-start draft says what changed in how the sessions started, a hooks
-draft which events and tools it reached. Claude Code's own tools are named; your
-projects, skills, agents and MCP servers are counted, never named.
+draft which events and tools it reached; two hooks alerts starting the same day are both
+drafted, one after the other. Claude Code's own tools are named; your projects, skills,
+agents and MCP servers are counted, never named.
 
 ```text
 ccdrift incident list                               every incident, its cost and versions

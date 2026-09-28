@@ -961,11 +961,15 @@ def test_no_alert_draft_names_a_folder_session_skill_mcp_server_hook_command_or_
     (logs / "-Users-me-secretproject").mkdir()
     for path in logs.glob("*.jsonl"):
         path.rename(logs / "-Users-me-secretproject" / path.name)
+    # A subagent of the user's own on a branch of theirs; one response, too few to move any draft.
+    write(logs / "-Users-me-secretproject" / "s-own" / "subagents" / "agent-own.jsonl",
+          [line("own", text(40), ts=at(10 * DAY), sid="s-own", sidechain=True, agent_type="ownagentname",
+                branch="ownbranchname", version="2.1.261", entrypoint="cli")])
     save_state(tmp_path / "state.json", {**new_state(), kind: records})
     assert main(["incident", "draft", word, "--source", str(logs), "--state", str(tmp_path / "state.json")]) == 0
     out = capsys.readouterr().out
     for private in (str(tmp_path), "secretproject", "-Users-me-", "alpha", "beta", "gamma", "deploy", "vault",
-                    "private", "toolu_", ".jsonl", PRIVATE_PATH, PRIVATE_TEXT):
+                    "private", "ownagentname", "ownbranchname", "toolu_", ".jsonl", PRIVATE_PATH, PRIVATE_TEXT):
         assert private not in out
     if kind == "hook_changes":  # Claude Code's own tools are named: the rule is names, not the lack of them
         assert "| PreToolUse | Bash |" in out
@@ -1003,9 +1007,11 @@ def test_a_cut_short_alert_whose_day_no_longer_reaches_the_share_is_no_longer_he
     assert capsys.readouterr().err == "The history no longer holds the cut-short alert from 2026-09-10.\n"
 
 
-def main_thread_hooks(root, project, days, hooked_tools, version, tools=("Bash", "Read")):
+def main_thread_hooks(root, project, days, hooked_tools, version, tools=("Bash", "Read"), inline_subagent=0):
     """A CLI session a day in `project` on `days`, calling each of `tools` four times on the
-    main thread, with a PreToolUse hook record on the calls of `hooked_tools`."""
+    main thread, with a PreToolUse hook record on the calls of `hooked_tools`, and
+    `inline_subagent` unhooked Bash calls of a subagent written into the same transcript,
+    as Claude Code wrote subagents before it gave them transcripts of their own."""
     for d in days:
         sid = f"{project}-{d}"
         records = [prompt(at(d * DAY), sid=sid)]
@@ -1015,6 +1021,10 @@ def main_thread_hooks(root, project, days, hooked_tools, version, tools=("Bash",
                                 cache_read=900, cache_creation=100))
             if tool in hooked_tools:
                 records.append(hook_record(at(ts + 1), "PreToolUse", tid, tool, sid=sid, version=version))
+        for k in range(inline_subagent):
+            tid = f"toolu_s{d}_{k}"
+            records.append(line(f"{tid}-r", tool_use(tid, "Bash"), ts=at(d * DAY + 1000 + k), sid=sid, sidechain=True,
+                                version=version, entrypoint="cli", cache_read=900, cache_creation=100))
         write(root / project / f"{sid}.jsonl", records)
 
 
@@ -1098,4 +1108,38 @@ def test_a_session_start_record_is_drafted_only_from_a_change_in_its_own_directi
     tables, records = stepped(tmp_path)
     shrank = {**records[0], "from": records[0]["to"], "to": records[0]["from"]}
     assert alert_facts(tables, "context_changes", shrank, {}, date(2026, 10, 11), "macOS 26.5.2") is None
+
+
+def test_a_main_thread_hook_draft_leaves_out_subagent_calls_written_into_the_same_transcripts(tmp_path):
+    # Older Claude Code wrote a subagent's tool calls into its session's own transcript; they
+    # are the subagent thread's, whatever file they sit in.
+    main_thread_hooks(tmp_path / "logs", "-Users-me-alpha", range(0, 14), {"Bash"}, "2.1.260", tools=("Bash",),
+                      inline_subagent=2)
+    main_thread_hooks(tmp_path / "logs", "-Users-me-alpha", range(14, 20), set(), "2.1.270", tools=("Bash",),
+                      inline_subagent=2)
+    facts = hook_facts_of(tmp_path, date(2026, 9, 22))
+    assert (facts["change"]["thread"], facts["ran"]["before"]["PreToolUse"]) == ("main", (56, 56))
+    assert [(event, tool, cells["before"]) for event, tool, cells in facts["calls"]] == [
+        ("PreToolUse", "Bash", (56, 56)), ("PostToolUse", "Bash", (56, 0))]
+
+
+def test_two_hook_alerts_starting_the_same_day_are_both_drafted(tmp_path, capsys):
+    # The subagents started running hooks on 2026-09-17, the day another project's main
+    # thread stopped: one day, two alerts, and a day alone can't say which is meant.
+    tables, records = hooks_started(tmp_path)
+    main_thread_hooks(tmp_path / "logs", "-Users-me-delta", range(0, 16), {"Bash"}, "2.1.247")
+    main_thread_hooks(tmp_path / "logs", "-Users-me-delta", range(16, 36), set(), "2.1.261")
+    state = new_state()
+    hook_coverage_alerts(parse_all(tmp_path / "logs").hook_coverage, state, date(2026, 9, 25))
+    assert sorted({(r["thread"], r["direction"], r["since"]) for r in state["hook_changes"]}) == [
+        ("main", "stopped", "2026-09-17"), ("subagent", "started", "2026-09-17")]
+    save_state(tmp_path / "state.json", state)
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "hook_changes", "2026-09-17",
+                     today=date(2026, 10, 8), os_name="macOS 26.5.2") == 0
+    captured = capsys.readouterr()
+    drafts = captured.out.split("\n---\n\n")
+    assert [draft.splitlines()[0] for draft in drafts] == [
+        "Hooks stopped running on main-thread tool calls from Claude Code 2.1.261",
+        "Hooks started running on subagent tool calls from Claude Code 2.1.261"]
+    assert captured.err == "2 hooks alerts start on 2026-09-17; each is drafted below.\n"
 

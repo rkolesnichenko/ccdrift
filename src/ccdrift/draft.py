@@ -490,18 +490,21 @@ def _hook_facts(tables: Tables, group: dict[str, Any], today: date) -> Optional[
     after_rows = tables.responses[(main if thread == "main" else ~main) & outside_sdk(tables.responses)
                                   & tables.responses["source_file"].astype(str).isin(files["after"])]
     turns = judged_turns(tables.responses, today)
-    tools = coverage.loc[coverage["source_file"].astype(str).isin(files["before"] + files["after"]), "tool"].astype(str)
+    # The calls of the alert's own thread: older Claude Code wrote a subagent's calls into its
+    # session's transcript, and those are the subagent thread's, whatever file they sit in.
+    own = coverage[coverage["is_sidechain"].astype(bool) == (thread == "subagent")]
+    tools = own.loc[own["source_file"].astype(str).isin(files["before"] + files["after"]), "tool"].astype(str)
     servers = {tool[len(MCP_TOOL):] for tool in tools if tool.startswith(MCP_TOOL)}
     keys = {(change["project"], change["event"], change["tool"]) for change in streams}
-    changed = coverage[[key in keys for key in zip(coverage["source_file"].astype(str).map(project_of),
-                                                   coverage["event"], coverage["tool"])]]
+    changed = own[[key in keys for key in zip(own["source_file"].astype(str).map(project_of),
+                                              own["event"], own["tool"])]]
     ran = {name: {event: tuple(sum(pair[i] for (e, _), pair in rows.items() if e == event) for i in (0, 1))
                   for event in alert["events"]}
            for name, rows in ((name, _call_rows(changed, names)) for name, names in files.items())}
     return {"periods": {name: sorted(frame["day"].astype(str).unique()) for name, frame in frames.items()},
             "counts": {name: (int(frame["on"].astype(bool).sum()), len(frame)) for name, frame in frames.items()},
             "transcripts": {name: len(names) for name, names in files.items()},
-            "calls": _call_table(coverage, files), "ran": ran,
+            "calls": _call_table(own, files), "ran": ran,
             "change": {key: alert[key] for key in ("thread", "direction", "since", "events")},
             "projects": len(alert["projects"]), "servers": len(servers),
             "span": title_versions(by_version["after"]["version"]),
@@ -580,13 +583,18 @@ def run_draft(source: Path, state_path: Path, metric: str, start: Optional[str] 
 def _run_alert_draft(source: Path, state_path: Path, state: dict[str, Any], kind: str, start: Optional[str],
                      today: Optional[date], os_name: Optional[str]) -> int:
     """run_draft for an alert that is not an incident: the record of `kind` starting on
-    `start`, or the latest."""
+    `start`, or the latest. Hook coverage alerts, one per thread and direction, can start on
+    the same day, as a subagent start and a main-thread stop did in a test of 2026-09-28: a
+    day alone can't say which is meant, so each of them is drafted, in turn."""
     name = ALERT_NAMES[kind]
-    alert = find_alert(ALERT_RECORDS.get(kind, list)(state[kind]), start)
+    records = ALERT_RECORDS.get(kind, list)(state[kind])
+    alert = find_alert(records, start)
     if alert is None:
         print(DRAFT_LINES["no_alert_on"].format(name=name, start=start) if start
               else DRAFT_LINES["no_alert"].format(name=name), file=sys.stderr)
         return 2
+    day = str(alert["since"])[:10]
+    alerts = [each for each in records if str(each["since"])[:10] == day] if kind in ALERT_RECORDS else [alert]
     try:
         tables = load_history(source, state_path, claim=False)
     except HistoryError as exc:
@@ -596,9 +604,13 @@ def _run_alert_draft(source: Path, state_path: Path, state: dict[str, Any], kind
         print(no_transcripts_message(source), file=sys.stderr)
         return 2
     today = today or datetime.now(timezone.utc).date()
-    facts = alert_facts(tables, kind, alert, load_changelog(changelog_path(source)), today, os_name or os_text())
-    if facts is None:
-        print(DRAFT_LINES["no_alert_days"].format(name=name, start=str(alert["since"])[:10]), file=sys.stderr)
+    changelog, os_name = load_changelog(changelog_path(source)), os_name or os_text()
+    drafts = [draft_text(facts) for facts in (alert_facts(tables, kind, each, changelog, today, os_name)
+                                              for each in alerts) if facts is not None]
+    if not drafts:
+        print(DRAFT_LINES["no_alert_days"].format(name=name, start=day), file=sys.stderr)
         return 2
-    print(draft_text(facts), end="")
+    if len(drafts) > 1:
+        print(DRAFT_LINES["several"].format(count=len(drafts), name=name, start=day), file=sys.stderr)
+    print("---\n\n".join(drafts), end="")
     return 0
