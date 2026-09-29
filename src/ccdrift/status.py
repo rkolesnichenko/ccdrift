@@ -14,8 +14,8 @@ from ccdrift.state import load_state
 from ccdrift.texts import (COMMAND_LINES, LIVE_NAMES, LOOP_NAMES, STATUS_LINES, blank_cache_line, blind_status,
                            change_line, clock_text, context_change_line, cut_short_line, early_warning_line,
                            failure_line, field_gap_line, hook_change_line, hook_failure_line, incident_line,
-                           loop_warning_line, new_field_line, sample_time, thinking_line, unread_episode_line,
-                           withheld_line)
+                           loop_warning_line, new_attachment_line, new_field_line, sample_time, thinking_line,
+                           unread_episode_line, withheld_line)
 
 STALE_DAYS = 3
 HOOK_DAYS = 3
@@ -135,6 +135,7 @@ def status_report(state: dict[str, Any], now: datetime, samples: Optional[dict[s
                 for e in state.get(kind, []) if e["last"] >= since]
              + [field_gap_line(g) for g in state.get("field_gaps", []) if g["reported_on"] >= since]
              + [new_field_line(r) for r in state.get("new_fields", []) if r["reported_on"] >= since]
+             + [new_attachment_line(r) for r in state.get("new_attachments", []) if r["reported_on"] >= since]
              + [early_warning_line(w) for w in state.get("early_warnings", []) if w["reported_on"] >= since]
              + [loop_warning_line(w) for w in state.get("loop_warnings", []) if w["reported_on"] >= since]
              + [failure_line(f) for f in state.get("failed_requests", []) if f["reported_on"] >= since]

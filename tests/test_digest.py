@@ -80,6 +80,14 @@ def test_the_weekly_summary_counts_the_new_fields_reported_that_week():
     assert "2 new fields" in weekly_digest(pd.DataFrame(), state, date(2026, 9, 7))
 
 
+def test_the_weekly_summary_counts_new_attachment_types_only_in_a_week_that_has_some():
+    state = new_state()
+    assert "attachment" not in weekly_digest(pd.DataFrame(), state, date(2026, 9, 7))
+    state["new_attachments"].append({"types": ["date", "model"], "version": "2.1.267", "entrypoint": "sdk-py",
+                                     "share": 1.0, "transcripts": 27, "reported_on": "2026-09-09"})
+    assert "; no new fields; 2 new attachment types; check ran" in weekly_digest(pd.DataFrame(), state, date(2026, 9, 7))
+
+
 def test_the_weekly_summary_says_no_new_fields_when_none_arrived():
     assert "no new fields" in weekly_digest(pd.DataFrame(), new_state(), date(2026, 9, 7))
 

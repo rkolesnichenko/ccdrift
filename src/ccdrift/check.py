@@ -17,6 +17,7 @@ from ccdrift.changelog import (TOPIC_OF, changelog_path, days_before, load_chang
 from ccdrift.components import compare_components
 from ccdrift.detector import DetectorConfig
 from ccdrift.digest import digest_due, digest_week, weekly_digest
+from ccdrift.attachments import new_attachments
 from ccdrift.early import early_warning
 from ccdrift.failures import cut_short, failing_requests, failure_counts, judged_failures
 from ccdrift.fields import field_gaps, new_fields
@@ -37,8 +38,9 @@ from ccdrift.state import (CONTEXT_RULE, LOG_FILE, load_state, make_stream_priva
 from ccdrift.texts import (ALERT_TITLES, CHECK_LINES, blank_cache_message, change_message, component_lines,
                            context_dropped_message, context_message, cut_short_message, early_message, gap_message,
                            history_message, hook_coverage_lines, hook_coverage_message, hook_failure_message,
-                           loop_message, new_fields_message, no_responses_message, no_transcripts_message, note_lines,
-                           requests_message, state_unreadable, thinking_message, unread_lines, unreadable_message)
+                           loop_message, new_attachments_message, new_fields_message, no_responses_message,
+                           no_transcripts_message, note_lines, requests_message, state_unreadable, thinking_message,
+                           unread_lines, unreadable_message)
 from ccdrift.thinking import thinking_counts, thinking_rises
 from ccdrift.unread import unread_episode
 
@@ -48,7 +50,7 @@ Alert = tuple[str, str, str, list[str]]
 # Alerts that only go to the log: nothing changed that the owner can act on. A field
 # that vanishes silences an alert and is worth a notification; a field that arrives
 # breaks nothing, and arrives about once a week.
-LOG_ONLY = frozenset({"context_dropped", "new_fields"})
+LOG_ONLY = frozenset({"context_dropped", "new_fields", "new_attachments"})
 
 
 # The alert kind of a tool-loop warning for each stream.
@@ -256,6 +258,8 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
         alerts.append(("fields", ALERT_TITLES["fields"], gap_message(gap), note_lines(notes)))
     for record in new_fields(tables.field_census, turns, state, today):
         alerts.append(("new_fields", ALERT_TITLES["new_fields"], new_fields_message(record), []))
+    for record in new_attachments(tables.attachment_census, state, today):
+        alerts.append(("new_attachments", ALERT_TITLES["new_attachments"], new_attachments_message(record), []))
     blank = blank_cache_stretch(turns, state)
     if blank:
         alerts.append(("blank_cache", ALERT_TITLES["blank_cache"], blank_cache_message(blank), []))

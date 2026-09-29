@@ -346,6 +346,7 @@ ALERT_TITLES = {"flag": "ccdrift flag", "recovered": "ccdrift: back to normal",
                 "cut_short": "ccdrift: responses cut short", "thinking": "ccdrift: thinking rose",
                 "fields": "ccdrift: Claude Code stopped logging a field",
                 "new_fields": "ccdrift: Claude Code logs a field ccdrift doesn't read",
+                "new_attachments": "ccdrift: Claude Code writes an attachment ccdrift doesn't read",
                 "blank_cache": "ccdrift can't compute the cache metric", "digest": "ccdrift: weekly summary",
                 "unreadable": "ccdrift couldn't read a transcript",
                 "no_responses": "ccdrift found transcripts without responses", "failed": "ccdrift check failed"}
@@ -456,6 +457,23 @@ def gap_message(gap: dict[str, Any]) -> str:
     return (f"{where} no longer logs {FIELD_NAMES[gap['field']]} (on {gap['share']:.0%} of {gap['responses']} "
             f"responses, {gap['share_before']:.0%} before). {CONSEQUENCES[gap['field']]} until ccdrift reads it "
             "again; run `ccdrift peek`.")
+
+
+def _attachment_types(record: dict[str, Any]) -> str:
+    return f"{len(record['types'])} attachment type{'' if len(record['types']) == 1 else 's'}"
+
+
+def new_attachments_message(record: dict[str, Any]) -> str:
+    subject = "It may be worth reading" if len(record["types"]) == 1 else "They may be worth reading"
+    return (f"Claude Code {record['version']} writes {_attachment_types(record)} ccdrift doesn't read on its "
+            f"{record['entrypoint']} sessions: {', '.join(record['types'])} (on {record['share']:.0%} of "
+            f"{record['transcripts']:,} sessions). {subject}; please open an issue.")
+
+
+def new_attachment_line(record: dict[str, Any]) -> str:
+    count = len(record["types"])
+    return (f"{count} new attachment type{'' if count == 1 else 's'} on {record['version']} "
+            f"({record['entrypoint']}): {', '.join(record['types'])}")
 
 
 def new_fields_message(record: dict[str, Any]) -> str:
@@ -804,6 +822,8 @@ def digest_text(summary: dict[str, Any]) -> str:
     parts.append(_count_text(summary["open_incidents"], "open incident"))
     parts.append(_count_text(summary["setting_changes"], "setting change"))
     parts.append(_count_text(summary["new_fields"], "new field"))
+    if summary.get("new_attachments"):
+        parts.append(_count_text(summary["new_attachments"], "new attachment type"))
     if summary.get("withheld"):
         parts.append(f"`ccdrift cost` total withheld: {withheld_text(summary['withheld'])}")
     parts.append(f"check ran on {summary['ran']} of 7 days")
