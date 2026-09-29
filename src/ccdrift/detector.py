@@ -27,15 +27,27 @@ METRICS = {
     "haiku_fraction": ("is_haiku",                "mean", "up"),
 }
 
+# Binned over subagent tool-loop turns (logs.judged_subagent_loops), on days of their
+# own, rather than over the main-thread turns above: what a turn reads back of what the
+# response before it in its transcript had cached. A turn's whole input measures the
+# work more than the cache there, since its uncached part is the new tool result: on the
+# owner's logs the mean cache read ratio of subagent loop turns fell to 0.964 on
+# 2026-09-16 and 09-17 with no loop miss either day.
+SUBAGENT_METRICS = {
+    "subagent_cache": ("loop_readback", "mean", "down"),
+}
 
-def bin_metrics(df: pd.DataFrame, by: str = "day") -> pd.DataFrame:
+
+def bin_metrics(df: pd.DataFrame, by: str = "day", metrics: Mapping[str, tuple[str, str, str]] = METRICS) -> pd.DataFrame:
+    """Each bin's `metrics` over `df`: the main-thread METRICS by default, or
+    SUBAGENT_METRICS over subagent loop turns."""
     if df.empty:
         return pd.DataFrame()
     key = "day" if by == "day" else "session_id"
     g = df.groupby(key, sort=True)
     out = pd.DataFrame({"bin": list(g.groups.keys())})
     out = out.sort_values("bin").reset_index(drop=True)
-    for name, (col, agg, _) in METRICS.items():
+    for name, (col, agg, _) in metrics.items():
         series = g[col].median() if agg == "median" else g[col].mean()
         out[name] = out["bin"].map(series).astype(float)
         # turn count and within-bin variance set the detector's noise floor
@@ -113,13 +125,13 @@ def pooled_z(metrics: pd.DataFrame, metric: str, bins: Sequence[int], baseline: 
 def detect(metrics: pd.DataFrame, cfg: DetectorConfig,
            excluded: Optional[Mapping[str, Sequence[bool]]] = None,
            only: Optional[Sequence[str]] = None) -> pd.DataFrame:
-    """Annotate each bin with robust-z and a sustained-flag per metric, or per metric
-    in `only`. Bins marked in `excluded` for a metric (an incident's days) are still
+    """Annotate each bin with robust-z and a sustained-flag per metric binned, or per
+    metric in `only`. Bins marked in `excluded` for a metric (an incident's days) are still
     scored but stay out of later bins' baselines, so a long shift is judged against
     the days before it."""
     m = metrics.copy()
-    for name, (_, _, direction) in METRICS.items():
-        if only is not None and name not in only:
+    for name, (_, _, direction) in {**METRICS, **SUBAGENT_METRICS}.items():
+        if name not in m or (only is not None and name not in only):
             continue
         zs: list[float] = []
         deviant: list[bool] = []

@@ -1013,6 +1013,17 @@ def judged_subagent_turns(df: pd.DataFrame, today: date) -> pd.DataFrame:
     return df[keep]
 
 
+def judged_subagent_loops(df: pd.DataFrame, today: date) -> pd.DataFrame:
+    """Subagent tool-loop turns of complete UTC days, without Agent SDK sessions: the
+    turns the subagent cache metric reads. Unlike judged_subagent_turns, a turn counts
+    whether or not its agent type was logged, since caching doesn't depend on it."""
+    if df.empty or "loop_turn" not in df:
+        return df.iloc[0:0]
+    keep = ((df["day"].astype(str) < today.isoformat()) & df["is_sidechain"].astype(bool)
+            & df["loop_turn"].astype(bool) & outside_sdk(df))
+    return df[keep]
+
+
 # Turns the cache metric uses. In real logs a caching regression showed up on
 # main-thread turns that open with a new user prompt: on Claude Code
 # 2.1.233-2.1.258 they missed 4.3% of the time (0.5% before and after), however
@@ -1058,6 +1069,8 @@ def add_ratios(df: pd.DataFrame) -> pd.DataFrame:
         df["loop_turn"] = (~df["new_prompt"] & ~df["after_compaction"] & (df["gap_seconds"] <= LOOP_GAP_SECONDS)
                            & (tokens > 0) & (df["prev_cached"] > 0))
         df["is_loop_miss"] = df["loop_turn"] & (df["cache_read"] < LOOP_MISS_SHARE * df["prev_cached"])
+        # What a loop turn read back of it, at most all of it; NaN on other turns.
+        df["loop_readback"] = (df["cache_read"] / df["prev_cached"].where(df["loop_turn"])).clip(upper=1.0)
     if "cache_1h" in df:
         writes = df["cache_1h"] + df["cache_5m"]
         tier = pd.Series([None] * len(df), index=df.index, dtype=object)
