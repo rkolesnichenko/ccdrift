@@ -444,6 +444,26 @@ def subagent_history(path, days, miss_days=(), version_from=None):
     tool_loop_days(path, days, subagent=True, misses=20, miss_days=miss_days, versions=versions)
 
 
+def partial_readback_days(path, days, from_day, share):
+    """A clean main thread from Sep 1 and a subagent of it each day, 99 tool-loop turns a
+    day that read back all of what the turn before had cached, or from day `from_day` only
+    `share` of it, writing the rest to the cache again: a regression with no miss in it."""
+    main_thread_days(path, [{}] * days)
+    for d in range(days):
+        records, cached = [], 0
+        for k in range(101):
+            ts = at(d * DAY + 60 * k)
+            opens = k in (0, 50)
+            records.append(prompt(ts, sid=f"s{d}", sidechain=True) if opens
+                           else tool_result(ts, sid=f"s{d}", sidechain=True))
+            read = 0 if k == 0 else cached if opens or d < from_day else int(cached * share)
+            written = 1000 if k == 0 else 100 + cached - read
+            records.append(line(f"a{d}-{k}", text(40), ts=ts, sid=f"s{d}", sidechain=True, cache_read=read,
+                                cache_creation=written, version="2.1.226", entrypoint="cli"))
+            cached = read + written
+        write(path / f"s{d}/subagents/agent-a.jsonl", records)
+
+
 def hook_days_logs(path, failing_days, days, per_day=10):
     """`per_day` stop-hook summaries a day from Sep 1 in one transcript, after the response
     a stop hook follows; on the day indexes in `failing_days` every hook reports an error."""

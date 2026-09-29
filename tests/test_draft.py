@@ -24,8 +24,8 @@ from ccdrift.state import new_state, save_state
 from ccdrift.texts import draft_text, version_span
 import tests.helpers as helpers
 from tests.helpers import (DAY, PRIVATE_PATH, PRIVATE_TEXT, at, attachment, busy_days, deferred_tools, failure_days,
-                           hook_record, line, main_thread_days, nth_day, prompt, prompt_snapshot, skill_listing,
-                           subagent_history, text, tool_loop_days, tool_use, write)
+                           hook_record, line, main_thread_days, nth_day, partial_readback_days, prompt, prompt_snapshot,
+                           skill_listing, subagent_history, text, tool_loop_days, tool_use, write)
 
 
 BASELINE_NOTE = ("Before is the baseline ccdrift judged the incident against: the days it compared with, which skip "
@@ -374,12 +374,13 @@ def test_a_subagent_cache_draft_counts_subagent_loop_turns_and_their_read_back(t
     assert run_draft(tmp_path / "logs", tmp_path / "state.json", "subagent_cache", today=date(2026, 9, 26),
                      os_name="macOS 26.5") == 0
     out = capsys.readouterr().out
-    assert out.startswith("Tool-loop turns in subagents miss the prompt cache 12.12% of the time on Claude Code "
-                          "2.1.300 (usually 0.00%)\n")
-    assert ("From 2026-09-17 to 2026-09-21, 60 of 495 tool-loop turns in subagents (12.12%) missed the prompt cache, "
-            "against 0 of 1,386 (0.00%) on the 14 days before and 0 of 396 (0.00%) on the 4 days after, and they "
-            "read back 0.8788 of what the turn before had cached on average. ccdrift estimates ~600k tokens were "
-            "written to the cache again beyond the usual miss rate.") in out
+    assert out.startswith("Tool-loop turns in subagents read back 87.88% of what they had cached on Claude Code "
+                          "2.1.300 (usually 100.00%)\n")
+    assert ("From 2026-09-17 to 2026-09-21, tool-loop turns in subagents read back 87.88% of what the turn before had "
+            "cached on average, against 100.00% on the 14 days before and 100.00% on the 4 days after; 60 of 495 "
+            "(12.12%) missed the prompt cache, against 0 of 1,386 (0.00%) on the 14 days before and 0 of 396 (0.00%) "
+            "on the 4 days after. ccdrift estimates ~600k tokens were written to the cache again beyond the usual "
+            "read-back.") in out
     assert "| During (09-17..09-21) | 5 | 495 | 60 | 12.12% | 0.8788 |" in out
     assert "| 2.1.300 | during | 495 | 60 | 12.12% |" in out
     assert "- Subagents: cache tier not logged, effort not logged" in out
@@ -388,13 +389,26 @@ def test_a_subagent_cache_draft_counts_subagent_loop_turns_and_their_read_back(t
     assert "fall below z = −3.5 and closes" in out
 
 
+def test_a_subagent_cache_draft_about_a_regression_without_misses_leads_with_its_read_back_and_its_cost(
+        tmp_path, capsys):
+    partial_readback_days(tmp_path / "logs", 22, from_day=16, share=0.8)
+    save_state(tmp_path / "state.json", {**new_state(), "incidents": [incident("subagent_cache", "2026-09-17", None)]})
+    assert run_draft(tmp_path / "logs", tmp_path / "state.json", "subagent_cache", today=date(2026, 9, 23),
+                     os_name="macOS 26.5") == 0
+    out = capsys.readouterr().out
+    assert out.startswith("Tool-loop turns in subagents read back 80.00% of what they had cached on Claude Code "
+                          "2.1.226 (usually 100.00%)\n")
+    assert "; 0 of 594 (0.00%) missed the prompt cache" in out
+    assert "no tokens were written to the cache again" not in out
+
+
 def test_the_draft_command_takes_the_subagent_cache_metric(tmp_path, capsys):
     subagent_history(tmp_path / "logs", 25, miss_days=[16, 17, 18])
     save_state(tmp_path / "state.json", {**new_state(), "incidents": [
         incident("subagent_cache", "2026-09-17", "2026-09-21", recovered_from="2026-09-22")]})
     assert main(["incident", "draft", "subagent-cache", "--source", str(tmp_path / "logs"),
                  "--state", str(tmp_path / "state.json")]) == 0
-    assert capsys.readouterr().out.startswith("Tool-loop turns in subagents miss the prompt cache")
+    assert capsys.readouterr().out.startswith("Tool-loop turns in subagents read back 87.88% of what they had cached")
 
 
 def test_the_title_names_the_versions_the_incident_ran_on_not_a_stale_session(tmp_path):

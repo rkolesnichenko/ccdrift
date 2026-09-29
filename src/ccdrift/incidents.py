@@ -221,12 +221,24 @@ def _recached(turns: pd.DataFrame, judged: pd.Series, missed: pd.Series, before:
     return total
 
 
+def _unread(turns: pd.DataFrame, before: pd.Series, during: pd.Series, days: pd.Series) -> float:
+    """The tokens the loop turns on each day `during` didn't read back of what the turn
+    before had cached, and so wrote to the cache again, beyond the per-turn mean of the loop
+    turns `before`. A turn that reads back most but not all of it counts, as it does in the
+    metric; a miss counts nearly all of what was cached."""
+    loops = turns["loop_turn"].astype(bool)
+    unread = (turns["prev_cached"] - turns["cache_read"]).clip(lower=0).where(loops, 0.0)
+    usual = float(unread[loops & before].mean()) if (loops & before).any() else 0.0
+    return float(sum(max(0.0, day.sum() - usual * int(loops[day.index].sum()))
+                     for _, day in unread[during].groupby(days[during])))
+
+
 def incident_cost(turns: pd.DataFrame, incident: dict, incidents: Sequence[dict], cfg: DetectorConfig,
                   subagents: Optional[pd.DataFrame] = None) -> float:
     """What an incident cost beyond the days before it: for the cache ratio, the
     cache-creation tokens of missed prompt turns above the usual miss rate; for the
-    subagent cache, those of missed subagent loop turns the same way; for Haiku share,
-    the Haiku responses above the usual share. The usual rate comes from the incident's
+    subagent cache, the tokens subagent loop turns didn't read back beyond the usual
+    amount (_unread); for Haiku share, the Haiku responses above the usual share. The usual rate comes from the incident's
     baseline days."""
     metric = incident["metric"]
     turns = incident_turns(metric, turns, subagents)
@@ -242,8 +254,7 @@ def incident_cost(turns: pd.DataFrame, incident: dict, incidents: Sequence[dict]
         return _recached(turns, turns["prompt_within_ttl"].astype(bool), turns["is_miss"].astype(bool), before,
                          during, days)
     if metric == "subagent_cache":
-        return _recached(turns, turns["loop_turn"].astype(bool), turns["is_loop_miss"].astype(bool), before,
-                         during, days)
+        return _unread(turns, before, during, days)
     haiku = turns["is_haiku"].astype(float)
     rate = haiku[before].sum() / max(int(before.sum()), 1)
     return float(sum(max(0.0, group.sum() - rate * len(group))

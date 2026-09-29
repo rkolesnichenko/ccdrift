@@ -13,7 +13,8 @@ from ccdrift.logs import judged_subagent_loops, judged_turns, parse_source
 from ccdrift.replay import run_replay
 from ccdrift.report import run_report
 from ccdrift.state import load_state, new_state
-from tests.helpers import at, line, main_thread_days, nth_day, prompt, subagent_history, text, tool_result, write
+from tests.helpers import (at, line, main_thread_days, nth_day, partial_readback_days, prompt, subagent_history, text,
+                           tool_result, write)
 
 
 def subagent_turns(path, reads, sid="s1", entrypoint="cli", agent_type=None, day=0):
@@ -117,9 +118,23 @@ def test_a_drop_in_subagent_read_back_opens_a_subagent_cache_incident_named_by_t
         ("flag", "subagent_cache", nth_day(16))]
     kind, _, message, _, named = describe(events[0], turns, state["incidents"], DetectorConfig(), loops)
     assert named == ["2.1.300 (since 09-17)"]
+    # What the missed turns didn't read back of what the turn before had cached, none being lost usually.
     missed = loops[loops["is_loop_miss"]]
-    assert state["incidents"][0]["cost"] == missed["cache_creation"].sum() > 0
+    assert state["incidents"][0]["cost"] == (missed["prev_cached"] - missed["cache_read"]).sum() > 0
     assert message.startswith("Cache read-back in subagent tool loops down from 2026-09-17, on Claude Code 2.1.300")
+
+
+def test_a_regression_that_reads_back_only_part_of_the_cache_is_priced_by_what_it_did_not_read_back(tmp_path):
+    partial_readback_days(tmp_path, 19, from_day=16, share=0.8)
+    turns, loops = judged(tmp_path, date.fromisoformat(nth_day(19)))
+    assert not loops["is_loop_miss"].any()
+    state = new_state()
+    events = update_incidents(turns, state, date.fromisoformat(nth_day(19)), DetectorConfig(), loops)
+    assert [(e.kind, e.incident["start"]) for e in events] == [("flag", nth_day(16))]
+    _, _, message, _, _ = describe(events[0], turns, state["incidents"], DetectorConfig(), loops)
+    assert "no tokens re-cached" not in message
+    during = loops[loops["day"].astype(str) >= nth_day(16)]
+    assert state["incidents"][0]["cost"] == round((during["prev_cached"] - during["cache_read"]).sum()) > 0
 
 
 def test_without_a_cutoff_of_its_own_the_subagent_metric_is_left_alone(tmp_path):

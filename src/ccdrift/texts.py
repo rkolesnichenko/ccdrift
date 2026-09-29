@@ -1203,17 +1203,21 @@ def _cache_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
 def _subagent_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
     counts, periods, span, readbacks = facts["counts"], facts["periods"], version_span(facts["span"]), facts["readbacks"]
     where = LOOP_WHERE["subagent"]
-    usually = f" (usually {_rate(*counts['before'])})" if counts["before"][1] else ""
-    title = (f"Tool-loop turns {where} miss the prompt cache {_rate(*counts['during'])} of the time"
+    # Led by the read-back, the metric judged: a regression that loses part of the cache on
+    # every turn misses on none of them.
+    usually = f" (usually {readbacks['before']:.2%})" if readbacks["before"] is not None else ""
+    title = (f"Tool-loop turns {where} read back {readbacks['during']:.2%} of what they had cached"
              + (f" on Claude Code {span}" if span else "") + usually)
     beyond = (f"~{approx(facts['cost'])} tokens were written to the cache again" if facts["cost"] > 0
               else "no tokens were written to the cache again")
+    against = [f"{readbacks[name]:.2%} on the {_days(len(periods[name]))} {name}" for name in ("before", "after")
+               if periods[name] and readbacks[name] is not None]
     sections = [
         "### What happened\n\n"
-        f"{_lead(facts['incident'], periods)}, {counts['during'][0]:,} of {counts['during'][1]:,} tool-loop turns "
-        f"{where} ({_rate(*counts['during'])}) missed the prompt cache{_compared(counts, periods)}, and they read back "
-        f"{readbacks['during']:.4f} of what the turn before had cached on average. ccdrift estimates {beyond} beyond "
-        "the usual miss rate.",
+        f"{_lead(facts['incident'], periods)}, tool-loop turns {where} read back {readbacks['during']:.2%} of what the "
+        "turn before had cached on average" + (f", against {' and '.join(against)}" if against else "")
+        + f"; {counts['during'][0]:,} of {counts['during'][1]:,} ({_rate(*counts['during'])}) missed the prompt cache"
+        f"{_compared(counts, periods)}. ccdrift estimates {beyond} beyond the usual read-back.",
         "### Before, during and after\n\n" + BASELINE_NOTE
         + _markdown_table(
             ["", "Days", "Tool-loop turns", "Misses", "Miss rate", "Read-back"],
