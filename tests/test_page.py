@@ -6,17 +6,18 @@ import pandas as pd
 
 from ccdrift.detector import DetectorConfig
 from ccdrift.page import blocks, chart, escape, points, render, section, table, top, z_strip
-from ccdrift.texts import PAGE_LINES, settings_lines
+from ccdrift.texts import DAY_TABLE, PAGE_LINES, settings_lines
 
 DAYS = ["2026-09-01", "2026-09-02", "2026-09-03"]
 
 
-def rows_of(ratios, zs, shares=None, haiku_zs=None, flagged=None):
+def rows_of(ratios, zs, shares=None, haiku_zs=None, flagged=None, readbacks=None, subagent_zs=None):
     return pd.DataFrame({
         "day": DAYS, "responses": [60] * len(DAYS), "cache_ratio": ratios, "cache_z": zs,
         "haiku_share": shares or [0.0] * len(DAYS), "haiku_z": haiku_zs or [0.0] * len(DAYS),
         "loop_turns": [0] * len(DAYS), "loop_misses": [0] * len(DAYS),
         "subagent_loop_turns": [0] * len(DAYS), "subagent_loop_misses": [0] * len(DAYS),
+        "subagent_readback": readbacks or [1.0] * len(DAYS), "subagent_z": subagent_zs or [0.0] * len(DAYS),
         "flagged": flagged or [""] * len(DAYS)})
 
 
@@ -118,6 +119,14 @@ def test_the_table_carries_the_terminal_columns_and_marks_a_flagged_day():
     assert "<th>day</th><th>responses</th><th>cache ratio</th>" in drawn
     assert '<tr class=""><td>2026-09-01</td><td>60</td><td>0.900</td><td>-</td>' in drawn
     assert '<tr class="flagged"><td>2026-09-02</td><td>60</td><td>0.440</td><td>-20.4</td>' in drawn
+
+
+def test_the_table_heads_each_terminal_column_over_its_own_cell():
+    drawn = table(rows_of([0.9, 0.44, 0.9], [None, -20.4, 0.0], flagged=["", "cache", ""],
+                          readbacks=[1.0, 0.7981, 1.0], subagent_zs=[0.0, -9.5, 0.0]))
+    assert "<thead><tr>" + "".join(f"<th>{heading}</th>" for heading, _ in DAY_TABLE) + "</tr></thead>" in drawn
+    assert ("<td>0.000</td><td>+0.0</td><td>-</td><td>-</td><td>0.7981</td><td>-9.5</td><td>cache</td></tr>"
+            in drawn)
 
 
 def test_the_page_holds_the_rule_both_charts_the_table_and_the_footer_and_no_script():

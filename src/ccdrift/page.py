@@ -182,9 +182,11 @@ def blocks(lines: Sequence[str]) -> list[tuple[str, list[str]]]:
             for heading, body in found]
 
 
-# The terminal's day table's columns, under the terminal's own headings.
+# The terminal's day table's columns, under the terminal's own headings; a column added to
+# one and not the other fails here rather than shifting every heading after it.
 TABLE_COLUMNS = list(zip(("day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", "loop", "subagent",
-                          "flagged"), (heading for heading, _ in DAY_TABLE)))
+                          "subagent_readback", "subagent_z", "flagged"), (heading for heading, _ in DAY_TABLE),
+                         strict=True))
 
 
 def _cell(row: Any, key: str) -> str:
@@ -199,7 +201,7 @@ def _cell(row: Any, key: str) -> str:
         return escape(misses(row.subagent_loop_misses, row.subagent_loop_turns))
     if key == "flagged":
         return escape(row.flagged)
-    spec = ".3f" if key in ("cache_ratio", "haiku_share") else "+.1f"
+    spec = {"cache_ratio": ".3f", "haiku_share": ".3f", "subagent_readback": ".4f"}.get(key, "+.1f")
     return escape(number(getattr(row, key), spec))
 
 

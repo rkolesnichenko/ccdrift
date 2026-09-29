@@ -1,14 +1,19 @@
 """The subagent cache metric: what subagent tool-loop turns read back, judged daily."""
 
+import json
 from datetime import date
 
 import numpy as np
 import pandas as pd
-import pytest
 
+from ccdrift.cli import main
 from ccdrift.detector import METRICS, SUBAGENT_METRICS, DetectorConfig, bin_metrics, detect
-from ccdrift.logs import judged_subagent_loops, parse_source
-from tests.helpers import at, line, prompt, text, tool_result, write
+from ccdrift.incidents import describe, update_incidents
+from ccdrift.logs import judged_subagent_loops, judged_turns, parse_source
+from ccdrift.replay import run_replay
+from ccdrift.report import run_report
+from ccdrift.state import load_state, new_state
+from tests.helpers import at, line, main_thread_days, nth_day, prompt, subagent_history, text, tool_result, write
 
 
 def subagent_turns(path, reads, sid="s1", entrypoint="cli", agent_type=None, day=0):
@@ -94,3 +99,114 @@ def test_a_drop_in_subagent_read_back_flags_the_subagent_metric():
     detected = detect(bin_metrics(turns, metrics=SUBAGENT_METRICS),
                       DetectorConfig(metric_z_thresholds={"subagent_cache": 3.0}))
     assert detected["subagent_cache__flag"].tolist() == [False] * 15 + [True] * 5
+
+
+# Incidents on the subagent cache metric.
+
+def judged(path, today):
+    df = parse_source(path)
+    return judged_turns(df, today), judged_subagent_loops(df, today)
+
+
+def test_a_drop_in_subagent_read_back_opens_a_subagent_cache_incident_named_by_the_subagents_versions(tmp_path):
+    subagent_history(tmp_path, 19, miss_days=[16, 17, 18], version_from=16)
+    turns, loops = judged(tmp_path, date.fromisoformat(nth_day(19)))
+    state = new_state()
+    events = update_incidents(turns, state, date.fromisoformat(nth_day(19)), DetectorConfig(), loops)
+    assert [(e.kind, e.incident["metric"], e.incident["start"]) for e in events] == [
+        ("flag", "subagent_cache", nth_day(16))]
+    kind, _, message, _, named = describe(events[0], turns, state["incidents"], DetectorConfig(), loops)
+    assert named == ["2.1.300 (since 09-17)"]
+    missed = loops[loops["is_loop_miss"]]
+    assert state["incidents"][0]["cost"] == missed["cache_creation"].sum() > 0
+    assert message.startswith("Cache read-back in subagent tool loops down from 2026-09-17, on Claude Code 2.1.300")
+
+
+def test_without_a_cutoff_of_its_own_the_subagent_metric_is_left_alone(tmp_path):
+    subagent_history(tmp_path, 19, miss_days=[16, 17, 18])
+    turns, loops = judged(tmp_path, date.fromisoformat(nth_day(19)))
+    cfg = DetectorConfig(metric_z_thresholds={"cache_ratio": 3.0})
+    assert not cfg.judges("subagent_cache") and cfg.judges("cache_ratio")
+    state = new_state()
+    assert update_incidents(turns, state, date.fromisoformat(nth_day(19)), cfg, loops) == []
+    opened = {"metric": "subagent_cache", "start": nth_day(0), "end": None, "status": "open", "source": "check",
+              "closed_by": None, "recovered_from": None, "opened_on": nth_day(1), "closed_on": None,
+              "versions": [], "cost": 0}
+    state["incidents"].append(opened)
+    assert update_incidents(turns, state, date.fromisoformat(nth_day(40)), cfg, loops) == []
+    assert opened["status"] == "open"
+
+
+def test_a_subagent_regression_leaves_the_main_thread_metrics_alone(tmp_path):
+    subagent_history(tmp_path, 19, miss_days=[16, 17, 18])
+    turns, loops = judged(tmp_path, date.fromisoformat(nth_day(19)))
+    state = new_state()
+    update_incidents(turns, state, date.fromisoformat(nth_day(19)), DetectorConfig())
+    assert state["incidents"] == []
+
+
+def test_a_subagent_cache_incident_recovers_once_read_back_is_usual_again(tmp_path):
+    subagent_history(tmp_path, 25, miss_days=[16, 17, 18])
+    turns, loops = judged(tmp_path, date.fromisoformat(nth_day(25)))
+    state = new_state()
+    events = update_incidents(turns, state, date.fromisoformat(nth_day(25)), DetectorConfig(), loops)
+    assert [e.kind for e in events] == ["flag", "recovered"]
+    # The first 3 days pooled without a miss end on 09-22; three such windows in a row close it from there.
+    assert state["incidents"][0]["recovered_from"] == nth_day(21)
+
+
+def test_an_open_subagent_cache_incident_persists_after_30_days_without_any_subagent(tmp_path):
+    main_thread_days(tmp_path, [{}] * 5, first_day=28)
+    turns, loops = judged(tmp_path, date.fromisoformat(nth_day(33)))
+    assert loops.empty
+    state = new_state()
+    state["incidents"].append({"metric": "subagent_cache", "start": nth_day(2), "end": None, "status": "open",
+                               "source": "check", "closed_by": None, "recovered_from": None, "opened_on": nth_day(5),
+                               "closed_on": None, "versions": [], "cost": 0})
+    events = update_incidents(turns, state, date.fromisoformat(nth_day(33)), DetectorConfig(), loops)
+    assert [e.kind for e in events] == ["persistent"]
+
+
+def test_a_first_check_replays_a_subagent_cache_incident(tmp_path, capsys):
+    subagent_history(tmp_path / "logs", 19, miss_days=[16, 17, 18])
+    assert run_replay(tmp_path / "logs", tmp_path / "state.json", today=date.fromisoformat(nth_day(19))) == 0
+    assert "  subagent cache  2026-09-17..now" in capsys.readouterr().out
+
+
+def test_an_incident_on_subagent_cache_can_be_added_by_hand_and_listed_with_its_cost(tmp_path, capsys):
+    subagent_history(tmp_path / "logs", 19, miss_days=[16, 17, 18])
+    state = tmp_path / "state.json"
+    assert main(["incident", "add", "subagent-cache", "2026-09-17..2026-09-19", "--state", str(state)]) == 0
+    assert [i["metric"] for i in load_state(state)["incidents"]] == ["subagent_cache"]
+    capsys.readouterr()
+    assert main(["incident", "list", "--source", str(tmp_path / "logs"), "--state", str(state)]) == 0
+    assert "~600k tokens re-cached in subagents" in capsys.readouterr().out
+
+
+def test_a_version_2_state_file_loads_as_version_3_with_its_incidents(tmp_path):
+    incident = {"metric": "cache_ratio", "start": "2026-08-18", "end": "2026-09-03", "status": "recovered"}
+    (tmp_path / "state.json").write_text(json.dumps({"version": 2, "incidents": [incident]}))
+    state = load_state(tmp_path / "state.json")
+    assert state["version"] == 3 and state["incidents"] == [incident]
+
+
+def test_the_report_shows_subagent_read_back_and_flags_it(tmp_path, capsys):
+    subagent_history(tmp_path / "logs", 19, miss_days=[16, 17, 18])
+    assert run_report(tmp_path / "logs", tmp_path / "state.json", days=3, today=date.fromisoformat(nth_day(19))) == 0
+    assert capsys.readouterr().out.splitlines()[4:7] == [
+        "2026-09-17         60        0.900   +0.0        0.000   +0.0            -            20/99"
+        "              0.7980  -3923.5  subagent cache",
+        "2026-09-18         60        0.900   +0.0        0.000   +0.0            -            20/99"
+        "              0.7980  -18.6  subagent cache",
+        "2026-09-19         60        0.900   +0.0        0.000   +0.0            -            20/99"
+        "              0.7980  -13.2  subagent cache",
+    ]
+
+
+def test_the_report_says_when_subagent_read_back_is_not_judged(tmp_path, capsys):
+    subagent_history(tmp_path / "logs", 19, miss_days=[16, 17, 18])
+    cfg = DetectorConfig(metric_z_thresholds={"cache_ratio": 3.0})
+    run_report(tmp_path / "logs", tmp_path / "state.json", days=3, today=date.fromisoformat(nth_day(19)), cfg=cfg)
+    out = capsys.readouterr().out.splitlines()
+    assert out[1].endswith("z >= +3.5 for Haiku share, subagent read-back not judged.")
+    assert all(row.endswith("-      -") for row in out[4:7])

@@ -435,6 +435,15 @@ def tool_loop_days(path, days, per_day=100, misses=0, subagent=False, versions=N
         write(path / (f"s{d}/subagents/agent-a.jsonl" if subagent else f"s{d}.jsonl"), records)
 
 
+def subagent_history(path, days, miss_days=(), version_from=None):
+    """A clean main thread from Sep 1 and a subagent of it each day, 99 tool-loop turns a
+    day; on each of `miss_days` 20 of them miss. From day `version_from` the subagent runs
+    2.1.300, while the main thread stays on 2.1.226."""
+    main_thread_days(path, [{}] * days)
+    versions = ["2.1.300" if version_from is not None and d >= version_from else "2.1.226" for d in range(days)]
+    tool_loop_days(path, days, subagent=True, misses=20, miss_days=miss_days, versions=versions)
+
+
 def hook_days_logs(path, failing_days, days, per_day=10):
     """`per_day` stop-hook summaries a day from Sep 1 in one transcript, after the response
     a stop hook follows; on the day indexes in `failing_days` every hook reports an error."""

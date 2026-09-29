@@ -24,9 +24,9 @@ from ccdrift.fields import field_gaps, new_fields
 from ccdrift.history import load_history
 from ccdrift.hookcover import hook_coverage_alerts
 from ccdrift.hooks import hook_failures, judged_hook_runs
-from ccdrift.incidents import (RECOVERY_BINS, describe, incident_cost, incident_versions, update_incidents,
-                               versions_text)
-from ccdrift.logs import NO_RESPONSE_LINES, judged_turns
+from ccdrift.incidents import (RECOVERY_BINS, describe, incident_cost, incident_turns, incident_versions,
+                               update_incidents, versions_text)
+from ccdrift.logs import NO_RESPONSE_LINES, judged_subagent_loops, judged_turns
 from ccdrift.loops import STREAMS, loop_counts, loop_warning
 from ccdrift.notify import notify, run_exec
 from ccdrift.replay import REPLAY_SOURCE, first_run, replay_incidents
@@ -150,6 +150,7 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     if df.empty:
         raise RuntimeError(no_transcripts_message(source))
     turns = judged_turns(df, today)
+    loops = judged_subagent_loops(df, today)
     # What `ccdrift cost` would withhold, kept for status and the weekly summary: the day
     # this check first found it, until cost prints its total again.
     models = withheld_total(tables, today)
@@ -162,17 +163,17 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     # A first check replays its history day by day instead, so a regression that began
     # more than 14 days ago is recorded too; its last replayed day is today.
     replaying = first_run(state)
-    events = [] if replaying else update_incidents(turns, state, today, cfg)
+    events = [] if replaying else update_incidents(turns, state, today, cfg, loops)
     if replaying:
         replayed = replay_incidents(df, today, cfg, state)
         found = sorted((i for i in incidents if i["source"] == REPLAY_SOURCE), key=lambda i: i["start"])
         if found:
             notes = []
-            judged_days = sorted(turns["day"].astype(str).unique())
             for incident in found:
                 if incident["status"] != "persistent":
                     # As its flag alert would have: versions first seen from a week before
-                    # the incident through its first RECOVERY_BINS days.
+                    # the incident through its first RECOVERY_BINS days of its own metric.
+                    judged_days = sorted(incident_turns(incident["metric"], turns, loops)["day"].astype(str).unique())
                     first_days = [day for day in judged_days if day >= incident["start"]][:RECOVERY_BINS]
                     quoted = note_versions(turns, incident["versions"], days_before(incident["start"], 7),
                                            first_days[-1])
@@ -185,10 +186,10 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
         # rather than being quoted twice in the same run.
         for _, event in replayed:
             if event.kind == "flag" and event.incident["status"] == "open":
-                kind, title, message, details, _ = describe(event, turns, incidents, cfg)
+                kind, title, message, details, _ = describe(event, turns, incidents, cfg, loops)
                 alerts.append((kind, title, message, details))
     for event in events:
-        kind, title, message, details, named = describe(event, turns, incidents, cfg)
+        kind, title, message, details, named = describe(event, turns, incidents, cfg, loops)
         notes = []
         if event.kind != "persistent" and event.days:
             first = days_before(event.incident["start"], 7) if event.kind == "flag" else event.incident["start"]
@@ -213,11 +214,11 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
     for incident in incidents:
         if id(incident) in described or not _needs_cost(incident):
             continue
-        incident["cost"] = round(incident_cost(turns, incident, incidents, cfg))
+        incident["cost"] = round(incident_cost(turns, incident, incidents, cfg, loops))
         if incident["status"] != "open":
             incident["costed_on"] = today.isoformat()
         if incident["source"] == "user" and not incident["versions"]:
-            incident["versions"] = incident_versions(turns, incident)
+            incident["versions"] = incident_versions(turns, incident, loops)
     for change in setting_changes(turns, state, today):
         versions, notes = _change_notes(turns, changelog, change, TOPIC_OF[change["setting"]])
         alerts.append(("setting", ALERT_TITLES["setting"], change_message(change, versions), notes))

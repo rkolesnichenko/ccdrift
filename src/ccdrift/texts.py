@@ -14,7 +14,7 @@ from typing import Any, Mapping, Optional, Sequence
 # printing a project folder, can both reach it without importing pandas.
 CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
-METRIC_ARGS = {"cache": "cache_ratio", "haiku": "haiku_fraction"}
+METRIC_ARGS = {"cache": "cache_ratio", "haiku": "haiku_fraction", "subagent-cache": "subagent_cache"}
 # The alerts `incident draft` can write up besides incidents: the word it takes, and the
 # state key that records the alert.
 ALERT_ARGS = {"session-start": "context_changes", "hooks": "hook_changes", "tool-loop": "loop_warnings",
@@ -22,10 +22,11 @@ ALERT_ARGS = {"session-start": "context_changes", "hooks": "hook_changes", "tool
 ALERT_NAMES = {key: word for word, key in ALERT_ARGS.items()}
 
 INCIDENT_METRICS = {"cache_ratio": "Cache read ratio on new prompts",
-                    "haiku_fraction": "Haiku share on the main thread"}
-SHORT_NAMES = {"cache_ratio": "cache", "haiku_fraction": "haiku"}
-MOVES = {"cache_ratio": "down", "haiku_fraction": "up"}
-METRIC_WORDS = {"cache_ratio": "cache ratio", "haiku_fraction": "Haiku share"}
+                    "haiku_fraction": "Haiku share on the main thread",
+                    "subagent_cache": "Cache read-back in subagent tool loops"}
+SHORT_NAMES = {"cache_ratio": "cache", "haiku_fraction": "haiku", "subagent_cache": "subagent cache"}
+MOVES = {"cache_ratio": "down", "haiku_fraction": "up", "subagent_cache": "down"}
+METRIC_WORDS = {"cache_ratio": "cache ratio", "haiku_fraction": "Haiku share", "subagent_cache": "subagent read-back"}
 PERSISTENT_DAYS = 30
 
 # What a tool-loop warning of each stream (see ccdrift.loops) says is happening.
@@ -118,9 +119,12 @@ def unpriced_line(unpriced: Sequence[tuple[str, float]], total_withheld: bool, c
 
 
 def cost_text(metric: str, cost: float) -> str:
-    """"~18M tokens re-cached" or "~120 extra Haiku responses"."""
+    """"~18M tokens re-cached", "~2M tokens re-cached in subagents" or "~120 extra Haiku
+    responses"."""
     if metric == "cache_ratio":
         return f"~{approx(cost)} tokens re-cached" if cost > 0 else "no tokens re-cached"
+    if metric == "subagent_cache":
+        return f"~{approx(cost)} tokens re-cached in subagents" if cost > 0 else "no tokens re-cached in subagents"
     return f"~{approx(cost)} extra Haiku responses" if cost > 0 else "no extra Haiku responses"
 
 
@@ -834,7 +838,8 @@ def digest_text(summary: dict[str, Any]) -> str:
 # The status line and `ccdrift status`
 # ---------------------------------------------------------------------------
 
-LIVE_NAMES = {"cache_ratio": "cache ratio down", "haiku_fraction": "Haiku share up"}
+LIVE_NAMES = {"cache_ratio": "cache ratio down", "haiku_fraction": "Haiku share up",
+              "subagent_cache": "subagent cache down"}
 
 # status.short_status fills these; its docstring says which one wins.
 STATUS_LINES = {"no_check": "ccdrift: no check yet",
@@ -892,7 +897,9 @@ COMMAND_LINES = {"no_scheduler": "ccdrift can't set up a scheduled job on this s
 
 REPORT_LINES = {"days": "Last {days} complete UTC days with main-thread activity.",
                 "rule": "Flagged once {bins} of any {window} days in a row pass the cutoff: "
-                        "z <= -{cache:.1f} for the cache ratio, z >= +{haiku:.1f} for Haiku share.",
+                        "z <= -{cache:.1f} for the cache ratio, z >= +{haiku:.1f} for Haiku share, {subagent}.",
+                "subagent_rule": "z <= -{cutoff:.1f} for subagent read-back",
+                "subagent_unjudged": "subagent read-back not judged",
                 "versions": "Complete UTC days with main-thread activity, by Claude Code version.",
                 "miss": "A miss is a new-prompt turn that reads less than half its input from the cache.",
                 "loop_miss": "A loop miss is a tool-loop turn that reads less than half of what the response "
@@ -911,7 +918,8 @@ REPORT_LINES = {"days": "Last {days} complete UTC days with main-thread activity
 
 # Each table's columns: heading, then alignment and width.
 DAY_TABLE = (("day", "<10"), ("responses", ">9"), ("cache ratio", ">11"), ("z", ">5"), ("haiku share", ">11"),
-             ("z", ">5"), ("loop misses", ">11"), ("subagent misses", ">15"), ("flagged", ""))
+             ("z", ">5"), ("loop misses", ">11"), ("subagent misses", ">15"), ("subagent read-back", ">18"),
+             ("z", ">5"), ("flagged", ""))
 VERSION_TABLE = (("version", "<11"), ("first day", "<10"), ("last day", "<10"), ("responses", ">9"),
                  ("prompt turns", ">12"), ("cache ratio", ">11"), ("misses", ">6"), ("loop misses", ">11"),
                  ("subagent misses", ">15"), ("haiku share", ">11"), ("session start", ">13"), ("compacts at", ">11"))

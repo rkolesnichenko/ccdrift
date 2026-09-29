@@ -22,7 +22,7 @@ import pandas as pd
 from ccdrift.detector import DetectorConfig
 from ccdrift.history import HistoryError, load_history
 from ccdrift.incidents import OPEN_END, Event, describe, incident_cost, incident_versions, update_incidents
-from ccdrift.logs import judged_turns
+from ccdrift.logs import judged_subagent_loops, judged_turns
 from ccdrift.state import load_state, new_state
 from ccdrift.texts import (COMMAND_LINES, PERSISTENT_DAYS, REPLAY_LINES, SHORT_NAMES, incident_line,
                            no_transcripts_message)
@@ -45,22 +45,25 @@ def replay_incidents(responses: pd.DataFrame, today: date, cfg: DetectorConfig,
     turns = judged_turns(responses, today)
     if turns.empty:
         return []
+    loops = judged_subagent_loops(responses, today)
     # What the check judged on each day is these turns before it, as judged_turns(responses,
     # day) would give. Judging the whole history again for every day made the replay grow with
     # days times responses: 1.7s of `ccdrift replay`'s 2.8s over the owner's 53 days.
     days = turns["day"].astype(str)
+    loop_days = loops["day"].astype(str)
     events = []
     day = date.fromisoformat(str(turns["day"].min())) + timedelta(days=1)
     while day <= today:
-        for event in update_incidents(turns[days < day.isoformat()], state, day, cfg):
+        for event in update_incidents(turns[days < day.isoformat()], state, day, cfg,
+                                      loops[loop_days < day.isoformat()]):
             if event.kind == "flag":
                 event.incident["source"] = REPLAY_SOURCE
             events.append((day.isoformat(), event))
         day += timedelta(days=1)
     for incident in state["incidents"]:
         if incident["source"] == REPLAY_SOURCE:
-            incident["cost"] = round(incident_cost(turns, incident, state["incidents"], cfg))
-            incident["versions"] = incident_versions(turns, incident)
+            incident["cost"] = round(incident_cost(turns, incident, state["incidents"], cfg, loops))
+            incident["versions"] = incident_versions(turns, incident, loops)
     return events
 
 
@@ -114,15 +117,17 @@ def run_replay(source: Path, state_path: Path, today: Optional[date] = None,
     first = date.fromisoformat(str(turns["day"].min())) + timedelta(days=1)
     lines = [REPLAY_LINES["header"].format(first=first.isoformat(), today=today.isoformat()), REPLAY_LINES["quiet"], ""]
     days = turns["day"].astype(str)
+    loops = judged_subagent_loops(responses, today)
+    loop_days = loops["day"].astype(str)
     for day, event in events:
-        _, title, message, _, _ = describe(event, turns[days < day], state["incidents"], cfg)
+        _, title, message, _, _ = describe(event, turns[days < day], state["incidents"], cfg, loops[loop_days < day])
         lines.append(REPLAY_LINES["event"].format(day=day, title=title, message=message))
     if not events:
         lines.append(REPLAY_LINES["none"])
     else:
         lines += ["", REPLAY_LINES["found"]]
         for incident in sorted(state["incidents"], key=lambda i: i["start"]):
-            cost = incident_cost(turns, incident, state["incidents"], cfg)
+            cost = incident_cost(turns, incident, state["incidents"], cfg, loops)
             lines += [f"  {incident_line(incident, cost)}", f"    {_recorded_note(incident, recorded, today)}"]
     print("\n".join(lines))
     return 0

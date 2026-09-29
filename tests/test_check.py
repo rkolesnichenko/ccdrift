@@ -22,8 +22,8 @@ from ccdrift.sessions import context_found, session_starts
 from ccdrift.state import load_state, new_state, save_state
 from ccdrift.status import short_status, status_report
 from tests.helpers import (DAY, agent_listing, at, attachment, busy_days, damage_responses_table, deferred_tools,
-                           hook_days_logs, hook_record, line, main_thread_days, nth_day, prompt, skill_listing, text,
-                           tool_loop_days, tool_use, write)
+                           hook_days_logs, hook_record, line, main_thread_days, nth_day, prompt, skill_listing,
+                           subagent_history, text, tool_loop_days, tool_use, write)
 
 
 @pytest.fixture
@@ -229,6 +229,17 @@ def test_check_alerts_when_a_flag_opens_an_incident(tmp_path, sent, capsys):
             "(since 09-15). ~36 extra Haiku responses so far.") in capsys.readouterr().out
 
 
+def test_the_check_alerts_on_a_subagent_cache_incident_and_the_status_line_shows_it(tmp_path, sent, capsys):
+    subagent_history(tmp_path / "logs", 19, miss_days=[16, 17, 18], version_from=16)
+    ran_before(tmp_path)
+    assert check_logs(tmp_path, today=date(2026, 9, 20)) == 0
+    assert sent == ["ccdrift flag"]
+    assert ("ccdrift flag: Cache read-back in subagent tool loops down from 2026-09-17, on Claude Code 2.1.300 "
+            "(since 09-17). ~600k tokens re-cached in subagents so far.") in capsys.readouterr().out
+    now = datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc)
+    assert short_status(tmp_path / "state.json", now) == "ccdrift: subagent cache down since 09-17"
+
+
 def test_check_alerts_when_an_incident_is_back_to_normal(tmp_path, sent, capsys):
     days = [{}] * 14 + [{"haiku": 12, "version": "2.1.233"}] * 3 + [{"version": "2.1.259"}] * 5
     main_thread_days(tmp_path / "logs", days)
@@ -420,7 +431,7 @@ def test_an_unreadable_state_file_notifies_at_most_once_in_20_hours(tmp_path, se
 
 def test_check_leaves_a_state_file_from_a_newer_ccdrift_as_it_is(tmp_path, sent):
     main_thread_days(tmp_path / "logs", [{}] * 3)
-    newer = '{"version": 3, "incidents": [], "settings": [], "blank_cache": [], "reported": {}, "new": 1}\n'
+    newer = '{"version": 4, "incidents": [], "settings": [], "blank_cache": [], "reported": {}, "new": 1}\n'
     (tmp_path / "state.json").write_text(newer)
     assert check_logs(tmp_path) == 1
     assert sent == ["ccdrift check failed"]

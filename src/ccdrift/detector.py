@@ -74,7 +74,7 @@ class DetectorConfig:
     # At 3.0 three of those four are deviant and the metric flags; at 3.5 only
     # two are, and it does not. 3.0 on every metric raised a false Haiku flag on
     # clean synthetic logs. docs/findings.md records the same four numbers.
-    # subagent_cache is judged only with a cutoff of its own. G17 measured it
+    # subagent_cache is judged only with a cutoff of its own (see judges). G17 measured it
     # on 2026-09-29 over 36 days of subagent tool loops: every cutoff from 2.5 to 5 raised
     # no false alarm and caught a planted 5% of prefix-only reads in 50 of 50 runs; 3.5 is
     # the strictest to catch a planted 2% in 50 of 50 (4 caught 45). Below it, 09-22 and
@@ -82,6 +82,11 @@ class DetectorConfig:
     # deviant, one ordinary day short of a false flag.
     metric_z_thresholds: dict[str, float] = field(default_factory=lambda: {"cache_ratio": 3.0,
                                                                            "subagent_cache": 3.5})
+
+    def judges(self, metric: str) -> bool:
+        """Whether `metric` is judged at all: a subagent metric only with a cutoff of its
+        own, since z_threshold was never measured on one."""
+        return metric not in SUBAGENT_METRICS or metric in self.metric_z_thresholds
 
 
 def _robust_z(value: float, baseline: np.ndarray, counts: np.ndarray,

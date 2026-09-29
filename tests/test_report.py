@@ -26,11 +26,14 @@ def test_report_lists_recent_days_with_their_metrics(tmp_path, capsys):
     assert capsys.readouterr().out.splitlines() == [
         "Last 2 complete UTC days with main-thread activity.",
         "Flagged once 3 of any 4 days in a row pass the cutoff: z <= -3.0 for the cache ratio, "
-        "z >= +3.5 for Haiku share.",
+        "z >= +3.5 for Haiku share, z <= -3.5 for subagent read-back.",
         "",
-        "day         responses  cache ratio      z  haiku share      z  loop misses  subagent misses  flagged",
-        "2026-09-02         60        0.900      -        0.000      -            -                -",
-        "2026-09-03         60        0.900      -        0.000      -            -                -",
+        "day         responses  cache ratio      z  haiku share      z  loop misses  subagent misses  subagent read-back"
+        "      z  flagged",
+        "2026-09-02         60        0.900      -        0.000      -            -                -"
+        "                   -      -",
+        "2026-09-03         60        0.900      -        0.000      -            -                -"
+        "                   -      -",
         "",
         "Incidents: none yet",
         "",
@@ -181,9 +184,12 @@ def test_report_counts_tool_loop_misses_by_day_and_version(tmp_path, capsys):
     run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4))
     lines = capsys.readouterr().out.splitlines()
     assert lines[4:7] == [
-        "2026-09-01          5            -      -        0.000      -          0/4                -",
-        "2026-09-02          5            -      -        0.000      -          1/4                -",
-        "2026-09-03          5            -      -        0.000      -          0/4              1/2",
+        "2026-09-01          5            -      -        0.000      -          0/4                -"
+        "                   -      -",
+        "2026-09-02          5            -      -        0.000      -          1/4                -"
+        "                   -      -",
+        "2026-09-03          5            -      -        0.000      -          0/4              1/2"
+        "              0.5000      -",
     ]
     run_report(tmp_path / "logs", tmp_path / "state.json", by="version", today=date(2026, 9, 4))
     lines = capsys.readouterr().out.splitlines()
@@ -219,8 +225,8 @@ def test_report_json_holds_aggregates_without_paths_or_session_ids(tmp_path, cap
     assert payload["days"][0] == {"day": "2026-09-01", "responses": 60, "cache_ratio": pytest.approx(0.9),
                                   "cache_z": None, "haiku_share": 0.0, "haiku_z": None, "loop_turns": 0,
                                   "loop_misses": 0, "subagent_loop_turns": 0, "subagent_loop_misses": 0,
-                                  "flagged": []}
-    assert payload["cutoffs"] == {"cache_ratio": -3.0, "haiku_fraction": 3.5}
+                                  "subagent_readback": None, "subagent_z": None, "flagged": []}
+    assert payload["cutoffs"] == {"cache_ratio": -3.0, "haiku_fraction": 3.5, "subagent_cache": -3.5}
     assert str(tmp_path) not in out and ".jsonl" not in out and '"s0"' not in out
 
 
