@@ -5,7 +5,7 @@ import sqlite3
 
 import ccdrift.history
 from ccdrift.history import History, load_history
-from ccdrift.logs import ATTACHMENT_COLUMNS, READ_ATTACHMENTS, parse_all, parse_file
+from ccdrift.logs import ATTACHMENT_COLUMNS, READ_ATTACHMENTS, attachment_frame, coverage_frame, parse_all, parse_file
 from ccdrift.state import new_state, save_state
 from tests.helpers import PRIVATE_TEXT, at, attachment, line, prompt, text, write
 
@@ -100,3 +100,17 @@ def test_the_types_ccdrift_reads_are_the_listings_the_session_start_and_the_hook
     assert READ_ATTACHMENTS == {"skill_listing", "deferred_tools_delta", "agent_listing_delta", "mcp_instructions_delta",
                                 "instructions", "prompt_snapshot", "hook_success", "hook_non_blocking_error",
                                 "hook_blocking_error"}
+
+
+def test_rows_that_differ_only_by_version_or_entrypoint_come_out_in_one_order():
+    # Found in the 0.21.0 review: sorted without them, such rows kept whatever order they came in.
+    base = {"source_file": "p/s1.jsonl", "session_id": "s1", "day": "2026-09-01", "is_sidechain": False}
+    census = [{**base, "version": v, "entrypoint": e, "type": "date", "records": 1}
+              for v, e in (("2.1.267", "cli"), ("2.1.266", "sdk-py"), ("2.1.266", "cli"))]
+    coverage = [{**base, "version": v, "entrypoint": e, "event": "PreToolUse", "tool": "Bash", "calls": 1, "hooked": 0}
+                for v, e in (("2.1.267", "cli"), ("2.1.266", "sdk-py"), ("2.1.266", "cli"))]
+    for frame, rows in ((attachment_frame, census), (coverage_frame, coverage)):
+        forward, backward = frame(rows), frame(rows[::-1])
+        assert list(zip(forward["version"], forward["entrypoint"])) == [("2.1.266", "cli"), ("2.1.266", "sdk-py"),
+                                                                        ("2.1.267", "cli")]
+        assert forward.values.tolist() == backward.values.tolist()

@@ -87,6 +87,20 @@ def test_only_complete_days_and_main_thread_sessions_count():
     assert found(census(baseline(), sessions(6, 10, "2.1.267", ["date"], sidechain=True))) == []
 
 
+def test_rows_with_no_version_are_never_judged_as_a_new_version():
+    frame = census(baseline(), sessions(6, 10, "2.1.267", ["date"]))
+    frame.loc[frame["version"] == "2.1.267", "version"] = None
+    assert found(frame) == []
+
+
+def test_sessions_with_no_entrypoint_are_judged_on_their_own_not_as_cli():
+    # An entrypoint Claude Code didn't log isn't known to be the CLI's: its sessions form
+    # their own population, so they can neither dilute nor fill out the CLI's.
+    frame = census(baseline(), baseline(entrypoint=None), sessions(6, 10, "2.1.267", ["date"], entrypoint=None),
+                   sessions(3, 10, "2.1.267", BEFORE, entrypoint="cli"))
+    assert [(r["entrypoint"], r["types"]) for r in found(frame)] == [("unknown", ["date"])]
+
+
 def test_the_message_and_status_line_name_the_types_version_and_sessions():
     record = {"types": ["date", "environment"], "version": "2.1.267", "entrypoint": "sdk-py", "share": 1.0,
               "transcripts": 27, "reported_on": "2026-09-11"}
