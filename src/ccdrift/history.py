@@ -19,14 +19,15 @@ from typing import Any, Optional
 import pandas as pd
 
 from ccdrift.logs import (ATTRIBUTION_FIELDS, COMPONENT_SETS, COMPONENT_SIZES, MAX_TIME, MIN_TIME, SDK_ENTRYPOINT_PREFIX,
-                          SETTING_FIELDS, TOKEN_FIELDS, USAGE_COUNTS, ParsedFile, Tables, census_frame, compaction_frame,
-                          components_frame, coverage_frame, coverage_rows, duration_frame, failure_frame, frame, hook_frame,
-                          holds_no_response, jsonl_files, parse_all, parse_file, usage_frame)
+                          SETTING_FIELDS, TOKEN_FIELDS, USAGE_COUNTS, ParsedFile, Tables, attachment_frame,
+                          attachment_rows, census_frame, compaction_frame, components_frame, coverage_frame,
+                          coverage_rows, duration_frame, failure_frame, frame, hook_frame, holds_no_response,
+                          jsonl_files, parse_all, parse_file, usage_frame)
 from ccdrift.state import make_private
 from ccdrift.texts import HISTORY_LINES
 
 HISTORY_FILE = "history.sqlite"
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 # Bump whenever parse_file's output changes, so every transcript still on disk is
 # read again. Rows of transcripts Claude Code already deleted keep their values.
 # 3: counts, times and ids out of range or of the wrong type read as missing.
@@ -43,7 +44,9 @@ SCHEMA_VERSION = 8
 #     agent types, MCP instructions, CLAUDE.md files, system prompt, tool definitions and
 #     first message.
 # 11: hook coverage: for each tool call, whether a PreToolUse and a PostToolUse hook ran on it.
-PARSER_VERSION = 11
+# 12: the attachment census: each attachment type a transcript holds, by day, version,
+#     entrypoint and thread.
+PARSER_VERSION = 12
 
 TEXT_COLUMNS = ("model", "stop_reason", "miss_reason") + ATTRIBUTION_FIELDS + SETTING_FIELDS
 FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction", "opens_transcript")
@@ -113,6 +116,10 @@ CREATE TABLE IF NOT EXISTS hook_coverage (
     file_id INTEGER NOT NULL, day TEXT NOT NULL, version TEXT, entrypoint TEXT, is_sidechain INTEGER NOT NULL,
     event TEXT NOT NULL, tool TEXT NOT NULL, calls INTEGER NOT NULL, hooked INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS hook_coverage_file ON hook_coverage (file_id);
+CREATE TABLE IF NOT EXISTS attachment_census (
+    file_id INTEGER NOT NULL, day TEXT NOT NULL, version TEXT, entrypoint TEXT, is_sidechain INTEGER NOT NULL,
+    type TEXT NOT NULL, records INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS attachment_census_file ON attachment_census (file_id);
 """
 
 
@@ -372,6 +379,7 @@ class History:
             self.db.execute("DELETE FROM field_days WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM components WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM hook_coverage WHERE file_id = ?", (file_id,))
+            self.db.execute("DELETE FROM attachment_census WHERE file_id = ?", (file_id,))
             self.db.executemany(_upsert("responses", RESPONSE_COLUMNS), [
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]),
                  *(row[c] for c in TEXT_COLUMNS), *(int(row[c]) for c in FLAG_COLUMNS),
@@ -416,6 +424,11 @@ class History:
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [(file_id, row["day"], row["version"], row["entrypoint"], int(row["is_sidechain"]), row["event"],
                   row["tool"], row["calls"], row["hooked"]) for row in coverage_rows(parsed, rel)])
+            self.db.executemany(
+                "INSERT INTO attachment_census (file_id, day, version, entrypoint, is_sidechain, type, records) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(file_id, row["day"], row["version"], row["entrypoint"], int(row["is_sidechain"]), row["type"],
+                  row["records"]) for row in attachment_rows(parsed, rel)])
             self.db.execute("UPDATE files SET last_ts = (SELECT MAX(ts) FROM responses WHERE file_id = ?) WHERE id = ?",
                             (file_id, file_id))
 
@@ -512,6 +525,21 @@ class History:
             rows[col] = [value if isinstance(value, str) else None for value in rows[col]]
         return coverage_frame(rows.to_dict("records"))
 
+    def attachment_census(self, since: Optional[str] = None) -> pd.DataFrame:
+        """Every stored attachment census row, or those of days from `since`, as parse_all's
+        `attachment_census` table."""
+        query = ("SELECT f.path AS source_file, f.session_id, a.day, a.version, a.entrypoint, a.is_sidechain, a.type, "
+                 "a.records FROM attachment_census a JOIN files f ON f.id = a.file_id")
+        params: tuple = ()
+        if since is not None:
+            query += " WHERE a.day >= ?"
+            params = (since,)
+        rows = pd.read_sql_query(query, self.db, params=params)
+        # pandas 3 reads NULL as NaN in a text column that holds values too; pandas 2 as None.
+        for col in ("version", "entrypoint"):
+            rows[col] = [value if isinstance(value, str) else None for value in rows[col]]
+        return attachment_frame(rows.to_dict("records"))
+
     def field_census(self, since: Optional[str] = None) -> pd.DataFrame:
         """The census of the keys response records carry, summed over transcripts, or
         that of days from `since`, as parse_all's `field_census` table."""
@@ -566,7 +594,7 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
             return Tables(history.responses(since), history.durations(since), history.hook_runs(since),
                           history.compactions(since), history.failures(since), history.field_census(since),
                           history.model_usage(since), history.components(since), history.hook_coverage(since),
-                          history.skipped, history.no_responses)
+                          history.attachment_census(since), history.skipped, history.no_responses)
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc
     except pd.errors.DatabaseError as exc:

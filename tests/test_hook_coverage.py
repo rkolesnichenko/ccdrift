@@ -148,7 +148,7 @@ def test_a_store_from_before_hook_coverage_gains_the_table_and_reads_every_trans
     db.commit()
     db.close()
     with History(path) as history:
-        assert history.meta["schema_version"] == str(ccdrift.history.SCHEMA_VERSION) == "8"
+        assert history.meta["schema_version"] == str(ccdrift.history.SCHEMA_VERSION) == "9"
         assert history.update(tmp_path / "logs") == 1
         assert history.hook_coverage()[["event", "calls", "hooked"]].values.tolist() == [
             ["PostToolUse", 1, 0], ["PreToolUse", 1, 1]]

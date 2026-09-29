@@ -213,11 +213,11 @@ def _sized(n: int) -> str:
     return PRIVATE_TEXT[:n].ljust(n, "x")
 
 
-def attachment(ts, record, sid="s1", version="2.1.267", sidechain=False, rendered=True):
+def attachment(ts, record, sid="s1", version="2.1.267", sidechain=False, rendered=True, entrypoint="cli"):
     """One attachment record as Claude Code writes it before a session's first response,
     wrapping `record`, one of the builders below. From 2.1.263 most of them also carry the
     text Claude Code put in the prompt, as `rendered`."""
-    rec = {"type": "attachment", "timestamp": ts, "sessionId": sid, "isSidechain": sidechain, "entrypoint": "cli",
+    rec = {"type": "attachment", "timestamp": ts, "sessionId": sid, "isSidechain": sidechain, "entrypoint": entrypoint,
            "version": version, "cwd": PRIVATE_PATH, "gitBranch": "main", "userType": "external",
            "parentUuid": None, "uuid": f"att-{sid}-{ts}-{record['type']}", "attachment": record}
     if rendered:
