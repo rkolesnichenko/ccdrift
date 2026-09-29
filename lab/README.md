@@ -63,6 +63,10 @@ uv run --group lab python -m lab.hook_coverage
 # 2026-09-10, without false alarms? Reads the transcripts; judges the setting ccdrift ships
 uv run --group lab python -m lab.thinking
 
+# G17: does the daily detector catch subagent tool loops that stop reading back their
+# cache, without false alarms? Reads the transcripts; judges the cutoff ccdrift ships
+uv run --group lab python -m lab.subagent_cache
+
 # What the attachment arrival rule reports on your logs, for a grid of share cutoffs and
 # minimum session counts; a census, so no PASS or FAIL
 uv run --group lab python -m lab.attachments
@@ -73,5 +77,5 @@ Each gate's last line is its verdict on the setting ccdrift ships (`G3: PASS h=4
 while the shipped one fails reads as the failure it is.
 
 `--help` lists every option, including `--main-thread-only`, `--since`, `--until` and
-the detector settings, and for `lab.failures`, `lab.context`, `lab.components` and `lab.hook_coverage`, `--today`, before which
+the detector settings, and for `lab.failures`, `lab.context`, `lab.components`, `lab.hook_coverage` and `lab.subagent_cache`, `--today`, before which
 the days read count as complete (default: today).
