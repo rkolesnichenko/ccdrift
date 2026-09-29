@@ -119,6 +119,7 @@ set this in `~/.claude/settings.json`:
 | **ccdrift: thinking rose** | A model on the main thread thought at least twice its usual number of thinking tokens per response on a day, against the median of its last 14 days with 50 or more responses that logged a count. It names the model, the level against the usual one, the Claude Code version and the extra thinking tokens so far; once per rise, which becomes the usual level if it lasts. A usual level under 100 tokens per response isn't judged. | If you didn't raise the effort level, a Claude Code update may have. `ccdrift report --by version` compares versions. |
 | **ccdrift: Claude Code stopped logging a field** | A new Claude Code version logs a field ccdrift reads on under 10% of responses. | `ccdrift peek` shows what it reads. Please open an issue. |
 | **ccdrift: Claude Code logs a field ccdrift doesn't read** | A Claude Code version first seen in the last 2 weeks carries a field on 90% or more of its responses that under 10% of the responses in the 2 weeks before it carried. It goes to the log, the weekly summary and `ccdrift status`, never a notification: a field arriving breaks nothing. | Nothing. Please open an issue if ccdrift should read it. |
+| **ccdrift: Claude Code writes an attachment ccdrift doesn't read** | A Claude Code version first seen in the last 2 weeks writes an attachment record of a kind on 90% or more of its sessions (CLI and Agent SDK sessions judged apart, 5 or more of them) that under 10% of the sessions in the 2 weeks before it held. It goes to the log, the weekly summary and `ccdrift status`, never a notification: a new kind of record breaks nothing. | Nothing. Please open an issue if ccdrift should read it. |
 | **ccdrift can't compute the cache metric** | 3 busy days had no response with cache token counts, or no prompt ccdrift recognised. Claude Code's log format has most likely changed. | `ccdrift peek` shows the first response ccdrift finds and the fields it reads from it, with text, ids and paths shown only as their length, and each content block as its type and the size of the rest. Please open an issue with what it prints. |
 | **ccdrift couldn't read a transcript** | The parser failed on a transcript, so its responses are missing from every check until it reads them. It is tried again on each run. None ever has in the owner's logs. | The check's log names the transcript and the error. Please open an issue with the error, not the transcript. |
 | **ccdrift found transcripts without responses** | A transcript of 40 lines or more held no response ccdrift recognises, so its days read as days you didn't use Claude Code. Claude Code's log format has most likely changed. Of 2,389 transcripts in the owner's logs, none that long did. | As for the cache metric: `ccdrift peek`, and an issue with what it prints. |
@@ -379,6 +380,12 @@ reported once. The setting was measured in [lab/thinking.py](https://github.com/
 For each Claude Code version first seen in the last 2 weeks with 50 or more
 responses, a field logged on at least 90% of the responses in the 2 weeks before it
 and on under 10% of the new version's is reported.
+
+Attachment records are counted per session, main thread only, CLI and Agent SDK sessions
+apart: for each Claude Code version first seen in the last 2 weeks with 5 or more
+sessions, a kind of attachment ccdrift doesn't read that is on at least 90% of them, and
+on under 10% of the 10 or more sessions in the 2 weeks before it, is reported once. Kinds
+that follow what you do, like plan mode or a hook that blocked, stay under that bar.
 
 Claude Code records a reason on a response whose prompt did not match what it had
 cached. ccdrift counts those reasons in `ccdrift report` and in `ccdrift incident
