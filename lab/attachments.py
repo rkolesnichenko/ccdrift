@@ -16,7 +16,7 @@ Run from the repo root:
 from __future__ import annotations
 
 import argparse
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -51,11 +51,20 @@ def _reports(records: list[dict[str, Any]]) -> str:
                      for r in records) or "nothing"
 
 
-def main(argv: list[str] | None = None) -> int:
+def utc_today() -> date:
+    """Today as the census counts days: in UTC, as the check does."""
+    return datetime.now(timezone.utc).date()
+
+
+def arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--source", type=Path, default=default_source())
-    parser.add_argument("--today", type=date.fromisoformat, default=date.today())
-    args = parser.parse_args(argv)
+    parser.add_argument("--today", type=date.fromisoformat, default=utc_today())
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = arguments(argv)
 
     census = parse_all(args.source).attachment_census
     census = census[census["day"].astype(str) < args.today.isoformat()]

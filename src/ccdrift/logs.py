@@ -841,7 +841,8 @@ def coverage_frame(rows) -> pd.DataFrame:
     for col in ("calls", "hooked"):
         df[col] = df[col].astype(int)
     df["is_sidechain"] = df["is_sidechain"].astype(bool)
-    return df.sort_values(["source_file", "day", "is_sidechain", "event", "tool"], kind="stable").reset_index(drop=True)
+    return df.sort_values(["source_file", "day", "is_sidechain", "event", "tool", "version", "entrypoint"],
+                          kind="stable").reset_index(drop=True)
 
 
 def coverage_rows(parsed: ParsedFile, rel: str) -> list[dict]:
@@ -877,7 +878,8 @@ def attachment_frame(rows) -> pd.DataFrame:
     df = pd.DataFrame(list(rows), columns=list(ATTACHMENT_COLUMNS))
     df["records"] = df["records"].astype(int)
     df["is_sidechain"] = df["is_sidechain"].astype(bool)
-    return df.sort_values(["source_file", "day", "is_sidechain", "type"], kind="stable").reset_index(drop=True)
+    return df.sort_values(["source_file", "day", "is_sidechain", "type", "version", "entrypoint"],
+                          kind="stable").reset_index(drop=True)
 
 
 def components_frame(rows) -> pd.DataFrame:
