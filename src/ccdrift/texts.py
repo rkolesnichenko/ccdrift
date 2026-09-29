@@ -1200,6 +1200,43 @@ def _cache_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
     return title, sections
 
 
+def _subagent_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
+    counts, periods, span, readbacks = facts["counts"], facts["periods"], version_span(facts["span"]), facts["readbacks"]
+    where = LOOP_WHERE["subagent"]
+    usually = f" (usually {_rate(*counts['before'])})" if counts["before"][1] else ""
+    title = (f"Tool-loop turns {where} miss the prompt cache {_rate(*counts['during'])} of the time"
+             + (f" on Claude Code {span}" if span else "") + usually)
+    beyond = (f"~{approx(facts['cost'])} tokens were written to the cache again" if facts["cost"] > 0
+              else "no tokens were written to the cache again")
+    sections = [
+        "### What happened\n\n"
+        f"{_lead(facts['incident'], periods)}, {counts['during'][0]:,} of {counts['during'][1]:,} tool-loop turns "
+        f"{where} ({_rate(*counts['during'])}) missed the prompt cache{_compared(counts, periods)}, and they read back "
+        f"{readbacks['during']:.4f} of what the turn before had cached on average. ccdrift estimates {beyond} beyond "
+        "the usual miss rate.",
+        "### Before, during and after\n\n" + BASELINE_NOTE
+        + _markdown_table(
+            ["", "Days", "Tool-loop turns", "Misses", "Miss rate", "Read-back"],
+            [[f"{name.capitalize()} ({_day_span(periods[name])})", len(periods[name]), f"{counts[name][1]:,}",
+              f"{counts[name][0]:,}", _rate(*counts[name]),
+              "-" if readbacks[name] is None else f"{readbacks[name]:.4f}"]
+             for name in periods if periods[name]]),
+    ]
+    versions = _version_table(facts["versions"], ["Turns", "Misses", "Miss rate"])
+    if versions:
+        sections.append("### By Claude Code version\n\n" + versions)
+    missed = facts["missed"]
+    if missed:
+        read, wrote = missed["read"], missed["wrote"]
+        turns_text = f"{missed['turns']:,} missed turn{'' if missed['turns'] == 1 else 's'}"
+        sections.append(
+            "### What a missed turn looks like\n\n"
+            f"The {turns_text} during read a median {read[0]:,} tokens from the cache (middle half "
+            f"{read[1]:,}–{read[2]:,}) and wrote a median {wrote[0]:,} (middle half {wrote[1]:,}–{wrote[2]:,}), "
+            "where the turn before had left what they needed cached.")
+    return title, sections
+
+
 def _haiku_draft(facts: Mapping[str, Any]) -> tuple[str, list[str]]:
     counts, periods, span = facts["counts"], facts["periods"], version_span(facts["span"])
     usually = f" (usually {_rate(*counts['before'])})" if counts["before"][1] else ""
@@ -1448,15 +1485,21 @@ def _cut_method(method: Mapping[str, Any]) -> str:
 def _draft_method(method: Mapping[str, Any]) -> str:
     if method.get("kind") in ALERT_METHODS:
         return ALERT_METHODS[method["kind"]](method)
-    cache = method["metric"] == "cache_ratio"
+    down = MOVES[method["metric"]] == "down"
     rule = (f"an incident opens when {method['bins']} of {method['window']} days in a row fall "
-            f"{'below z = −' if cache else 'above z = +'}{method['cutoff']:.1f} and closes once "
+            f"{'below z = −' if down else 'above z = +'}{method['cutoff']:.1f} and closes once "
             f"{method['recovery']} pooled days are back inside the cutoff on {method['recovery']} days in a row, "
             f"or after {PERSISTENT_DAYS} days, when it takes the change as the new normal.")
-    if cache:
+    if method["metric"] == "cache_ratio":
         counted = ("It counts main-thread turns that open with a new prompt within an hour of the previous response, "
                    "outside Agent SDK sessions and not right after a compaction. A turn misses the cache when it "
                    "reads less than half of its input from it.")
+    elif method["metric"] == "subagent_cache":
+        counted = ("It counts tool-loop turns in subagents, outside Agent SDK sessions: responses that follow a tool "
+                   f"result within {method['gap'] // 60} minutes of the previous response, not right after a "
+                   "compaction, where the response before had left tokens cached. A day's value is the mean of what "
+                   "each reads back of what the turn before had cached, at most all of it; a turn misses when it "
+                   f"reads back less than {method['share']:.0%}.")
     else:
         counted = ("It counts main-thread responses outside Agent SDK sessions and the share answered by a Haiku "
                    "model.")
@@ -1468,8 +1511,9 @@ def _draft_method(method: Mapping[str, Any]) -> str:
             + rule)
 
 
-DRAFTS = {"cache_ratio": _cache_draft, "haiku_fraction": _haiku_draft, "context_changes": _start_draft,
-          "hook_changes": _hook_draft, "loop_warnings": _loop_draft, "cut_short": _cut_draft}
+DRAFTS = {"cache_ratio": _cache_draft, "haiku_fraction": _haiku_draft, "subagent_cache": _subagent_draft,
+          "context_changes": _start_draft, "hook_changes": _hook_draft, "loop_warnings": _loop_draft,
+          "cut_short": _cut_draft}
 ALERT_METHODS = {"context_changes": _start_method, "hook_changes": _hook_method, "loop_warnings": _loop_method,
                  "cut_short": _cut_method}
 
@@ -1524,11 +1568,15 @@ PAGE_LINES = {"title": "ccdrift report {date}",
               "heading": "ccdrift report, {date}",
               "rule": "The last {days} complete UTC days with main-thread activity. A metric is flagged once {bins} of "
                       "any {window} days in a row pass the cutoff: z ≤ −{cache:.1f} for the cache ratio, "
-                      "z ≥ +{haiku:.1f} for the Haiku share.",
+                      "z ≥ +{haiku:.1f} for the Haiku share, {subagent}.",
+              "subagent_rule": "z ≤ −{cutoff:.1f} for subagent read-back",
+              "subagent_unjudged": "subagent read-back isn’t judged",
               "cache_chart": "Cache read ratio per day",
               "cache_z": "Cache read ratio z",
               "haiku_chart": "Haiku share of main-thread responses per day",
               "haiku_z": "Haiku share z",
+              "subagent_chart": "What subagent tool loops read back of their cache per day",
+              "subagent_z": "Subagent read-back z",
               "strip": "{label} per day",
               # The page is the artefact meant to be sent on, and its reader can't ask what a mark means.
               "key": "A ring marks a day ccdrift flagged; a shaded column is a day inside a recorded incident for "

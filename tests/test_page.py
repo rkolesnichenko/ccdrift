@@ -5,7 +5,7 @@ from datetime import date
 import pandas as pd
 
 from ccdrift.detector import DetectorConfig
-from ccdrift.page import blocks, chart, escape, points, render, section, table, top, z_strip
+from ccdrift.page import blocks, bottom, chart, escape, points, render, section, table, top, z_strip
 from ccdrift.texts import DAY_TABLE, PAGE_LINES, settings_lines
 
 DAYS = ["2026-09-01", "2026-09-02", "2026-09-03"]
@@ -137,7 +137,7 @@ def test_the_page_holds_the_rule_both_charts_the_table_and_the_footer_and_no_scr
     assert page.startswith("<!DOCTYPE html>\n")
     assert "<script" not in page
     assert ("A metric is flagged once 3 of any 4 days in a row pass the cutoff: z ≤ −3.0 for the cache ratio, "
-            "z ≥ +3.5 for the Haiku share.") in page
+            "z ≥ +3.5 for the Haiku share, z ≤ −3.5 for subagent read-back.") in page
     # The page is sent on, so it says what its own marks mean.
     assert f'<p class="key">{PAGE_LINES["key"]}</p>' in page
     assert ("A ring marks a day ccdrift flagged; a shaded column is a day inside a recorded incident for "
@@ -145,8 +145,10 @@ def test_the_page_holds_the_rule_both_charts_the_table_and_the_footer_and_no_scr
             "Days with no main-thread activity are left out, so the line joins the days there are.") in page
     assert "<figcaption>Cache read ratio per day</figcaption>" in page
     assert "<figcaption>Haiku share of main-thread responses per day</figcaption>" in page
+    assert "<figcaption>What subagent tool loops read back of their cache per day</figcaption>" in page
     # Each strip names the metric it belongs to, for a reader who hears the page.
     assert 'aria-label="Cache read ratio z per day"' in page and 'aria-label="Haiku share z per day"' in page
+    assert 'aria-label="Subagent read-back z per day"' in page
     assert '<rect class="incident" x="405.0"' in page
     assert "<h2>Incidents</h2><pre>none yet</pre>" in page
     assert '<p class="note">Hooks over these days: 3 runs</p>' in page
@@ -186,6 +188,31 @@ def test_a_page_with_no_days_still_renders_its_sections():
     assert "The last 0 complete UTC days" in page
     assert "<figcaption>" not in page and "<table>" not in page
     assert "<h2>Incidents</h2>" in page
+
+
+def test_the_subagent_chart_rings_and_shades_its_own_days_on_a_scale_that_shows_a_small_drop():
+    page = render_of(rows_of([0.9] * 3, [0.0] * 3, readbacks=[1.0, 0.8, 1.0], subagent_zs=[0.0, -9.5, 0.0],
+                             flagged=["", "subagent cache", ""]), incident_days={"subagent_cache": ["2026-09-02"]})
+    haiku, subagent = page.split("<figcaption>What subagent tool loops")
+    assert '<circle class="flagged"' not in haiku and '<rect class="incident"' not in haiku
+    assert '<rect class="incident" x="405.0" y="12" width="6" height="160" />' in subagent
+    assert '<circle class="flagged" cx="408.0" cy="140.0" r="3.5" />' in subagent
+    assert '<text class="tick" x="42" y="176" text-anchor="end">0.75</text>' in subagent
+
+
+def test_a_page_whose_config_does_not_judge_subagent_read_back_draws_no_chart_of_it():
+    page = render(rows_of([0.9] * 3, [0.0] * 3), entries=[], reported={}, summary=[], extra=[],
+                  cfg=DetectorConfig(metric_z_thresholds={"cache_ratio": 3.0}), version="0.9.0",
+                  today=date(2026, 9, 18), source="/logs")
+    assert "z ≥ +3.5 for the Haiku share, subagent read-back isn’t judged." in page
+    assert "What subagent tool loops" not in page and "Subagent read-back z" not in page
+
+
+def test_a_read_back_chart_starts_below_its_lowest_day_and_never_above_the_ceiling():
+    assert bottom([1.0, 1.0], 0.99) == 0.99       # a usual day doesn't sit on the axis
+    assert bottom([0.999, 0.9962], 0.99) == 0.99
+    assert bottom([1.0, 0.8], 0.99) == 0.75       # a quarter of the drop again below it, to a hundredth
+    assert bottom([], 0.99) == 0.99
 
 
 def test_a_share_chart_scales_to_its_own_range_so_a_small_rise_is_still_visible():

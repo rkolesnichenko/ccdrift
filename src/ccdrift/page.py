@@ -73,6 +73,15 @@ def _path(run: Sequence[tuple[float, float]]) -> str:
     return " ".join(f"{x},{y}" for x, y in run)
 
 
+def bottom(values: Sequence[Any], ceiling: float) -> float:
+    """The bottom of a chart whose values sit just under 1, as read-back does: the lowest
+    day with room below it, never above `ceiling`, so a usual day doesn't sit on the axis
+    and a small drop is still visible. Rounded down to a hundredth."""
+    seen = [float(value) for value in values if not _missing(value)]
+    low = min(seen, default=1.0)
+    return min(ceiling, math.floor((low - (1 - low) * 0.25) * 100) / 100)
+
+
 def top(values: Sequence[Any], floor: float) -> float:
     """The top of a chart whose values sit well below 1: the largest day with room above
     it, never less than `floor`, so a share that never leaves the floor still reads as a
@@ -267,6 +276,9 @@ def render(rows: pd.DataFrame, entries: Sequence[tuple[dict, float]], reported: 
     shaded = incident_days or {}
     cache_cutoff = cfg.metric_z_thresholds.get("cache_ratio", cfg.z_threshold)
     haiku_cutoff = cfg.metric_z_thresholds.get("haiku_fraction", cfg.z_threshold)
+    subagent_cutoff = cfg.metric_z_thresholds.get("subagent_cache") if cfg.judges("subagent_cache") else None
+    subagent = (PAGE_LINES["subagent_unjudged"] if subagent_cutoff is None
+                else PAGE_LINES["subagent_rule"].format(cutoff=subagent_cutoff))
     parts = [
         "<!DOCTYPE html>", '<html lang="en"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
@@ -274,7 +286,8 @@ def render(rows: pd.DataFrame, entries: Sequence[tuple[dict, float]], reported: 
         "</head><body>",
         f"<h1>{PAGE_LINES['heading'].format(date=escape(today.isoformat()))}</h1>",
         '<p class="rule">' + PAGE_LINES["rule"].format(days=len(days), bins=cfg.deviant_bins, window=cfg.flag_window,
-                                                       cache=cache_cutoff, haiku=haiku_cutoff) + "</p>",
+                                                       cache=cache_cutoff, haiku=haiku_cutoff,
+                                                       subagent=subagent) + "</p>",
     ]
     if days:
         parts.append(chart(days, [row.cache_ratio for row in rows.itertuples(index=False)],
@@ -289,6 +302,13 @@ def render(rows: pd.DataFrame, entries: Sequence[tuple[dict, float]], reported: 
                            shaded=shaded.get("haiku_fraction", ()), fmt=".2f"))
         parts.append(z_strip(days, [row.haiku_z for row in rows.itertuples(index=False)],
                              haiku_cutoff, above=True, label=PAGE_LINES["haiku_z"]))
+        if subagent_cutoff is not None:
+            readbacks = [row.subagent_readback for row in rows.itertuples(index=False)]
+            parts.append(chart(days, readbacks, title=PAGE_LINES["subagent_chart"], low=bottom(readbacks, 0.99),
+                               high=1.0, marked=flagged_on(rows, "subagent_cache"),
+                               shaded=shaded.get("subagent_cache", ()), fmt=".2f"))
+            parts.append(z_strip(days, [row.subagent_z for row in rows.itertuples(index=False)],
+                                 -subagent_cutoff, above=False, label=PAGE_LINES["subagent_z"]))
         parts.append(f'<p class="key">{escape(PAGE_LINES["key"])}</p>')
         parts.append(table(rows))
     incidents = [incident_line(incident, cost) for incident, cost in entries]
