@@ -19,9 +19,10 @@ import pandas as pd
 from ccdrift.fields import GONE, USUAL as ARRIVED
 from ccdrift.logs import READ_ATTACHMENTS
 
-# The owner's transcripts on 2026-09-28, judged per version: every ARRIVED from 0.5 to 0.9
-# reports the same 2 arrivals, 5 types (2.1.267 and 2.1.269, SDK sessions); requiring 10
-# sessions on the version moves the second to 2.1.273, its first version with that many.
+# The owner's transcripts on 2026-09-29 (`python -m lab.attachments`), judged per version and
+# entrypoint: every ARRIVED from 0.5 to 0.9 reports the same 3 arrivals, 6 types (2.1.234,
+# 2.1.267 and 2.1.269, SDK sessions); requiring 10 sessions moves the last to 2.1.272, and
+# requiring 3 lets three-session CLI versions through.
 MIN_TRANSCRIPTS = 5     # main-thread sessions on the new version, for it to be judged
 MIN_BEFORE = 10         # sessions of the same entrypoint in the BEFORE_DAYS before it
 BEFORE_DAYS = 14
