@@ -18,7 +18,7 @@ from tests.helpers import (DAY, agent_listing, api_error, at, attachment, compac
 # The version, and a digest of parse_file on the transcripts below at that version. When a
 # parser change moves the digest, bump PARSER_VERSION and extend its numbered comment
 # (history.py), then put both new values here.
-PINNED = (11, "b5a606f341910c0f42f9263e148c41764257e6b8a5733eda426f222ac6c4fbab")
+PINNED = (12, "aa6fc59e0e25c703137503aa974b0b0b6d226a8fe87b9984752eaacffd47f07a")
 
 
 def plain(value):

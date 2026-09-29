@@ -342,6 +342,12 @@ HOOK_EVENTS = ("PreToolUse", "PostToolUse")
 HOOK_RAN = frozenset({"hook_success", "hook_non_blocking_error", "hook_blocking_error"})
 COVERAGE_COLUMNS = ("source_file", "session_id", "day", "version", "entrypoint", "is_sidechain", "event", "tool",
                     "calls", "hooked")
+# The attachment census: each attachment type a transcript holds, with how many records of it,
+# per day, version, entrypoint and thread. Type names only, never an attachment's content.
+ATTACHMENT_COLUMNS = ("source_file", "session_id", "day", "version", "entrypoint", "is_sidechain", "type", "records")
+# The attachment types ccdrift already reads: those read_attachment folds into what a session
+# started with, and the hook runs read_hook matches to tool calls.
+READ_ATTACHMENTS = frozenset({"skill_listing", "instructions", "prompt_snapshot", *COMPONENT_DELTAS, *HOOK_RAN})
 
 
 def tool_uses(content: Any) -> list[tuple[str, str]]:
@@ -381,8 +387,10 @@ class ParsedFile:
     """One transcript's responses, turn durations, hook runs, compactions and per-model
     cost records by key, the transcript's first session id, line counts for --verbose,
     the key census (field_census, field_days) of its responses, and what its session
-    started with (components, one row), and hook coverage (hook_coverage: for each day,
-    version, entrypoint, thread, hook event and tool, [tool calls, calls a hook ran on])."""
+    started with (components, one row), hook coverage (hook_coverage: for each day,
+    version, entrypoint, thread, hook event and tool, [tool calls, calls a hook ran on]), and
+    the attachment census (attachment_census: for each day, version, entrypoint, thread and
+    attachment type, how many records of it)."""
     responses: dict[str, dict] = field(default_factory=dict)
     durations: dict[str, dict] = field(default_factory=dict)
     hook_runs: dict[str, dict] = field(default_factory=dict)
@@ -393,6 +401,7 @@ class ParsedFile:
     model_usage: dict[str, dict] = field(default_factory=dict)
     components: dict = field(default_factory=dict)
     hook_coverage: dict[tuple, list[int]] = field(default_factory=dict)
+    attachment_census: dict[tuple, int] = field(default_factory=dict)
     session_id: Optional[str] = None
     lines: int = 0
     bad_json: int = 0
@@ -504,6 +513,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                 parsed.session_id = _text(field_get(obj, "session_id"))
             role = field_get(obj, "role")
             if role == "attachment":
+                count_attachment(parsed.attachment_census, obj)
                 read_hook(hooked, obj)
                 if not field_get(obj, "is_sidechain", default=False):
                     read_attachment(parsed.components, obj, main_thread_seen)
@@ -842,6 +852,34 @@ def coverage_rows(parsed: ParsedFile, rel: str) -> list[dict]:
             for (day, version, entrypoint, sidechain, event, tool), (calls, hooked) in parsed.hook_coverage.items()]
 
 
+def count_attachment(census: dict[tuple, int], obj: dict) -> None:
+    """Count one attachment record in a transcript's census under its UTC day, version,
+    entrypoint, thread and type; one without a type or a time is left out."""
+    kind, when = _text(field_get(obj, "attachment_type")), parse_ts(field_get(obj, "timestamp"))
+    if kind is None or when is None:
+        return
+    key = (when.astimezone(timezone.utc).date().isoformat(), _text(field_get(obj, "version")),
+           _text(field_get(obj, "entrypoint")), bool(field_get(obj, "is_sidechain", default=False)), kind)
+    census[key] = census.get(key, 0) + 1
+
+
+def attachment_rows(parsed: ParsedFile, rel: str) -> list[dict]:
+    """A parsed transcript's attachment census as rows for attachment_frame."""
+    session = parsed.session_id or Path(rel).stem
+    return [{"source_file": rel, "session_id": session, "day": day, "version": version, "entrypoint": entrypoint,
+             "is_sidechain": bool(sidechain), "type": kind, "records": records}
+            for (day, version, entrypoint, sidechain, kind), records in parsed.attachment_census.items()]
+
+
+def attachment_frame(rows) -> pd.DataFrame:
+    """The attachment census, one row per transcript, day, version, entrypoint, thread and
+    type, sorted."""
+    df = pd.DataFrame(list(rows), columns=list(ATTACHMENT_COLUMNS))
+    df["records"] = df["records"].astype(int)
+    df["is_sidechain"] = df["is_sidechain"].astype(bool)
+    return df.sort_values(["source_file", "day", "is_sidechain", "type"], kind="stable").reset_index(drop=True)
+
+
 def components_frame(rows) -> pd.DataFrame:
     """What each session started with, one row per transcript, sorted by its path. A size
     Claude Code didn't log is NaN, not 0."""
@@ -857,7 +895,8 @@ def components_frame(rows) -> pd.DataFrame:
 class Tables:
     """Everything ccdrift reads from transcripts, one table per record kind, plus the
     key census (field_census), per-model usage and cost (model_usage) and what each
-    session started with (components) and hook coverage (hook_coverage)."""
+    session started with (components), hook coverage (hook_coverage) and the attachment
+    census (attachment_census)."""
     responses: pd.DataFrame
     durations: pd.DataFrame
     hook_runs: pd.DataFrame
@@ -867,6 +906,7 @@ class Tables:
     model_usage: pd.DataFrame = field(default_factory=pd.DataFrame)
     components: pd.DataFrame = field(default_factory=pd.DataFrame)
     hook_coverage: pd.DataFrame = field(default_factory=pd.DataFrame)
+    attachment_census: pd.DataFrame = field(default_factory=pd.DataFrame)
     # Transcripts read this time that the parser failed on, with the exception's type,
     # and those that hold no response (see holds_no_response), with their line count.
     skipped: list[tuple[str, str]] = field(default_factory=list)
@@ -892,7 +932,7 @@ def parse_all(source: Path) -> Tables:
     kinds = {"responses": {}, "durations": {}, "hook_runs": {}, "compactions": {}, "failures": {}, "model_usage": {}}
     census: dict[tuple[str, str, str], int] = {}
     days: dict[tuple[str, str], int] = {}
-    components, coverage = [], []
+    components, coverage, attachments = [], [], []
     no_responses: list[tuple[str, int]] = []
     for fp, rel in jsonl_files(source):
         try:
@@ -913,13 +953,14 @@ def parse_all(source: Path) -> Tables:
             days[day_key] = days.get(day_key, 0) + count
         components.append(parsed.components)
         coverage += coverage_rows(parsed, rel)
+        attachments += attachment_rows(parsed, rel)
     return Tables(frame(list(kinds["responses"].values())), duration_frame(list(kinds["durations"].values())),
                   hook_frame(list(kinds["hook_runs"].values())),
                   compaction_frame(list(kinds["compactions"].values())),
                   failure_frame(list(kinds["failures"].values())),
                   census_frame(census, days),
                   usage_frame(list(kinds["model_usage"].values())), components_frame(components),
-                  coverage_frame(coverage), no_responses=no_responses)
+                  coverage_frame(coverage), attachment_frame(attachments), no_responses=no_responses)
 
 
 def parse_durations(source: Path) -> pd.DataFrame:

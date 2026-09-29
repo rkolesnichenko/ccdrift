@@ -944,6 +944,35 @@ def test_an_incident_dismissed_while_the_check_runs_stays_dismissed(tmp_path, se
     assert (saved["incidents"][0]["status"], saved["last_run"]["ok"]) == ("dismissed", True)
 
 
+def an_attachment_history(tmp_path):
+    """Ten Agent SDK sessions on one version, then six on a version that writes a `date`
+    attachment on each: an attachment type Claude Code started writing."""
+    source, state_path = tmp_path / "logs", tmp_path / "state.json"
+    save_state(state_path, new_state())
+    for d in range(16):
+        version = "2.1.266" if d < 10 else "2.1.267"
+        kinds = [{"type": "date_change"}] + ([{"type": "date", "date": "2026-09-11"}] if d >= 10 else [])
+        write(source / "p" / f"s{d}.jsonl",
+              [prompt(at(d * DAY), sid=f"s{d}"),
+               line(f"m{d}", text(20), ts=at(d * DAY + 1), sid=f"s{d}", version=version, entrypoint="sdk-py"),
+               *(attachment(at(d * DAY + 2), kind, sid=f"s{d}", version=version, entrypoint="sdk-py") for kind in kinds)])
+    return source, state_path
+
+
+def test_an_attachment_type_claude_code_has_started_writing_goes_to_the_log_once_and_nowhere_else(tmp_path, capsys,
+                                                                                                  sent):
+    source, state_path = an_attachment_history(tmp_path)
+    kinds = tmp_path / "kinds.txt"
+    run_check(source, state_path, notify_user=True, today=date(2026, 9, 17), exec_command=f'echo "$CCDRIFT_ALERT" >> "{kinds}"')
+    assert ("ccdrift: Claude Code writes an attachment ccdrift doesn't read: Claude Code 2.1.267 writes 1 attachment "
+            "type ccdrift doesn't read on its sdk-py sessions: date (on 100% of 6 sessions).") in capsys.readouterr().out
+    assert not any("attachment" in title for title in sent)
+    assert "new_attachments" not in (kinds.read_text() if kinds.exists() else "")
+    assert load_state(state_path)["new_attachments"][0]["types"] == ["date"]
+    run_check(source, state_path, today=date(2026, 9, 18))
+    assert "attachment ccdrift doesn't read" not in capsys.readouterr().out
+
+
 def a_new_field_history(tmp_path):
     """14 days on one version, then 2 on a version that carries a field ccdrift
     doesn't read."""

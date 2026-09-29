@@ -66,6 +66,8 @@ def week_summary(turns: pd.DataFrame, state: dict[str, Any], week_start: date,
     summary["setting_changes"] = sum(1 for c in state["settings"] if c["reported_on"] in days)
     summary["new_fields"] = sum(len(record["paths"]) for record in state.get("new_fields", [])
                                 if record["reported_on"] in days)
+    summary["new_attachments"] = sum(len(record["types"]) for record in state.get("new_attachments", [])
+                                     if record["reported_on"] in days)
     summary["ran"] = len(set(state.get("runs", [])) & set(days))
     # What `ccdrift cost` withholds as of this run, not over the week: it is a gap in
     # ccdrift's own output, and the latest check knows it best.

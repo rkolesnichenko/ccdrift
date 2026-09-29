@@ -196,6 +196,14 @@ def test_status_lists_a_new_field_under_other_changes():
     assert "1 new field on 2.1.276: advisorModel" in status_report(state, datetime(2026, 9, 20, 10, 0))
 
 
+def test_status_lists_a_new_attachment_type_under_other_changes():
+    state = new_state()
+    state["last_run"] = {"started": "2026-09-19T10:00:00", "ok": True, "error": None}
+    state["new_attachments"].append({"types": ["credential_org"], "version": "2.1.281", "entrypoint": "cli",
+                                     "share": 1.0, "transcripts": 6, "reported_on": "2026-09-19"})
+    assert "1 new attachment type on 2.1.281 (cli): credential_org" in status_report(state, datetime(2026, 9, 20, 10, 0))
+
+
 def test_status_before_the_first_check_says_how_to_set_it_up(tmp_path, capsys):
     assert run_status(tmp_path / "state.json", now=NOW) == 0
     assert capsys.readouterr().out == "The check hasn't run yet. `ccdrift schedule install` sets it up.\n"

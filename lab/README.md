@@ -60,8 +60,12 @@ uv run --group lab python -m lab.components --with-sdk
 uv run --group lab python -m lab.hook_coverage
 
 # G16: does a rule on thinking tokens per response catch a rise, planted or the real one of
-# 2026-09-10, without false alarms? Reads the transcripts; no alert ships on it yet
+# 2026-09-10, without false alarms? Reads the transcripts; judges the setting ccdrift ships
 uv run --group lab python -m lab.thinking
+
+# What the attachment arrival rule reports on your logs, for a grid of share cutoffs and
+# minimum session counts; a census, so no PASS or FAIL
+uv run --group lab python -m lab.attachments
 ```
 
 Each gate's last line is its verdict on the setting ccdrift ships (`G3: PASS h=4`, or

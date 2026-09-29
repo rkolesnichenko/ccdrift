@@ -17,7 +17,7 @@ from ccdrift.state import load_state, new_state, record_run, save_state, state_l
 def test_a_missing_state_file_reads_as_a_fresh_state(tmp_path):
     assert load_state(tmp_path / "state.json") == {
         "version": 2, "incidents": [], "settings": [], "blank_cache": [], "reported": {},
-        "field_gaps": [], "new_fields": [], "hook_failures": [], "context_changes": [], "early_warnings": [],
+        "field_gaps": [], "new_fields": [], "new_attachments": [], "hook_failures": [], "context_changes": [], "early_warnings": [],
         "loop_warnings": [], "failed_requests": [], "cut_short": [], "hook_changes": [], "unreadable": [],
         "no_responses": [], "thinking_rises": [], "withheld": None, "context_rule": 2,
         "runs": []}
@@ -29,7 +29,7 @@ def test_a_version_1_state_file_keeps_what_it_reported(tmp_path):
     assert load_state(tmp_path / "state.json") == {
         "version": 2, "incidents": [], "settings": [], "blank_cache": ["2026-09-01"],
         "reported": {"cache_ratio": ["2026-08-18"]},
-        "field_gaps": [], "new_fields": [], "hook_failures": [], "context_changes": [], "early_warnings": [],
+        "field_gaps": [], "new_fields": [], "new_attachments": [], "hook_failures": [], "context_changes": [], "early_warnings": [],
         "loop_warnings": [], "failed_requests": [], "cut_short": [], "hook_changes": [], "unreadable": [],
         "no_responses": [], "thinking_rises": [], "withheld": None, "context_rule": 1,
         "runs": []}
