@@ -188,8 +188,9 @@ def test_report_counts_tool_loop_misses_by_day_and_version(tmp_path, capsys):
         "                   -      -",
         "2026-09-02          5            -      -        0.000      -          1/4                -"
         "                   -      -",
+        # Two subagent loop turns are too few to judge the day's read-back on (MIN_BIN_TURNS).
         "2026-09-03          5            -      -        0.000      -          0/4              1/2"
-        "              0.5000      -",
+        "                   -      -",
     ]
     run_report(tmp_path / "logs", tmp_path / "state.json", by="version", today=date(2026, 9, 4))
     lines = capsys.readouterr().out.splitlines()

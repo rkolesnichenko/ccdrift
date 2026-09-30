@@ -76,10 +76,11 @@ def _path(run: Sequence[tuple[float, float]]) -> str:
 def bottom(values: Sequence[Any], ceiling: float) -> float:
     """The bottom of a chart whose values sit just under 1, as read-back does: the lowest
     day with room below it, never above `ceiling`, so a usual day doesn't sit on the axis
-    and a small drop is still visible. Rounded down to a hundredth."""
+    and a small drop is still visible. Rounded down to a hundredth, and never below 0, the
+    least a read-back can be."""
     seen = [float(value) for value in values if not _missing(value)]
     low = min(seen, default=1.0)
-    return min(ceiling, math.floor((low - (1 - low) * 0.25) * 100) / 100)
+    return max(0.0, min(ceiling, math.floor((low - (1 - low) * 0.25) * 100) / 100))
 
 
 def top(values: Sequence[Any], floor: float) -> float:

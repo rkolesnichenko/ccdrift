@@ -37,10 +37,21 @@ SUBAGENT_METRICS = {
     "subagent_cache": ("loop_readback", "mean", "down"),
 }
 
+# The fewest turns a bin needs for a metric to be judged on it; bin_metrics leaves out a bin
+# with fewer, so it takes no place in a flag window either. G17 measured subagent_cache's on
+# 2026-09-30 over 37 days of subagent tool loops: one more ordinary miss moved the z of a
+# judged day by up to 6.46 with no minimum (a 21-turn day), 2.39 at 100 and 1.80 at 200 (a
+# 231-turn day), past half the 3.5 cutoff; at 300 by at most 0.92, leaving 5 days unjudged
+# (21 to 231 loop turns). Kept as an empty bin, a light day inside a regression's first days
+# took a place in the flag window: a planted 2% was caught in 45 of 50 runs, against 50 left out.
+MIN_BIN_TURNS = {"subagent_cache": 300}
 
-def bin_metrics(df: pd.DataFrame, by: str = "day", metrics: Mapping[str, tuple[str, str, str]] = METRICS) -> pd.DataFrame:
+
+def bin_metrics(df: pd.DataFrame, by: str = "day", metrics: Mapping[str, tuple[str, str, str]] = METRICS,
+                min_turns: Mapping[str, int] = MIN_BIN_TURNS) -> pd.DataFrame:
     """Each bin's `metrics` over `df`: the main-thread METRICS by default, or
-    SUBAGENT_METRICS over subagent loop turns."""
+    SUBAGENT_METRICS over subagent loop turns, leaving out a bin with fewer turns than
+    `min_turns` asks of one of them."""
     if df.empty:
         return pd.DataFrame()
     key = "day" if by == "day" else "session_id"
@@ -54,7 +65,11 @@ def bin_metrics(df: pd.DataFrame, by: str = "day", metrics: Mapping[str, tuple[s
         out[f"{name}__n"] = out["bin"].map(g[col].count()).astype(int)
         out[f"{name}__var"] = out["bin"].map(g[col].var()).fillna(0.0).astype(float)
     out["n_turns"] = out["bin"].map(g.size()).astype(int)
-    return out
+    short = np.zeros(len(out), dtype=bool)
+    for name in metrics:
+        if name in min_turns:
+            short |= (out[f"{name}__n"] < min_turns[name]).to_numpy()
+    return out[~short].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------

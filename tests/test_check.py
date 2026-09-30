@@ -235,7 +235,7 @@ def test_the_check_alerts_on_a_subagent_cache_incident_and_the_status_line_shows
     assert check_logs(tmp_path, today=date(2026, 9, 20)) == 0
     assert sent == ["ccdrift flag"]
     assert ("ccdrift flag: Cache read-back in subagent tool loops down from 2026-09-17, on Claude Code 2.1.300 "
-            "(since 09-17). ~600k tokens re-cached in subagents so far.") in capsys.readouterr().out
+            "(since 09-17). ~1.8M tokens re-cached in subagents so far.") in capsys.readouterr().out
     now = datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc)
     assert short_status(tmp_path / "state.json", now) == "ccdrift: subagent cache down since 09-17"
 

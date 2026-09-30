@@ -213,6 +213,8 @@ def test_a_read_back_chart_starts_below_its_lowest_day_and_never_above_the_ceili
     assert bottom([0.999, 0.9962], 0.99) == 0.99
     assert bottom([1.0, 0.8], 0.99) == 0.75       # a quarter of the drop again below it, to a hundredth
     assert bottom([], 0.99) == 0.99
+    assert bottom([0.1, 1.0], 0.99) == 0.0       # a read-back near 0 draws its axis from 0, never below it
+    assert bottom([0.0], 0.99) == 0.0
 
 
 def test_a_share_chart_scales_to_its_own_range_so_a_small_rise_is_still_visible():
