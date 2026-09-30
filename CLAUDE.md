@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-- Tests: `uv run --group dev --group lab pytest` (1201 tests, ~75s). `testpaths = ["tests", "lab"]`, so a bare `pytest` runs both suites.
+- Tests: `uv run --group dev --group lab pytest` (1201 tests, ~80s). `testpaths = ["tests", "lab"]`, so a bare `pytest` runs both suites.
 - Single test: `uv run --group dev --group lab pytest tests/test_check.py::test_name`, or `-k <substring>`. No install step is needed; `pythonpath = [".", "src"]` is set in pyproject.toml.
 - The `lab` group is required even when running only `tests/`: lab collection imports matplotlib.
 - Build: `uv build`. There is no lint, format or type-check step, by design (see Style).
@@ -40,13 +40,14 @@ Each of these fails silently when ignored.
 - tests/conftest.py has one autouse fixture pointing `CCDRIFT_HOME` at a tmp dir, so no test touches the real `~/.ccdrift`.
 - Build log fixtures through `tests.helpers.line()`, which writes JSONL exactly as Claude Code does: one content block per line, usage repeated per line, fields omitted when None to mimic older versions. Both suites import from `tests.helpers`. Do not hand-roll transcript JSON.
 - Tests pin behavior at frozen dates (`helpers.T0`).
+- Mutation-check every new or changed test: delete the rule it pins, then force it always-on, and confirm the test fails both ways. A mutation expected to survive is named in advance, with the reason.
 - Scheduler changes are exercised for real in CI on Linux (install, status, remove round trip), so schedule.py can fail CI even when the unit tests pass. launchd never runs for real in CI.
 - CI's `floors` job runs the suite on the lowest pandas and numpy that pyproject.toml allows, on Python 3.10 (pandas 2.2.0, numpy 1.23.0 on 2026-09-27), so a feature newer than a floor fails there; raise the floor rather than skip the test. 3.11 and 3.12 run on Ubuntu only.
 - CI allows only GitHub-owned actions plus `astral-sh/setup-uv` and `astral-sh/attest-action`, each pinned by full SHA. A new action needs both a SHA pin and an allowlist entry in the repository's Actions settings, or the run fails before its first step. Dependabot moves the pins weekly. The release build's uv and hatchling are pinned the same way, through uv.lock's `release` dependency group: tests.yml and release.yml install the locked uv, and `uv build` takes hatchling at the lock's hashes.
 
 ## Release
 
-Tag-triggered Trusted Publishing over OIDC, no secrets.
+Tag-triggered Trusted Publishing over OIDC, no secrets. The full checklist is .claude/skills/release/SKILL.md (`/release <version>`, user-invoked only): read it when releasing without the command; it adds the preflight and the check that a fresh install reports the new version.
 
 First check that anything ships: `git diff --stat v<previous>..HEAD -- src tests lab docs/findings.md README.md LICENSE pyproject.toml`, those paths being `only-include` in pyproject.toml, so change one and change the other. An empty result means the distributions would differ from the last by the version string alone, and a PyPI version can never be reused. Work on `.claude/`, `.github/` and this file never reaches the package and is finished once it is on `main`.
 
