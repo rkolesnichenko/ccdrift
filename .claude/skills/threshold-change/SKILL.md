@@ -7,21 +7,14 @@ Every shipped cutoff is a measurement, not a preference. The rule is: re-run the
 
 ## 1. Find the gate that backs it
 
-docs/findings.md records one entry per numbered gate (G2, G3, G7-G15) and names the sweep behind it. Match the constant to its gate before touching anything. The sweeps live in lab/: `lab/harness.py`, `lab/early_warning.py`, `lab/loop_cache.py`, `lab/subagent_models.py`, `lab/failures.py`, `lab/context.py`, `lab/session_start.py`, `lab/components.py`, `lab/hook_coverage.py`. G13 has no gate test; `lab.failures` runs it.
+docs/findings.md records one entry per numbered gate and names the sweep behind it. Match the constant to its gate before touching anything. lab/README.md lists every gate with the command that runs it. G13 has no gate test; `lab.failures` runs it.
 
 ## 2. Re-run the sweep
 
-Run the matching sweep, not the whole harness, and keep the output aggregate. These read real transcripts:
+Run the matching sweep from lab/README.md, not the whole harness, and keep the output aggregate: it reads real transcripts. For example:
 
 ```
 uv run --group lab python -m lab.early_warning --incident 2026-08-16..2026-09-04
-uv run --group lab python -m lab.loop_cache --incident 2026-08-16..2026-09-04
-uv run --group lab python -m lab.subagent_models
-uv run --group lab python -m lab.failures
-uv run --group lab python -m lab.context
-uv run --group lab python -m lab.session_start
-uv run --group lab python -m lab.hook_coverage
-uv run --group lab python lab/harness.py --synthetic --out ./out
 ```
 
 Sweeps are seeded explicitly, so a re-run on the same corpus reproduces. If it does not, something broke determinism: a frame lost its `kind="stable"` sort, or a seed went missing. Fix that before reading the numbers.

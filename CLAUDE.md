@@ -11,8 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Style
 
-- Do not run a formatter. No ruff/black/mypy config exists and none is wanted. Lines sit around 120 chars with outliers to 142, so `ruff format` or `black` at defaults would rewrite the tree. Match the surrounding style by hand.
-- Annotate everything; `from __future__ import annotations` at the top of every substantive module. The existing `# type: ignore[...]` codes are documentation, not suppressions for a checker that runs.
+- Do not run a formatter. No ruff/black/mypy config exists and none is wanted. Lines sit around 120 chars with outliers to 145, so `ruff format` or `black` at defaults would rewrite the tree. Match the surrounding style by hand.
+- Annotate everything in src/ and lab/'s sweeps, with `from __future__ import annotations` at the top of every substantive module there; tests are not annotated. The existing `# type: ignore[...]` codes are documentation, not suppressions for a checker that runs.
 - Wrap multi-name imports in parens with continuations aligned under the opening paren, not 4-space indented.
 - No em dashes anywhere: prose, comments or docstrings. Use hyphens or en dashes.
 - A constant that came from a measurement carries a comment with that measurement (`metric_z_thresholds` in detector.py, `TOKENS_PER_SIGNATURE_CHAR` in logs.py, `CHECK_ACTIVE_RESPONSES` in check.py). Never add a bare magic number.
