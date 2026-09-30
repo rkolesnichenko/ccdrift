@@ -3,7 +3,7 @@ name: parser-change
 description: The checklist for changing how ccdrift reads Claude Code transcripts. Use whenever touching parse_file, the CANDIDATES dict, or any field extraction in src/ccdrift/logs.py, or when Claude Code has changed its log format and a new field variant needs absorbing.
 ---
 
-Transcript parsing has three coupled pieces. Changing one without the others fails silently: the store keeps stale rows and no test complains.
+Transcript parsing has three coupled pieces. Changing one without the others leaves the store with stale rows. tests/test_parser_version.py catches that only when the change moves `parse_file`'s output on its own fixture; a variant the fixture does not hold still fails silently.
 
 ## 1. Absorb drift in one place only
 
@@ -11,7 +11,7 @@ New or renamed fields go in the `CANDIDATES` dict in src/ccdrift/logs.py, as an 
 
 ## 2. Bump PARSER_VERSION
 
-If `parse_file`'s output changes at all, including a new candidate path, bump `PARSER_VERSION` in src/ccdrift/history.py and add a numbered line to the comment list above it saying what changed.
+If `parse_file`'s output changes at all, including a new candidate path, bump `PARSER_VERSION` in src/ccdrift/history.py and add a numbered line to the comment list above it saying what changed. Then put the new version and digest in `PINNED` in tests/test_parser_version.py; that test fails until both move.
 
 Why it matters: `History.update` compares the stored parser version and skips transcripts that look unchanged. Without the bump, every transcript already on disk keeps its old rows and the change appears to do nothing.
 
@@ -31,4 +31,4 @@ Then check the field-gap path specifically: a field that has never been logged b
 
 ## 5. Report
 
-Name the candidate paths added, the new `PARSER_VERSION`, and the numbered comment line you wrote.
+Name the candidate paths added, the new `PARSER_VERSION`, the numbered comment line you wrote, and the new `PINNED` pair.
