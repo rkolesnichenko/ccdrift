@@ -59,5 +59,5 @@ First check that anything ships: `git diff --stat v<previous>..HEAD -- src tests
 ## Layout
 
 - src/ccdrift/ is the shipped package: flat, no subpackages.
-- lab/ is the research harness, with its own numbered gate tests (G2, G3, G7-G12, G14-G16) matching the entries in docs/findings.md; G13 has no test and runs only through `python -m lab.failures`. It is not installed; run it from a clone, for example `uv run --group lab python lab/harness.py --synthetic --out ./out`. See lab/README.md for the full list.
+- lab/ is the research harness, with its own numbered gate tests matching the entries in docs/findings.md; G13 has no test and runs only through `python -m lab.failures`. It is not installed; run it from a clone, for example `uv run --group lab python lab/harness.py --synthetic --out ./out`. See lab/README.md for the full list.
 - Optional env vars, none required: `CCDRIFT_HOME` (default ~/.ccdrift), `CLAUDE_CONFIG_DIR` (default ~/.claude; transcripts are read from its projects/), `XDG_CONFIG_HOME` (systemd user unit dir).
