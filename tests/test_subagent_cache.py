@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from ccdrift.cli import main
-from ccdrift.detector import METRICS, SUBAGENT_METRICS, DetectorConfig, bin_metrics, detect
+from ccdrift.detector import MIN_BIN_TURNS, METRICS, SUBAGENT_METRICS, DetectorConfig, bin_metrics, detect
 from ccdrift.incidents import describe, update_incidents
 from ccdrift.logs import judged_subagent_loops, judged_turns, parse_source
 from ccdrift.replay import run_replay
@@ -78,11 +78,41 @@ def test_a_table_without_loop_turns_has_no_subagent_loops_to_judge():
 def test_the_subagent_metric_is_binned_over_its_own_days_only_when_asked_for():
     turns = pd.DataFrame({"day": ["2026-09-01", "2026-09-01", "2026-09-03"],
                           "loop_readback": [1.0, 0.5, 1.0]})
-    binned = bin_metrics(turns, metrics=SUBAGENT_METRICS)
+    binned = bin_metrics(turns, metrics=SUBAGENT_METRICS, min_turns={})
     assert binned["bin"].tolist() == ["2026-09-01", "2026-09-03"]
     assert binned["subagent_cache"].tolist() == [0.75, 1.0]
     assert binned["subagent_cache__n"].tolist() == [2, 1]
     assert not any(name in binned for name in METRICS)
+
+
+def test_a_day_with_fewer_subagent_loop_turns_than_the_minimum_is_left_out_of_the_bins():
+    # Left out, not kept empty: an empty bin would take a place in the flag window.
+    turns = pd.DataFrame({"day": ["2026-09-01"] * 299 + ["2026-09-02"] * 300, "loop_readback": [0.5] * 599})
+    binned = bin_metrics(turns, metrics=SUBAGENT_METRICS)
+    assert MIN_BIN_TURNS == {"subagent_cache": 300}
+    assert binned["bin"].tolist() == ["2026-09-02"]
+    assert binned["subagent_cache"].tolist() == [0.5] and binned["subagent_cache__n"].tolist() == [300]
+
+
+def test_a_light_day_inside_a_drop_takes_no_place_in_the_flag_window():
+    # Deviant days 15, 16 and 18 with a light day 17 between them: three deviant days of four
+    # judged ones in a row flag, though they are spread over five calendar days.
+    rng = np.random.default_rng(0)
+    days, reads = [], []
+    for d in range(19):
+        n = 100 if d == 17 else 1000
+        days += [f"2026-09-{d + 1:02d}"] * n
+        reads.append(np.where(rng.random(n) < (0.05 if d in (15, 16, 18) else 0.002), 0.09, 1.0))
+    turns = pd.DataFrame({"day": days, "loop_readback": np.concatenate(reads)})
+    detected = detect(bin_metrics(turns, metrics=SUBAGENT_METRICS), DetectorConfig())
+    assert "2026-09-18" not in detected["bin"].tolist()
+    assert detected.loc[detected["subagent_cache__flag"], "bin"].tolist() == ["2026-09-16", "2026-09-17", "2026-09-19"]
+
+
+def test_the_minimum_leaves_the_main_thread_metrics_judged_on_any_day():
+    turns = pd.DataFrame({"day": ["2026-09-01"], "thinking_fraction": [0.5], "prompt_cache_read_ratio": [1.0],
+                          "is_haiku": [0.0]})
+    assert bin_metrics(turns)["cache_ratio"].tolist() == [1.0]
 
 
 def test_the_main_thread_bins_carry_no_subagent_metric_and_are_judged_without_one():
@@ -153,11 +183,14 @@ def test_without_a_cutoff_of_its_own_the_subagent_metric_is_left_alone(tmp_path)
 
 
 def test_a_subagent_regression_leaves_the_main_thread_metrics_alone(tmp_path):
-    subagent_history(tmp_path, 19, miss_days=[16, 17, 18])
+    # The subagent also moves to Haiku, as subagents often run it: judged with the main thread's
+    # turns it would read as Haiku appearing there.
+    subagent_history(tmp_path, 19, miss_days=[16, 17, 18], haiku_from=16)
     turns, loops = judged(tmp_path, date.fromisoformat(nth_day(19)))
     state = new_state()
-    update_incidents(turns, state, date.fromisoformat(nth_day(19)), DetectorConfig())
-    assert state["incidents"] == []
+    events = update_incidents(turns, state, date.fromisoformat(nth_day(19)), DetectorConfig(), loops)
+    assert [e.incident["metric"] for e in events] == ["subagent_cache"]
+    assert [i["metric"] for i in state["incidents"]] == ["subagent_cache"]
 
 
 def test_a_subagent_cache_incident_recovers_once_read_back_is_usual_again(tmp_path):
@@ -195,7 +228,7 @@ def test_an_incident_on_subagent_cache_can_be_added_by_hand_and_listed_with_its_
     assert [i["metric"] for i in load_state(state)["incidents"]] == ["subagent_cache"]
     capsys.readouterr()
     assert main(["incident", "list", "--source", str(tmp_path / "logs"), "--state", str(state)]) == 0
-    assert "~600k tokens re-cached in subagents" in capsys.readouterr().out
+    assert "~1.8M tokens re-cached in subagents" in capsys.readouterr().out
 
 
 def test_a_version_2_state_file_loads_as_version_3_with_its_incidents(tmp_path):
@@ -209,12 +242,12 @@ def test_the_report_shows_subagent_read_back_and_flags_it(tmp_path, capsys):
     subagent_history(tmp_path / "logs", 19, miss_days=[16, 17, 18])
     assert run_report(tmp_path / "logs", tmp_path / "state.json", days=3, today=date.fromisoformat(nth_day(19))) == 0
     assert capsys.readouterr().out.splitlines()[4:7] == [
-        "2026-09-17         60        0.900   +0.0        0.000   +0.0            -            20/99"
-        "              0.7980  -3923.5  subagent cache",
-        "2026-09-18         60        0.900   +0.0        0.000   +0.0            -            20/99"
-        "              0.7980  -18.6  subagent cache",
-        "2026-09-19         60        0.900   +0.0        0.000   +0.0            -            20/99"
-        "              0.7980  -13.2  subagent cache",
+        "2026-09-17         60        0.900   +0.0        0.000   +0.0            -           20/300"
+        "              0.9333  -6849.2  subagent cache",
+        "2026-09-18         60        0.900   +0.0        0.000   +0.0            -           20/300"
+        "              0.9333  -17.3  subagent cache",
+        "2026-09-19         60        0.900   +0.0        0.000   +0.0            -           20/300"
+        "              0.9333  -12.2  subagent cache",
     ]
 
 

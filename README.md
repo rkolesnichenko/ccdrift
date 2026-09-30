@@ -328,8 +328,8 @@ CLI (Agent SDK sessions are your own scripts and are left out) and computes:
   previous response and not right after a compaction;
 - the share of responses from a Haiku model.
 
-Over subagents' tool-loop turns (defined below), on the days they ran, it computes what
-each turn reads back of what the response before it in its transcript had cached, at most
+Over subagents' tool-loop turns (defined below), on days with at least 300 of them, it
+computes what each turn reads back of what the response before it in its transcript had cached, at most
 all of it. Each turn's share of its whole input read from the cache would track the work
 instead: its uncached part is the new tool result.
 

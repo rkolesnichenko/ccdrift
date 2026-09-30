@@ -409,13 +409,14 @@ def failure_days(path, days, per_day=60):
         write(path / f"s{d}.jsonl", records)
 
 
-def tool_loop_days(path, days, per_day=100, misses=0, subagent=False, versions=None, miss_day=None, miss_days=None):
+def tool_loop_days(path, days, per_day=100, misses=0, subagent=False, versions=None, miss_day=None, miss_days=None,
+                   models=None):
     """One CLI session a day from Sep 1, on the main thread or in a subagent of it: a
     prompt, then `per_day` turns a minute apart, each after a tool result and reading back
     what the one before had cached, with a second prompt halfway. The last `misses` turns
     of day `miss_day` (default the last day), or of each of `miss_days`, miss the cache,
     reading nothing. `versions` gives each day's Claude Code version (default 2.1.226 every
-    day)."""
+    day), `models` each day's model (default claude-opus-5)."""
     miss_days = set(miss_days) if miss_days is not None else {days - 1 if miss_day is None else miss_day}
     for d in range(days):
         version = versions[d] if versions else "2.1.226"
@@ -430,30 +431,32 @@ def tool_loop_days(path, days, per_day=100, misses=0, subagent=False, versions=N
             written = 1000 if k == 0 else 100 + (cached if missed else 0)
             records.append(line(f"{'a' if subagent else 'm'}{d}-{k}", text(40), ts=ts, sid=f"s{d}",
                                 sidechain=subagent, cache_read=read, cache_creation=written, version=version,
-                                entrypoint="cli"))
+                                entrypoint="cli", model=models[d] if models else "claude-opus-5"))
             cached = read + written
         write(path / (f"s{d}/subagents/agent-a.jsonl" if subagent else f"s{d}.jsonl"), records)
 
 
-def subagent_history(path, days, miss_days=(), version_from=None):
-    """A clean main thread from Sep 1 and a subagent of it each day, 99 tool-loop turns a
-    day; on each of `miss_days` 20 of them miss. From day `version_from` the subagent runs
-    2.1.300, while the main thread stays on 2.1.226."""
+def subagent_history(path, days, miss_days=(), version_from=None, haiku_from=None):
+    """A clean main thread from Sep 1 and a subagent of it each day, 300 tool-loop turns a
+    day, enough to be judged; on each of `miss_days` 20 of them miss. From day `version_from` the subagent runs
+    2.1.300, while the main thread stays on 2.1.226, and from day `haiku_from` on Haiku."""
     main_thread_days(path, [{}] * days)
     versions = ["2.1.300" if version_from is not None and d >= version_from else "2.1.226" for d in range(days)]
-    tool_loop_days(path, days, subagent=True, misses=20, miss_days=miss_days, versions=versions)
+    models = ["claude-haiku-4-5" if haiku_from is not None and d >= haiku_from else "claude-opus-5" for d in range(days)]
+    tool_loop_days(path, days, per_day=301, subagent=True, misses=20, miss_days=miss_days, versions=versions,
+                   models=models)
 
 
 def partial_readback_days(path, days, from_day, share):
-    """A clean main thread from Sep 1 and a subagent of it each day, 99 tool-loop turns a
+    """A clean main thread from Sep 1 and a subagent of it each day, 300 tool-loop turns a
     day that read back all of what the turn before had cached, or from day `from_day` only
     `share` of it, writing the rest to the cache again: a regression with no miss in it."""
     main_thread_days(path, [{}] * days)
     for d in range(days):
         records, cached = [], 0
-        for k in range(101):
+        for k in range(302):
             ts = at(d * DAY + 60 * k)
-            opens = k in (0, 50)
+            opens = k in (0, 150)
             records.append(prompt(ts, sid=f"s{d}", sidechain=True) if opens
                            else tool_result(ts, sid=f"s{d}", sidechain=True))
             read = 0 if k == 0 else cached if opens or d < from_day else int(cached * share)

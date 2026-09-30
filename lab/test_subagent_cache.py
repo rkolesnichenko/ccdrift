@@ -5,13 +5,14 @@ from datetime import date
 import pandas as pd
 
 from ccdrift.logs import judged_subagent_loops, parse_all
-from lab.subagent_cache import (BAR, SMALL, first_check, flagged, gate, openings, plant, plant_starts, rows)
+from lab.subagent_cache import (BAR, SMALL, first_check, flagged, gate, light_rows, one_miss, openings, plant,
+                                 plant_starts, rows, shifts)
 from tests.helpers import nth_day, tool_loop_days
 
 
 def subagent_loops(tmp_path, days=20, **kw):
     """Subagent tool loops of `days` days through the parser, and each transcript's opening read."""
-    tool_loop_days(tmp_path, days, subagent=True, **kw)
+    tool_loop_days(tmp_path, days, subagent=True, **{"per_day": 301, **kw})
     responses = parse_all(tmp_path).responses
     return judged_subagent_loops(responses, date.fromisoformat(nth_day(days))).reset_index(drop=True), openings(responses)
 
@@ -65,7 +66,7 @@ def test_a_cutoff_passes_only_on_plants_of_the_bars_size(tmp_path):
 
 def test_a_cutoff_that_flags_the_logs_fails_whatever_it_catches(tmp_path):
     # Misses on the last three days are a drop the logs already hold, after the one plant.
-    tool_loop_days(tmp_path, 20, subagent=True, misses=20, miss_days=[17, 18, 19])
+    tool_loop_days(tmp_path, 20, per_day=301, subagent=True, misses=20, miss_days=[17, 18, 19])
     responses = parse_all(tmp_path).responses
     loops = judged_subagent_loops(responses, date.fromisoformat(nth_day(20))).reset_index(drop=True)
     assert flagged(loops, "readback", 3.5)[0] == [nth_day(17), nth_day(18), nth_day(19)]
@@ -76,7 +77,7 @@ def test_a_cutoff_that_flags_the_logs_fails_whatever_it_catches(tmp_path):
 
 def test_the_flags_the_logs_already_raise_catch_no_plant(tmp_path):
     # Misses on days 7 to 10 are a drop the logs already hold, on the days the one plant covers.
-    tool_loop_days(tmp_path, 20, subagent=True, misses=20, miss_days=[7, 8, 9, 10])
+    tool_loop_days(tmp_path, 20, per_day=301, subagent=True, misses=20, miss_days=[7, 8, 9, 10])
     responses = parse_all(tmp_path).responses
     loops = judged_subagent_loops(responses, date.fromisoformat(nth_day(20))).reset_index(drop=True)
     assert flagged(loops, "readback", 3.5)[0] == [nth_day(7), nth_day(8), nth_day(9), nth_day(10)]
@@ -107,7 +108,56 @@ def test_the_gate_fails_when_ccdrift_ships_no_cutoff_or_one_outside_the_grid():
 
 
 def test_a_first_check_opens_only_flags_starting_within_its_last_two_weeks(tmp_path):
-    tool_loop_days(tmp_path, 30, subagent=True, misses=20, miss_days=[26, 27, 28])
+    tool_loop_days(tmp_path, 30, per_day=301, subagent=True, misses=20, miss_days=[26, 27, 28])
     loops = judged_subagent_loops(parse_all(tmp_path).responses, date.fromisoformat(nth_day(29))).reset_index(drop=True)
     assert first_check(loops, 3.5, date.fromisoformat(nth_day(29))) == [nth_day(26)]
     assert first_check(loops, 3.5, date.fromisoformat(nth_day(26 + 15))) == []
+
+
+def test_one_miss_turns_the_middle_hit_of_its_day_into_a_prefix_read(tmp_path):
+    loops, opening = subagent_loops(tmp_path, days=3)
+    missed = one_miss(loops, opening, nth_day(1))
+    assert missed.groupby("day")["is_loop_miss"].sum().tolist() == [0, 1, 0]
+    assert missed.loc[missed["is_loop_miss"], "loop_readback"].tolist() == [0.0]
+
+
+def light_last_day(tmp_path):
+    """Twelve days of subagent loops, 300 turns a day with one ordinary miss on each of the
+    first ten, the last day cut to its first 30 turns, and each transcript's opening read."""
+    tool_loop_days(tmp_path, 12, per_day=301, subagent=True, misses=1, miss_days=range(10))
+    responses = parse_all(tmp_path).responses
+    loops = judged_subagent_loops(responses, date.fromisoformat(nth_day(12))).reset_index(drop=True)
+    day = loops["day"].astype(str)
+    return loops[(day != nth_day(11)) | (loops.groupby(day).cumcount() < 30)].reset_index(drop=True), openings(responses)
+
+
+def test_one_more_miss_moves_a_light_day_further_than_a_busy_one(tmp_path):
+    loops, opening = light_last_day(tmp_path)
+    moved = {day: (turns, shift) for day, turns, shift in shifts(loops, opening, 3.5, 0)}
+    assert list(moved) == [nth_day(i) for i in range(5, 12)]
+    light_turns, light_shift = moved.pop(nth_day(11))
+    assert light_turns == 30 and light_shift > 2 * max(shift for _, shift in moved.values()) > 0
+    assert nth_day(11) not in [day for day, _, _ in shifts(loops, opening, 3.5, 100)]
+
+
+def test_a_minimum_passes_when_one_miss_carries_no_judged_day_halfway_to_the_cutoff(tmp_path):
+    loops, opening = light_last_day(tmp_path)
+    judged, kept = light_rows(loops, opening, 3.5, grid=(0, 100))
+    assert judged["minimum"] == 0 and judged["unjudged"] == 0 and judged["largest"][:2] == (nth_day(11), 30)
+    assert judged["largest"][2] >= 1.75 and not judged["passes"]
+    assert kept["minimum"] == 100 and kept["unjudged"] == 1 and kept["days"] == 12
+    assert kept["largest"][2] < 1.75 and kept["passes"]
+
+
+def light(minimum, passes):
+    return {"minimum": minimum, "unjudged": 3, "days": 37, "largest": ("2026-09-25", 231, 1.6), "passes": passes}
+
+
+def test_the_shipped_minimum_must_pass_the_light_day_row_as_well():
+    table = [row(3.5, True)]
+    ok, notes = gate(table, 3.5, [light(100, False), light(200, True)], 200)
+    assert ok and ("ships a minimum of 200 loop turns a day: 3 of 37 days not judged, one more miss moves a judged "
+                   "day at most 1.60 z (bar 1.75)") in notes
+    ok, notes = gate(table, 3.5, [light(100, False), light(200, True)], 100)
+    assert not ok and notes[-1] == "passing minimums: 200"
+    assert gate(table, 3.5, [light(200, True)], 300) == (False, notes[:2] + ["the shipped minimum 300 isn't in the grid"])
