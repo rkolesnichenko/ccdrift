@@ -16,7 +16,7 @@ from ccdrift.state import load_state, new_state, record_run, save_state, state_l
 
 def test_a_missing_state_file_reads_as_a_fresh_state(tmp_path):
     assert load_state(tmp_path / "state.json") == {
-        "version": 2, "incidents": [], "settings": [], "blank_cache": [], "reported": {},
+        "version": 3, "incidents": [], "settings": [], "blank_cache": [], "reported": {},
         "field_gaps": [], "new_fields": [], "new_attachments": [], "hook_failures": [], "context_changes": [], "early_warnings": [],
         "loop_warnings": [], "failed_requests": [], "cut_short": [], "hook_changes": [], "unreadable": [],
         "no_responses": [], "thinking_rises": [], "withheld": None, "context_rule": 2,
@@ -27,7 +27,7 @@ def test_a_version_1_state_file_keeps_what_it_reported(tmp_path):
     (tmp_path / "state.json").write_text(json.dumps(
         {"reported": {"cache_ratio": ["2026-08-18"]}, "blank_cache": ["2026-09-01"]}))
     assert load_state(tmp_path / "state.json") == {
-        "version": 2, "incidents": [], "settings": [], "blank_cache": ["2026-09-01"],
+        "version": 3, "incidents": [], "settings": [], "blank_cache": ["2026-09-01"],
         "reported": {"cache_ratio": ["2026-08-18"]},
         "field_gaps": [], "new_fields": [], "new_attachments": [], "hook_failures": [], "context_changes": [], "early_warnings": [],
         "loop_warnings": [], "failed_requests": [], "cut_short": [], "hook_changes": [], "unreadable": [],
@@ -41,9 +41,9 @@ def test_a_state_file_that_holds_no_object_is_unreadable(tmp_path):
         load_state(tmp_path / "state.json")
 
 
-@pytest.mark.parametrize("version", [3, "2", 2.0, None, True])
+@pytest.mark.parametrize("version", [4, "2", 2.0, None, True])
 def test_a_state_file_from_a_newer_ccdrift_or_with_a_bad_version_is_unreadable(tmp_path, version):
-    # Loaded as version 2, it would be overwritten by this ccdrift's next check.
+    # Loaded as version 3, it would be overwritten by this ccdrift's next check.
     (tmp_path / "state.json").write_text(json.dumps({"version": version, "incidents": []}))
     with pytest.raises(ValueError, match="version"):
         load_state(tmp_path / "state.json")

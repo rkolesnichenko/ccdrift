@@ -142,7 +142,8 @@ def test_only_open_and_recovered_incidents_leave_the_baseline():
         {"metric": "haiku_fraction", "start": nth_day(0), "end": nth_day(5), "status": "dismissed"},
     ]
     assert exclusions([nth_day(i) for i in range(6)], incidents) == {
-        "cache_ratio": [False, True, True, False, True, True], "haiku_fraction": [False] * 6}
+        "cache_ratio": [False, True, True, False, True, True], "haiku_fraction": [False] * 6,
+        "subagent_cache": [False] * 6}
 
 
 def prompt_turns(day, turns, misses=0, writes_per_miss=0, haiku=0, version="2.1.226"):

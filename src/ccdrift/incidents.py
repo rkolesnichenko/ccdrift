@@ -17,9 +17,10 @@ from typing import Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from ccdrift.detector import DetectorConfig, baseline_bins, bin_metrics, detect, flag_onsets, pooled_z
+from ccdrift.detector import (METRICS, SUBAGENT_METRICS, DetectorConfig, baseline_bins, bin_metrics, detect,
+                              flag_onsets, pooled_z)
 from ccdrift.history import HistoryError, load_history
-from ccdrift.logs import first_days_by_version, judged_turns
+from ccdrift.logs import first_days_by_version, judged_subagent_loops, judged_turns
 from ccdrift.state import load_state
 from ccdrift.texts import (ALERT_TITLES, COMMAND_LINES, INCIDENT_LINES, INCIDENT_METRICS, MOVES, PERSISTENT_DAYS,
                            SHORT_NAMES, incident_line, incident_message)
@@ -60,6 +61,23 @@ def exclusions(bins: Sequence[str], incidents: Sequence[dict]) -> dict[str, list
     return masks
 
 
+def incident_turns(metric: str, turns: pd.DataFrame, subagents: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """The judged rows `metric` is measured on: subagent tool-loop turns
+    (logs.judged_subagent_loops) for a subagent metric, the main-thread `turns` for the
+    rest. Without `subagents` a subagent metric has none."""
+    if metric in SUBAGENT_METRICS:
+        return turns.iloc[0:0] if subagents is None else subagents
+    return turns
+
+
+def metric_bins(metric: str, turns: pd.DataFrame, subagents: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """bin_metrics over the rows `metric` is measured on, which bins a subagent metric on
+    days of its own: a day with main-thread turns and no subagent loop doesn't sit in its
+    flag window."""
+    rows = incident_turns(metric, turns, subagents)
+    return bin_metrics(rows, metrics=SUBAGENT_METRICS if metric in SUBAGENT_METRICS else METRICS)
+
+
 def open_incident(incidents: Sequence[dict], metric: str) -> Optional[dict]:
     return next((i for i in incidents if i["metric"] == metric and i["status"] == "open"), None)
 
@@ -68,18 +86,23 @@ def _first_bin_from(bins: Sequence[str], day: str) -> int:
     return next((i for i, b in enumerate(bins) if b >= day), len(bins))
 
 
-def update_incidents(turns: pd.DataFrame, state: dict, today: date, cfg: DetectorConfig) -> list[Event]:
-    """Open, recover and expire incidents over judged turns, in day order, and return
-    what changed; state["incidents"] is updated in place. After each change the
-    detector runs again with the new exclusions, so an incident that opened and
-    recovered while the check wasn't running is followed in order."""
+def update_incidents(turns: pd.DataFrame, state: dict, today: date, cfg: DetectorConfig,
+                     subagents: Optional[pd.DataFrame] = None) -> list[Event]:
+    """Open, recover and expire incidents over judged turns, and the subagent metric's over
+    judged subagent loops, in day order, and return what changed; state["incidents"] is
+    updated in place. After each change the detector runs again with the new exclusions, so
+    an incident that opened and recovered while the check wasn't running is followed in
+    order. A metric cfg doesn't judge is left alone, open incidents and all."""
     if turns.empty:
         return []
-    metrics = bin_metrics(turns)
-    bins = metrics["bin"].astype(str).tolist()
+    main = bin_metrics(turns)
     incidents = state["incidents"]
     events: list[Event] = []
     for metric in INCIDENT_METRICS:
+        if not cfg.judges(metric):
+            continue
+        metrics = metric_bins(metric, turns, subagents) if metric in SUBAGENT_METRICS else main
+        bins = [] if metrics.empty else metrics["bin"].astype(str).tolist()
         # Each pass opens or closes an incident, each later than the one before.
         for _ in range(2 * len(bins) + 1):
             incident = open_incident(incidents, metric)
@@ -89,6 +112,8 @@ def update_incidents(turns: pd.DataFrame, state: dict, today: date, cfg: Detecto
                     break
                 events.append(event)
                 continue
+            if not bins:
+                break
             detected = detect(metrics, cfg, exclusions(bins, incidents), only=[metric])
             found = _new_flag_run(detected, metric, bins, incidents, state["reported"], today)
             if found is None:
@@ -129,10 +154,11 @@ def _new_flag_run(detected: pd.DataFrame, metric: str, bins: list[str], incident
 def _settle(incident: dict, metrics: pd.DataFrame, bins: list[str], incidents: Sequence[dict],
             today: date, cfg: DetectorConfig) -> Optional[Event]:
     """Close an open incident once its metric has recovered, or once it has lasted
-    PERSISTENT_DAYS days; None while it stays open."""
+    PERSISTENT_DAYS days; None while it stays open. With no bins, as for a subagent metric
+    while no subagent ran, only the second can happen."""
     metric = incident["metric"]
     start = _first_bin_from(bins, incident["start"])
-    vals = metrics[metric].to_numpy(dtype=float)
+    vals = metrics[metric].to_numpy(dtype=float) if bins else np.array([])
     mask = np.array(exclusions(bins, incidents)[metric], dtype=bool)
     baseline = [j for j in baseline_bins(start, mask, cfg.baseline_window) if not math.isnan(vals[j])]
     if len(baseline) >= cfg.min_baseline:
@@ -171,59 +197,84 @@ def versions_text(turns: pd.DataFrame, days: Sequence[str]) -> list[str]:
             for version, share in shares.items() if share >= 0.2][:3]
 
 
-def incident_versions(turns: pd.DataFrame, incident: dict) -> list[str]:
+def incident_versions(turns: pd.DataFrame, incident: dict, subagents: Optional[pd.DataFrame] = None) -> list[str]:
     """The versions behind an incident's first RECOVERY_BINS days, the days a flag
-    names; `ccdrift status` and `incident list` show them."""
-    days = turns["day"].astype(str)
+    names, from the rows its metric is measured on; `ccdrift status` and `incident list`
+    show them."""
+    rows = incident_turns(incident["metric"], turns, subagents)
+    days = rows["day"].astype(str)
     first_days = sorted(days[days.between(incident["start"], incident["end"] or OPEN_END)].unique())
-    return versions_text(turns, first_days[:RECOVERY_BINS])
+    return versions_text(rows, first_days[:RECOVERY_BINS])
 
 
-def incident_cost(turns: pd.DataFrame, incident: dict, incidents: Sequence[dict], cfg: DetectorConfig) -> float:
+def _recached(turns: pd.DataFrame, judged: pd.Series, missed: pd.Series, before: pd.Series, during: pd.Series,
+              days: pd.Series) -> float:
+    """The cache-creation tokens of the `missed` among the `judged` turns on each day
+    `during`, beyond the miss rate of the judged turns `before`."""
+    rate = missed[judged & before].sum() / max(int((judged & before).sum()), 1)
+    total = 0.0
+    for _, day in turns[judged & during].groupby(days[judged & during]):
+        miss = missed[day.index]
+        if miss.any():
+            writes = float(day.loc[miss, "cache_creation"].sum())
+            total += writes * max(0.0, 1 - rate * len(day) / int(miss.sum()))
+    return total
+
+
+def _unread(turns: pd.DataFrame, before: pd.Series, during: pd.Series, days: pd.Series) -> float:
+    """The tokens the loop turns on each day `during` didn't read back of what the turn
+    before had cached, and so wrote to the cache again, beyond the per-turn mean of the loop
+    turns `before`. A turn that reads back most but not all of it counts, as it does in the
+    metric; a miss counts nearly all of what was cached."""
+    loops = turns["loop_turn"].astype(bool)
+    unread = (turns["prev_cached"] - turns["cache_read"]).clip(lower=0).where(loops, 0.0)
+    usual = float(unread[loops & before].mean()) if (loops & before).any() else 0.0
+    return float(sum(max(0.0, day.sum() - usual * int(loops[day.index].sum()))
+                     for _, day in unread[during].groupby(days[during])))
+
+
+def incident_cost(turns: pd.DataFrame, incident: dict, incidents: Sequence[dict], cfg: DetectorConfig,
+                  subagents: Optional[pd.DataFrame] = None) -> float:
     """What an incident cost beyond the days before it: for the cache ratio, the
-    cache-creation tokens of missed prompt turns above the usual miss rate; for
-    Haiku share, the Haiku responses above the usual share. The usual rate comes
-    from the incident's baseline days."""
+    cache-creation tokens of missed prompt turns above the usual miss rate; for the
+    subagent cache, the tokens subagent loop turns didn't read back beyond the usual
+    amount (_unread); for Haiku share, the Haiku responses above the usual share. The usual rate comes from the incident's
+    baseline days."""
+    metric = incident["metric"]
+    turns = incident_turns(metric, turns, subagents)
     if turns.empty:
         return 0.0
     days = turns["day"].astype(str)
     bins = sorted(days.unique())
-    metric = incident["metric"]
     mask = np.array(exclusions(bins, incidents)[metric], dtype=bool)
     before = days.isin([bins[j] for j in baseline_bins(_first_bin_from(bins, incident["start"]), mask,
                                                        cfg.baseline_window)])
     during = days.between(incident["start"], incident["end"] or bins[-1])
     if metric == "cache_ratio":
-        prompts = turns["prompt_within_ttl"].astype(bool)
-        misses = turns["is_miss"].astype(bool)
-        rate = misses[prompts & before].sum() / max(int((prompts & before).sum()), 1)
-        total = 0.0
-        for _, day in turns[prompts & during].groupby(days[prompts & during]):
-            missed = day["is_miss"].astype(bool)
-            if missed.any():
-                writes = float(day.loc[missed, "cache_creation"].sum())
-                total += writes * max(0.0, 1 - rate * len(day) / int(missed.sum()))
-        return total
+        return _recached(turns, turns["prompt_within_ttl"].astype(bool), turns["is_miss"].astype(bool), before,
+                         during, days)
+    if metric == "subagent_cache":
+        return _unread(turns, before, during, days)
     haiku = turns["is_haiku"].astype(float)
     rate = haiku[before].sum() / max(int(before.sum()), 1)
     return float(sum(max(0.0, group.sum() - rate * len(group))
                      for _, group in haiku[during].groupby(days[during])))
 
 
-def describe(event: Event, turns: pd.DataFrame, incidents: Sequence[dict],
-             cfg: DetectorConfig) -> tuple[str, str, str, list[str], list[str]]:
+def describe(event: Event, turns: pd.DataFrame, incidents: Sequence[dict], cfg: DetectorConfig,
+             subagents: Optional[pd.DataFrame] = None) -> tuple[str, str, str, list[str], list[str]]:
     """The alert for an event as (kind, title, message, log lines, the versions the
     message names: those of the event's days). Refreshes the incident's cost, which
     `ccdrift status` shows, and sets its versions on a flag, whose days are the
     incident's first, or when it has none: a recovery happens on other versions than
     the incident did."""
     incident = event.incident
-    named = versions_text(turns, event.days)
+    named = versions_text(incident_turns(incident["metric"], turns, subagents), event.days)
     if event.kind == "flag":
         incident["versions"] = named
     elif not incident["versions"]:
-        incident["versions"] = incident_versions(turns, incident)
-    incident["cost"] = round(incident_cost(turns, incident, incidents, cfg))
+        incident["versions"] = incident_versions(turns, incident, subagents)
+    incident["cost"] = round(incident_cost(turns, incident, incidents, cfg, subagents))
     message, details = incident_message(event.kind, incident, named, event.z, event.run)
     return event.kind, ALERT_TITLES[event.kind], message, details, [] if event.kind == "persistent" else named
 
@@ -298,9 +349,11 @@ def run_list(source: Path, state_path: Path, today: Optional[date] = None,
     except HistoryError as exc:
         print(exc, file=sys.stderr)
         return 1
-    turns = df if df.empty else judged_turns(df, today or datetime.now(timezone.utc).date())
+    today = today or datetime.now(timezone.utc).date()
+    turns = df if df.empty else judged_turns(df, today)
+    loops = judged_subagent_loops(df, today)
     cfg = cfg or DetectorConfig()
     print(INCIDENT_LINES["list"])
     for incident in sorted(incidents, key=lambda i: i["start"], reverse=True):
-        print(f"  {incident_line(incident, incident_cost(turns, incident, incidents, cfg))}")
+        print(f"  {incident_line(incident, incident_cost(turns, incident, incidents, cfg, loops))}")
     return 0

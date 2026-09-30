@@ -14,12 +14,12 @@ import numpy as np
 import pandas as pd
 
 from ccdrift.changelog import changelog_path, load_changelog, release_notes
-from ccdrift.detector import DetectorConfig, bin_metrics, detect
+from ccdrift.detector import SUBAGENT_METRICS, DetectorConfig, bin_metrics, detect
 from ccdrift.history import HistoryError, load_history
 from ccdrift.failures import failure_counts, failure_summary, judged_failures
 from ccdrift.hooks import hooks_summary, judged_hook_runs
 from ccdrift.incidents import exclusions, incident_cost
-from ccdrift.logs import judged_subagent_turns, judged_turns, outside_sdk
+from ccdrift.logs import judged_subagent_loops, judged_subagent_turns, judged_turns, outside_sdk
 from ccdrift.loops import COUNT_COLUMNS, loop_counts
 from ccdrift.sessions import MIN_SESSIONS, project_summary, session_starts
 from ccdrift.settings import settings_summary, subagent_summary
@@ -29,7 +29,8 @@ from ccdrift.texts import (COMMAND_LINES, DAY_TABLE, INCIDENT_METRICS, REPORT_LI
                            no_transcripts_message, number as _number, project_lines, settings_lines, size_text,
                            subagent_lines, table_header, table_row, version_key)
 
-COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", *COUNT_COLUMNS, "flagged"]
+COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", *COUNT_COLUMNS,
+           "subagent_readback", "subagent_z", "flagged"]
 VERSION_COLUMNS = ["version", "first_day", "last_day", "responses", "prompt_turns", "cache_ratio",
                    "miss_share", *COUNT_COLUMNS, "haiku_share", "session_start", "compacts_at", "miss_reasons",
                    "release_notes"]
@@ -45,20 +46,43 @@ def _counts_for(loops: Optional[pd.DataFrame], keys: Sequence[str]) -> pd.DataFr
     return loops.reindex(list(keys), fill_value=0)
 
 
+def _subagent_detected(subagents: Optional[pd.DataFrame], cfg: DetectorConfig, incidents: Sequence[dict],
+                       days: Sequence[str]) -> pd.DataFrame:
+    """The subagent metric's read-back, z and flag on each of `days`, judged over the
+    subagent loops' own days; NaN and unflagged where it has none or cfg doesn't judge it."""
+    metric = "subagent_cache"
+    detected = pd.DataFrame(index=pd.Index(list(days), dtype=object))
+    detected[metric], detected[f"{metric}__z"], detected[f"{metric}__flag"] = np.nan, np.nan, False
+    if subagents is None or subagents.empty or not cfg.judges(metric):
+        return detected
+    binned = bin_metrics(subagents, metrics=SUBAGENT_METRICS)
+    judged = detect(binned, cfg, exclusions(binned["bin"].astype(str).tolist(), incidents), only=[metric])
+    judged = judged.set_index(judged["bin"].astype(str))
+    shown = detected.index.intersection(judged.index)
+    for column in detected.columns:
+        detected.loc[shown, column] = judged.loc[shown, column]
+    return detected
+
+
 def daily_rows(turns: pd.DataFrame, days: int = DEFAULT_DAYS, cfg: Optional[DetectorConfig] = None,
-               incidents: Sequence[dict] = (), loops: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+               incidents: Sequence[dict] = (), loops: Optional[pd.DataFrame] = None,
+               subagents: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """The last `days` days of judged turns, each judged against the days before it
     with incident days left out: responses, cache ratio and Haiku share with their
-    z-scores, tool-loop turns and misses from `loops` (loop_counts by day), and the
-    metrics flagged that day."""
+    z-scores, tool-loop turns and misses from `loops` (loop_counts by day), the subagent
+    read-back and its z from the judged subagent loops `subagents`, and the metrics
+    flagged that day."""
     if turns.empty:
         return pd.DataFrame(columns=COLUMNS)
+    cfg = cfg or DetectorConfig()
     metrics = bin_metrics(turns)
     excluded = exclusions(metrics["bin"].astype(str).tolist(), incidents)
-    detected = detect(metrics, cfg or DetectorConfig(), excluded).tail(days)
+    detected = detect(metrics, cfg, excluded).tail(days)
+    day_list = detected["bin"].astype(str).tolist()
+    sub = _subagent_detected(subagents, cfg, incidents, day_list)
+    detected = pd.concat([detected.reset_index(drop=True), sub.reset_index(drop=True)], axis=1)
     flagged = [", ".join(short for metric, short in SHORT_NAMES.items() if row[f"{metric}__flag"])
                for _, row in detected.iterrows()]
-    day_list = detected["bin"].astype(str).tolist()
     counts = _counts_for(loops, day_list)
     return pd.DataFrame({
         "day": day_list,
@@ -68,6 +92,8 @@ def daily_rows(turns: pd.DataFrame, days: int = DEFAULT_DAYS, cfg: Optional[Dete
         "haiku_share": detected["haiku_fraction"].to_numpy(),
         "haiku_z": detected["haiku_fraction__z"].to_numpy(),
         **{column: counts[column].to_numpy() for column in COUNT_COLUMNS},
+        "subagent_readback": detected["subagent_cache"].to_numpy(dtype=float),
+        "subagent_z": detected["subagent_cache__z"].to_numpy(dtype=float),
         "flagged": flagged,
     }, columns=COLUMNS)
 
@@ -139,9 +165,12 @@ def version_rows(turns: pd.DataFrame, changelog: Optional[dict] = None, starts: 
     return pd.DataFrame(rows, columns=VERSION_COLUMNS)
 
 
-def _cutoffs(cfg: DetectorConfig) -> tuple[float, float]:
+def _cutoffs(cfg: DetectorConfig) -> tuple[float, float, Optional[float]]:
+    """The cache ratio's, Haiku share's and subagent read-back's cutoffs; the last is None
+    when cfg doesn't judge it."""
     return (cfg.metric_z_thresholds.get("cache_ratio", cfg.z_threshold),
-            cfg.metric_z_thresholds.get("haiku_fraction", cfg.z_threshold))
+            cfg.metric_z_thresholds.get("haiku_fraction", cfg.z_threshold),
+            cfg.metric_z_thresholds.get("subagent_cache") if cfg.judges("subagent_cache") else None)
 
 
 def _tail(entries: Sequence[Entry], reported: dict, summary: list[dict], extra: Sequence[str] = ()) -> list[str]:
@@ -161,12 +190,14 @@ def _tail(entries: Sequence[Entry], reported: dict, summary: list[dict], extra: 
 
 def format_report(rows: pd.DataFrame, entries: Sequence[Entry], reported: dict, summary: list[dict],
                   cfg: Optional[DetectorConfig] = None, extra: Sequence[str] = ()) -> str:
-    cache_cutoff, haiku_cutoff = _cutoffs(cfg or DetectorConfig())
     cfg = cfg or DetectorConfig()
+    cache_cutoff, haiku_cutoff, subagent_cutoff = _cutoffs(cfg)
+    subagent = (REPORT_LINES["subagent_unjudged"] if subagent_cutoff is None
+                else REPORT_LINES["subagent_rule"].format(cutoff=subagent_cutoff))
     lines = [
         REPORT_LINES["days"].format(days=len(rows)),
         REPORT_LINES["rule"].format(bins=cfg.deviant_bins, window=cfg.flag_window, cache=cache_cutoff,
-                                    haiku=haiku_cutoff),
+                                    haiku=haiku_cutoff, subagent=subagent),
         "",
         table_header(DAY_TABLE),
     ]
@@ -174,7 +205,8 @@ def format_report(rows: pd.DataFrame, entries: Sequence[Entry], reported: dict, 
         lines.append(table_row(DAY_TABLE, (
             row.day, int(row.responses), _number(row.cache_ratio, ".3f"), _number(row.cache_z, "+.1f"),
             _number(row.haiku_share, ".3f"), _number(row.haiku_z, "+.1f"), _misses(row.loop_misses, row.loop_turns),
-            _misses(row.subagent_loop_misses, row.subagent_loop_turns), row.flagged)))
+            _misses(row.subagent_loop_misses, row.subagent_loop_turns), _number(row.subagent_readback, ".4f"),
+            _number(row.subagent_z, "+.1f"), row.flagged)))
     return "\n".join(lines + _tail(entries, reported, summary, extra)) + "\n"
 
 
@@ -205,7 +237,7 @@ def _plain(value: Any) -> Any:
 def report_json(view: str, rows: pd.DataFrame, entries: Sequence[Entry], reported: dict,
                 summary: list[dict], cfg: DetectorConfig, extra: Optional[dict] = None) -> str:
     """The report as JSON: aggregates only, no paths, session ids or project names."""
-    cache_cutoff, haiku_cutoff = _cutoffs(cfg)
+    cache_cutoff, haiku_cutoff, subagent_cutoff = _cutoffs(cfg)
     records = [{key: _plain(value) for key, value in record.items()} for record in rows.to_dict("records")]
     if view == "day":
         for record in records:
@@ -217,7 +249,8 @@ def report_json(view: str, rows: pd.DataFrame, entries: Sequence[Entry], reporte
         "reported_before_incidents": reported,
         "settings": summary,
         **(extra or {}),
-        "cutoffs": {"cache_ratio": -cache_cutoff, "haiku_fraction": haiku_cutoff},
+        "cutoffs": {"cache_ratio": -cache_cutoff, "haiku_fraction": haiku_cutoff,
+                    "subagent_cache": None if subagent_cutoff is None else -subagent_cutoff},
         "flag_rule": {"deviant_days": cfg.deviant_bins, "of_days": cfg.flag_window},
     }
     return json.dumps(payload, indent=1) + "\n"
@@ -272,8 +305,9 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
         compactions = compactions[outside_sdk(compactions) & ~compactions["is_sidechain"]
                                   & (compactions["trigger"] == "auto")
                                   & (compactions["day"].astype(str) < today.isoformat())]
+    loops = judged_subagent_loops(df, today)
     incidents = state["incidents"]
-    entries = [(incident, incident_cost(turns, incident, incidents, cfg))
+    entries = [(incident, incident_cost(turns, incident, incidents, cfg, loops))
                for incident in sorted(incidents, key=lambda i: i["start"], reverse=True)]
     if by == "version":
         if days is not None:
@@ -287,7 +321,7 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
         rows = version_rows(turns, changelog, starts, compactions, loop_counts(df, today, by="version", days=window))
         extra_lines, extra_json = [], {}
     else:
-        rows = daily_rows(turns, days or DEFAULT_DAYS, cfg, incidents, loop_counts(df, today))
+        rows = daily_rows(turns, days or DEFAULT_DAYS, cfg, incidents, loop_counts(df, today), loops)
         window = rows["day"].tolist()
         hooks = hooks_summary(judged_hook_runs(tables.hook_runs, today), window)
         subagents = subagent_summary(judged_subagent_turns(df, today), window)

@@ -28,8 +28,10 @@ from ccdrift.failures import (ACTIVE_RESPONSES, CUT_FLOOR, CUT_RATIO, CUT_SHARE,
                               cut_shares, failure_counts, judged_failures, usual_days)
 from ccdrift.history import HistoryError, load_history
 from ccdrift.hookcover import MERGE_DAYS, SETTING, STREAM, merged, stream_changes, transcript_states
-from ccdrift.incidents import OPEN_END, RECOVERY_BINS, exclusions, incident_cost, incident_versions, versions_text
-from ccdrift.logs import HOOK_EVENTS, LOOP_GAP_SECONDS, LOOP_MISS_SHARE, Tables, judged_turns, outside_sdk
+from ccdrift.incidents import (OPEN_END, RECOVERY_BINS, exclusions, incident_cost, incident_turns, incident_versions,
+                               versions_text)
+from ccdrift.logs import (HOOK_EVENTS, LOOP_GAP_SECONDS, LOOP_MISS_SHARE, Tables, judged_subagent_loops, judged_turns,
+                          outside_sdk)
 from ccdrift.loops import BASE_DAYS, LOOP_SETTINGS, WINDOW_DAYS, loop_turns
 from ccdrift.report import reason_counts
 from ccdrift.sessions import (BASELINE, CHANGE, MIN_BASELINE, MIN_PROJECT_SESSIONS, PROJECT_BASELINE, SIDE, SIDE_DAYS,
@@ -164,6 +166,22 @@ def _cache_facts(responses: pd.DataFrame, turns: pd.DataFrame, periods: dict[str
     return facts
 
 
+def _subagent_facts(loops: pd.DataFrame, periods: dict[str, list[str]]) -> dict[str, Any]:
+    """The subagent tool-loop turns before, during and after, their misses and read-back,
+    by version, and what a missed turn read and wrote."""
+    by_period = {name: _on_days(loops, periods[name]) for name in PERIODS}
+    during = by_period["during"]
+    missed = during[during["is_loop_miss"].astype(bool)]
+    return {"counts": {name: (int(rows["is_loop_miss"].astype(bool).sum()), len(rows))
+                       for name, rows in by_period.items()},
+            "span": title_versions(during["version"]) if "version" in during else [],
+            "readbacks": {name: float(rows["loop_readback"].mean()) if len(rows) else None
+                          for name, rows in by_period.items()},
+            "versions": _version_rows(by_period, "is_loop_miss"),
+            "missed": {"turns": len(missed), "read": _quartiles(missed["cache_read"]),
+                       "wrote": _quartiles(missed["cache_creation"])} if len(missed) else None}
+
+
 def _haiku_facts(turns: pd.DataFrame, periods: dict[str, list[str]]) -> dict[str, Any]:
     by_period = {name: _on_days(turns, periods[name]) for name in PERIODS}
     during = by_period["during"]
@@ -199,22 +217,32 @@ def draft_facts(responses: pd.DataFrame, incident: dict[str, Any], incidents: Se
     tool-loop turns, then the release notes, the environment and the rule. None when the
     history holds no judged days during the incident."""
     turns = judged_turns(responses, today)
-    periods = draft_periods(turns, incident, incidents, cfg)
+    loops = judged_subagent_loops(responses, today)
+    metric = incident["metric"]
+    # The rows the incident's metric is measured on: its days, versions and cost come from them.
+    rows = incident_turns(metric, turns, loops)
+    periods = draft_periods(rows, incident, incidents, cfg)
     if not periods["during"]:
         return None
-    metric = incident["metric"]
-    facts = (_cache_facts(responses, turns, periods) if metric == "cache_ratio" else _haiku_facts(turns, periods))
-    versions = incident["versions"] or incident_versions(turns, incident)
+    if metric == "cache_ratio":
+        facts = _cache_facts(responses, turns, periods)
+    elif metric == "subagent_cache":
+        facts = _subagent_facts(rows, periods)
+    else:
+        facts = _haiku_facts(turns, periods)
+    versions = incident["versions"] or incident_versions(turns, incident, loops)
     first_days = periods["during"][:RECOVERY_BINS]
-    quoted = note_versions(turns, versions, days_before(incident["start"], 7),
+    quoted = note_versions(rows, versions, days_before(incident["start"], 7),
                            first_days[-1] if first_days else incident["start"])
+    thread = "subagent" if metric == "subagent_cache" else "main"
     facts.update({"kind": metric, "metric": metric, "incident": incident, "periods": periods,
-                  "cost": incident_cost(turns, incident, incidents, cfg),
+                  "cost": incident_cost(turns, incident, incidents, cfg, loops),
                   "notes": release_notes(changelog, quoted, TOPIC_OF[metric]),
-                  "environment": _environment_facts(_on_days(turns, periods["during"]), os_name),
+                  "environment": _environment_facts(_on_days(rows, periods["during"]), os_name, thread),
                   "method": {"metric": metric, "bins": cfg.deviant_bins, "window": cfg.flag_window,
                              "cutoff": cfg.metric_z_thresholds.get(metric, cfg.z_threshold),
-                             "recovery": RECOVERY_BINS, "baseline": cfg.baseline_window}})
+                             "recovery": RECOVERY_BINS, "baseline": cfg.baseline_window,
+                             "gap": LOOP_GAP_SECONDS, "share": LOOP_MISS_SHARE}})
     return facts
 
 

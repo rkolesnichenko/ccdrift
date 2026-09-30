@@ -21,8 +21,8 @@ from ccdrift.texts import CONTROL_CHARS, version_key
 # mostly display fixes, so they count only together with another word ("Now defaults
 # to high effort", "reporting as 0 in transcript and result usage").
 # Which release notes explain an alert or a draft about each metric or setting.
-TOPIC_OF = {"cache_ratio": "cache", "haiku_fraction": "haiku", "cache_tier": "cache", "effort": "effort",
-            "subagent_model": "subagents"}
+TOPIC_OF = {"cache_ratio": "cache", "haiku_fraction": "haiku", "subagent_cache": "cache", "cache_tier": "cache",
+            "effort": "effort", "subagent_model": "subagents"}
 
 TOPICS: dict[str, dict[str, int]] = {
     "cache": {"cache": 2, "prompt-cache": 1, "prompt cache": 1, "cache miss": 1, "cache reuse": 1},

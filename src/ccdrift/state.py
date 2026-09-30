@@ -20,7 +20,8 @@ except ImportError:  # Windows, where ccdrift sets up no schedule
 
 from ccdrift.texts import STATE_LINES
 
-STATE_VERSION = 2
+# 3: incidents on the subagent cache metric (0.22.0), which an older ccdrift can't name.
+STATE_VERSION = 3
 # The session-start rule a state was written by: 2 judges each project against itself.
 CONTEXT_RULE = 2
 
@@ -92,8 +93,9 @@ def new_state() -> dict[str, Any]:
 
 
 def load_state(path: Path) -> dict[str, Any]:
-    """The state in `path` as version 2; a fresh state when the file doesn't exist.
-    A version 1 file keeps its `reported` flags, so they aren't reported again.
+    """The state in `path` as version 3; a fresh state when the file doesn't exist.
+    A version 1 file keeps its `reported` flags, so they aren't reported again; a
+    version 2 file needs nothing more.
     Raises OSError or ValueError when the file can't be read, including one written
     by a newer ccdrift, which this version must not overwrite."""
     if not path.exists():

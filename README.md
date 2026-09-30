@@ -13,7 +13,8 @@ your usage limits:
   (Claude Code 2.1.233–2.1.258, August 2026) and follows such a regression until it's
   fixed.
 - **Tool-loop turns start missing the cache** on the main thread: each miss writes the
-  whole conversation to the cache again. Subagents' misses are reported, not warned about.
+  whole conversation to the cache again. In subagents, which often carry most of the
+  spend, each day's read-back is judged instead, and a drop opens an incident.
 - **Haiku appears on the main thread**, where your chosen model normally answers.
 - **A setting Claude Code picks changes:** the main thread moves between the 1-hour
   and 5-minute prompt cache, or its effort level changes, including when a new model
@@ -102,13 +103,13 @@ set this in `~/.claude/settings.json`:
 
 | Alert | What it means | What to do |
 |---|---|---|
-| **ccdrift flag** | 3 of the last 4 days passed the cutoff for the cache ratio or main-thread Haiku share. ccdrift opens an incident and names the version and the cost so far. | `ccdrift report` lists the days; `ccdrift report --by version` compares versions. A false alarm? `ccdrift incident dismiss`. A regression to report? `ccdrift incident draft` prints an issue draft. |
+| **ccdrift flag** | 3 of the last 4 days passed the cutoff for the cache ratio, main-thread Haiku share or subagent read-back. ccdrift opens an incident and names the version and the cost so far. | `ccdrift report` lists the days; `ccdrift report --by version` compares versions. A false alarm? `ccdrift incident dismiss`. A regression to report? `ccdrift incident draft` prints an issue draft. |
 | **ccdrift: back to normal** | The metric has been back inside the cutoff, 3 days pooled, on 3 days in a row. | Nothing. `ccdrift incident list` keeps the record. |
 | **ccdrift: change persists** | The metric hasn't recovered 30 days after the incident started. ccdrift now treats the new level as normal. | Check whether you changed something: hooks, MCP servers, model. |
 | **ccdrift: past incidents found** | The first check replayed the history on disk day by day and found incidents ccdrift would have followed. They're recorded as if it had run all along, and one still going is flagged as well, so it arrives as what it is rather than as history. | `ccdrift incident list` shows them; `ccdrift incident dismiss` for a false alarm. |
 | **ccdrift: cache misses rising** | Several of the latest new-prompt turns missed the cache, far above your usual rate, within the last day. | Nothing yet. The daily verdict follows within a few days; `ccdrift report` shows the days. |
 | **ccdrift: tool-loop cache misses rising** | Several of the latest main-thread turns inside the tool loop missed the cache, far above your usual rate, within the last day. | Nothing yet. `ccdrift report` shows loop misses per day; the weekly summary shows whether it lasts. If it does, `ccdrift incident draft tool-loop` prints an issue draft. |
-| **ccdrift: subagent cache misses rising** | The same, for turns inside subagents. Not sent at present: on the owner's logs no setting caught a planted rise quickly enough without false alarms (G9, 2026-09-25), so subagents get no warning. | Nothing yet. `ccdrift report` shows subagent misses per day; the weekly summary shows whether it lasts. |
+| **ccdrift: subagent cache misses rising** | The same, for turns inside subagents. Not sent at present: on the owner's logs no setting caught a planted rise quickly enough without false alarms (G9, 2026-09-25), so subagents get no warning; their read-back is judged by the day instead (**ccdrift flag**). | Nothing yet. `ccdrift report` shows subagent misses and read-back per day; the weekly summary shows whether it lasts. |
 | **ccdrift: setting changed** | The cache tier or effort level a model usually gets on the main thread changed, 2 days in a row, or the one the main thread as a whole usually gets did, as when a new model arrives at a different effort; the alert then names the models it moved between. A change on one model is sent once, not again for the main thread. | If you didn't change it, Claude Code's default did. If you switched models yourself for 2 days or more, that is what it saw. |
 | **ccdrift: session start changed** | Sessions start with at least 25% more or less context than the 10 before them, on 3 in a row. Each session is measured against its own project's recent level, so moving between projects is not a change; the alert then counts the projects ccdrift could compare, those with at least 3 sessions each side of the change, and says whether every one of them moved (Claude Code, or your global config when no new version arrived) or only some did (those projects' CLAUDE.md, MCP servers or skills; when a Claude Code version new to those sessions arrived as well, it names that too rather than choosing between them). It also counts what changed in what Claude Code logged about how the sessions started: agent types, skills and MCP tools added or removed, and how many characters that came to. The names go to the check's log only, never to a notification or `--exec`. The logs can't say how many of the step's tokens those characters are, and the alert says so. | `ccdrift report` names each project's typical session start; `ccdrift report --by version` compares versions. A step in every project? `ccdrift incident draft session-start` prints an issue draft. |
 | **ccdrift: a recorded session-start change was dropped** | Once, after an upgrade that changed how session starts are judged: a change recorded under the old rule isn't one under the new. It goes to the log only, never a notification. | Nothing. |
@@ -242,10 +243,10 @@ ccdrift report [--days N] [--by day|version] [--json | --html FILE] [--source DI
 ccdrift cost [--days N] [--by thread|agent|skill|plugin|mcp|model|project|branch] [--json] [--source DIR] [--state FILE]
 ccdrift status [--short [--stdin]] [--state FILE]
 ccdrift incident list [--source DIR] [--state FILE]
-ccdrift incident add {cache|haiku} START..END [--state FILE]
-ccdrift incident close {cache|haiku} [--state FILE]
-ccdrift incident dismiss {cache|haiku} START [--state FILE]
-ccdrift incident draft {cache|haiku|session-start|hooks|tool-loop|cut-short} [DAY] [--source DIR] [--state FILE]
+ccdrift incident add {cache|haiku|subagent-cache} START..END [--state FILE]
+ccdrift incident close {cache|haiku|subagent-cache} [--state FILE]
+ccdrift incident dismiss {cache|haiku|subagent-cache} START [--state FILE]
+ccdrift incident draft {cache|haiku|subagent-cache|session-start|hooks|tool-loop|cut-short} [DAY] [--source DIR] [--state FILE]
 ccdrift replay [--source DIR] [--state FILE]                           incidents the check would have followed
 ccdrift peek [--source DIR]                                            the fields ccdrift reads
 ccdrift schedule install [--at HH:MM] [--no-notify] [--exec CMD] [--no-digest] [--source DIR]
@@ -269,8 +270,8 @@ subagents, which `report --by version` shows as a share per version.
 a `miss_reasons` key of counts per cache-miss reason, on the day view's window as a
 whole and on each version's own record in `--by version`.
 
-`report --html FILE` writes the day view as one self-contained page: the cache ratio and
-Haiku share drawn per day, with the days of a recorded incident on that metric shaded and
+`report --html FILE` writes the day view as one self-contained page: the cache ratio,
+Haiku share and subagent read-back drawn per day, with the days of a recorded incident on that metric shaded and
 the flagged ones marked, a strip of each day's z under the chart with the cutoff across
 it, a line saying what those marks mean, then the table and the sections the terminal
 prints. It has no scripts and fetches nothing when opened, so it works offline, and it
@@ -327,6 +328,11 @@ CLI (Agent SDK sessions are your own scripts and are left out) and computes:
   previous response and not right after a compaction;
 - the share of responses from a Haiku model.
 
+Over subagents' tool-loop turns (defined below), on the days they ran, it computes what
+each turn reads back of what the response before it in its transcript had cached, at most
+all of it. Each turn's share of its whole input read from the cache would track the work
+instead: its uncached part is the new tool result.
+
 It counts failed requests the same way, on the main thread and in subagents alike (a
 request a subagent made is one Claude Code made), and the responses that stop at the
 token limit or refuse. Those are far too rare for a usual rate (9 failed requests that
@@ -335,8 +341,9 @@ each day is judged against the days before it instead.
 
 Each day is compared with the 14 days before it, leaving out the days of open and
 recovered incidents, using their median and spread, with the spread floored at
-sampling noise. A day is deviant past z = −3.0 for the cache ratio or z = +3.5 for
-Haiku share, and a metric is flagged once 3 of any 4 days in a row are deviant. These
+sampling noise. A day is deviant past z = −3.0 for the cache ratio, z = +3.5 for
+Haiku share or z = −3.5 for subagent read-back, and a metric is flagged once 3 of any 4
+days in a row are deviant. These
 defaults were tuned on one person's logs; the research harness in
 [lab/](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/README.md) measures how small a change they catch on yours.
 
@@ -356,8 +363,8 @@ against the usual miss rate of the 14 days before the last week (at least 1,000 
 against 2% with h = 3 (measured in [lab/loop_cache.py](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/loop_cache.py)). It
 warns when the sum passes h within the last day, at most once a week, and also while a
 cache incident is open. Subagents' turns get no warning: no setting measured there caught
-a planted rise quickly enough without false alarms, so their misses stay in `ccdrift
-report` and the weekly summary.
+a planted rise quickly enough without false alarms, so they are judged by the day
+instead, as subagent read-back.
 
 A session's start is the prompt size (input plus cache tokens) of its first response.
 The latest 3 sessions are compared with the 10 before them: a change is at least 25%,
