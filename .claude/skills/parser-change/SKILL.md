@@ -3,7 +3,7 @@ name: parser-change
 description: The checklist for changing how ccdrift reads Claude Code transcripts. Use whenever touching parse_file, the CANDIDATES dict, or any field extraction in src/ccdrift/logs.py, or when Claude Code has changed its log format and a new field variant needs absorbing.
 ---
 
-Transcript parsing has three coupled pieces. Changing one without the others fails silently: the store keeps stale rows and no test complains.
+Transcript parsing has three coupled pieces. Changing one without the others leaves the store with stale rows. tests/test_parser_version.py catches that only when the change moves `parse_file`'s output on its own fixture; a variant the fixture does not hold still fails silently.
 
 ## 1. Absorb drift in one place only
 
