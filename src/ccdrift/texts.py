@@ -956,6 +956,85 @@ DETACHED_NAME = "detached HEAD"  # the branch bucket for gitBranch "HEAD": nothi
 
 
 # ---------------------------------------------------------------------------
+# ccdrift compare
+# ---------------------------------------------------------------------------
+
+COMPARE_LINES = {"before": "Before {at}: {first} to {last}, {present} of {spanned} days with responses.",
+                 "after": "After: {first} to {last}, {present} of {spanned} days with responses.",
+                 "neither": "{at} itself is on neither side.",
+                 "cells": "Each cell: the median day (lowest-highest day, days with a figure).",
+                 "versions": "Versions {side}: {versions}.",
+                 "sdk": "Left out, as `ccdrift cost` leaves them out: main-thread responses in Agent SDK sessions, "
+                        "{before:,} before and {after:,} after.",
+                 "quota": "Quota points count every surface on the account, claude.ai included, on the days the "
+                          "status line sampled them.",
+                 "no_quota": "No quota samples on these days: ccdrift keeps them once your status line runs "
+                             "`ccdrift status --short --stdin`.",
+                 "unpriced": "No price for {models}: a day where unpriced models carry {cutoff:.0%} of its tokens "
+                             "has no dollar figure.",
+                 "no_prices": "No cost records price these days, so they have no dollar figures.",
+                 "not_evidence": "A difference inside either side's range is not evidence the change did anything.",
+                 "at_not_past": "--at {at} is not a past day: compare needs complete days after it.",
+                 "no_after": "No complete day after {at} holds responses outside Agent SDK sessions yet.",
+                 "no_before": "None of the {days} days before {at} holds responses outside Agent SDK sessions."}
+COMPARE_TABLE = (("", "<22"), ("before", "<36"), ("after", ""))
+COMPARE_ROWS = {"dollars_per_day": "dollars per day", "dollars_per_prompt": "dollars per prompt",
+                "context_per_response": "context per response", "session_start": "session start",
+                "quota_points": "quota points per day", "compactions": "auto-compactions"}
+SIDE_NAMES = {"before": "before", "after": "after"}
+
+
+def _dollars(value: float) -> str:
+    return f"${value:,.2f}"
+
+
+def _points(value: float) -> str:
+    return f"{value:g}"
+
+
+# How each row's numbers print: dollars to the cent, token counts as the version table
+# prints them, quota points as the whole or half points a median of them can be.
+COMPARE_FORMATS = {"dollars_per_day": _dollars, "dollars_per_prompt": _dollars, "context_per_response": approx,
+                   "session_start": approx, "quota_points": _points}
+
+
+def spread_cell(metric: str, spread: dict[str, Any]) -> str:
+    """One side of one row: "$412.18 ($210.00-$530.12, 6d)", or "-" when no day had a figure."""
+    if not spread["days"]:
+        return "-"
+    show = COMPARE_FORMATS[metric]
+    return f"{show(spread['median'])} ({show(spread['low'])}-{show(spread['high'])}, {spread['days']}d)"
+
+
+def starts_cell(spread: dict[str, Any], starts: int) -> str:
+    """The session start row's cell, with how many sessions started: "130k (90k-180k, 6d), 12 starts"."""
+    return f"{spread_cell('session_start', spread)}, {starts} start{'' if starts == 1 else 's'}"
+
+
+def compactions_cell(compactions: dict[str, Any]) -> str:
+    """"3: 820k-970k, median 900k", "3 at 970k" when the smallest and largest print alike,
+    "1 at 670k" or "none"."""
+    if not compactions["count"]:
+        return "none"
+    low, high = approx(compactions["min"]), approx(compactions["max"])
+    if low == high:
+        return f"{compactions['count']} at {low}"
+    return f"{compactions['count']}: {low}-{high}, median {approx(compactions['median'])}"
+
+
+def versions_text(shares: dict[str, float]) -> str:
+    """"2.1.278 <1%, 2.1.280 60%, 2.1.281 40%", or "none". A version that ran at all shows
+    as under 1% rather than as 0%."""
+    return ", ".join(f"{version} {'<1%' if share < 0.01 else format(share, '.0%')}"
+                     for version, share in shares.items()) or "none"
+
+
+def unpriced_models_text(unpriced: Sequence[dict[str, Any]]) -> str:
+    """"claude-fable-5-1 (0.4%)" for each model with no price, with its share of these days' tokens."""
+    return ", ".join(f"{model['model']} ({model['share']:.1%})" for model in unpriced)
+
+
+# ---------------------------------------------------------------------------
 # The report's sections from the rules: settings, subagents, projects, hooks, failures
 # ---------------------------------------------------------------------------
 

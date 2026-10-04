@@ -1,18 +1,21 @@
 """Before and after a date the user names: each side's days and spread, on the numbers a
 configuration change moves."""
 
+import json
 from datetime import date
 
 import pandas as pd
 import pytest
 
 from ccdrift import compare
+from ccdrift.cli import main
 from ccdrift.compare import (auto_compactions, compaction_spread, compare_summary, daily_context, daily_dollars,
-                             daily_dollars_per_prompt, quota_points, sides, spread)
+                             daily_dollars_per_prompt, quota_points, run_compare, sides, spread)
 from ccdrift.logs import parse_all
 from ccdrift.prices import Price
 from ccdrift.quota import read_samples
 from ccdrift.spend import spend_turns
+from ccdrift.texts import compactions_cell, versions_text
 from tests.helpers import DAY, at, compact_boundary, line, nth_day, prompt, text, write
 
 # Sep 8, with three days a side: before is Sep 5-7, after is Sep 9-11, and Sep 12 is today.
@@ -162,11 +165,11 @@ def test_a_sides_spread_is_its_median_lowest_and_highest_day_and_how_many_of_its
     assert spread(daily, ["2026-09-10"]) == {"median": None, "low": None, "high": None, "days": 0}
 
 
-def two_sides(tmp_path):
+def two_sides(tmp_path, project="p"):
     """A main thread on Sep 5 and 6 on 2.1.280 and on Sep 9 on 2.1.289 and 2.1.1000, a subagent
     on Sep 6 on 2.1.281, an Agent SDK session on Sep 6 and 9 with a subagent of its own, and a
     response on Sep 8 itself, on a model with no cost records, which is on neither side."""
-    write(tmp_path / "p" / "s1.jsonl", [
+    write(tmp_path / project / "s1.jsonl", [
         prompt(day_at(4)),
         line("m1", text(40), ts=day_at(4, 1), entrypoint="cli", version="2.1.280", out=1_000_000),
         prompt(day_at(5)),
@@ -175,12 +178,12 @@ def two_sides(tmp_path):
         line("m3", text(40), ts=day_at(7, 1), entrypoint="cli", version="2.1.285", out=1_000_000,
              model="claude-fable-5-1"),
     ])
-    write(tmp_path / "p" / "s2.jsonl", [
+    write(tmp_path / project / "s2.jsonl", [
         prompt(day_at(8), sid="s2"),
         line("m4", text(40), ts=day_at(8, 1), sid="s2", entrypoint="cli", version="2.1.289", out=1_000_000),
         line("m5", text(40), ts=day_at(8, 2), sid="s2", entrypoint="cli", version="2.1.1000", out=1_000_000),
     ])
-    write(tmp_path / "p" / "s3.jsonl", [
+    write(tmp_path / project / "s3.jsonl", [
         line("x1", text(40), ts=day_at(5, 5), sid="s3", entrypoint="sdk-py", version="2.1.280", out=1_000_000),
         line("x2", text(40), ts=day_at(8, 5), sid="s3", entrypoint="sdk-py", version="2.1.289", out=1_000_000),
         line("x3", text(40), ts=day_at(8, 6), sid="s3", entrypoint="sdk-py", version="2.1.289", out=1_000_000),
@@ -240,3 +243,159 @@ def test_models_with_no_price_are_named_with_their_share_rather_than_dropped(tmp
     summary = compare_summary(two_sides(tmp_path), AT, 3, TODAY, [])
     assert summary["unpriced"] == [{"model": "claude-opus-5", "share": 1.0}]
     assert summary["metrics"]["dollars_per_day"]["before"]["days"] == 0
+
+
+def quota_beside(state, samples):
+    """The quota samples file `ccdrift status --short --stdin` keeps beside the state file."""
+    state.parent.mkdir(parents=True, exist_ok=True)
+    (state.parent / "quota.jsonl").write_text("".join(json.dumps(one) + "\n" for one in samples))
+
+
+SIDES_SAMPLES = [sample("2026-09-06T10:00:00+00:00", 10), sample("2026-09-06T12:00:00+00:00", 14),
+                 sample("2026-09-09T12:00:00+00:00", 20), sample("2026-09-10T12:00:00+00:00", 21)]
+
+EXPECTED = """\
+Before 2026-09-08: 2026-09-05 to 2026-09-07, 2 of 3 days with responses.
+After: 2026-09-09 to 2026-09-11, 1 of 3 days with responses.
+2026-09-08 itself is on neither side.
+Each cell: the median day (lowest-highest day, days with a figure).
+
+                        before                                after
+dollars per day         $37.50 ($25.00-$50.00, 2d)            $50.00 ($50.00-$50.00, 1d)
+dollars per prompt      $37.50 ($25.00-$50.00, 2d)            $50.00 ($50.00-$50.00, 1d)
+context per response    10 (10-10, 2d)                        10 (10-10, 1d)
+session start           10 (10-10, 1d), 1 start               10 (10-10, 1d), 1 start
+auto-compactions        none                                  none
+quota points per day    4 (4-4, 1d)                           3.5 (1-6, 2d)
+
+Versions before: 2.1.280 100%.
+Versions after: 2.1.289 50%, 2.1.1000 50%.
+Left out, as `ccdrift cost` leaves them out: main-thread responses in Agent SDK sessions, 1 before and 2 after.
+Quota points count every surface on the account, claude.ai included, on the days the status line sampled them.
+A difference inside either side's range is not evidence the change did anything.
+"""
+
+
+def test_the_command_prints_each_sides_days_the_table_and_what_frames_it(tmp_path, capsys, monkeypatch):
+    two_sides(tmp_path / "logs")
+    monkeypatch.setattr(compare, "fitted_prices", lambda tables: OPUS)
+    state = tmp_path / "home" / "state.json"
+    quota_beside(state, SIDES_SAMPLES)
+    assert run_compare(tmp_path / "logs", state, AT, days=3, today=TODAY) == 0
+    assert capsys.readouterr().out == EXPECTED
+
+
+def test_rows_with_no_figure_show_a_dash_and_the_lines_below_say_why(tmp_path, capsys):
+    two_sides(tmp_path / "logs")
+    assert run_compare(tmp_path / "logs", tmp_path / "home" / "state.json", AT, days=3, today=TODAY) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[6].split() == ["dollars", "per", "day", "-", "-"]
+    assert not any(line.startswith("quota points per day") for line in lines)
+    assert lines[-3:] == [
+        "No quota samples on these days: ccdrift keeps them once your status line runs `ccdrift status --short "
+        "--stdin`.",
+        "No cost records price these days, so they have no dollar figures.",
+        "A difference inside either side's range is not evidence the change did anything."]
+
+
+def test_a_model_with_no_price_beside_priced_ones_is_named_with_its_share(tmp_path, capsys, monkeypatch):
+    two_sides(tmp_path / "logs")
+    write(tmp_path / "logs" / "p" / "s4.jsonl", [
+        line("f1", text(40), ts=day_at(5, 30), sid="s4", entrypoint="cli", out=20_000, model="claude-fable-5-1")])
+    monkeypatch.setattr(compare, "fitted_prices", lambda tables: OPUS)
+    assert run_compare(tmp_path / "logs", tmp_path / "home" / "state.json", AT, days=3, today=TODAY) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert ("No price for claude-fable-5-1 (0.4%): a day where unpriced models carry 1% of its tokens has no "
+            "dollar figure.") in lines
+    assert lines[6].startswith("dollars per day         $37.50 (")
+
+
+def test_the_json_is_the_summary_and_names_no_path_session_or_project(tmp_path, capsys, monkeypatch):
+    two_sides(tmp_path / "logs", project="secret-client")
+    monkeypatch.setattr(compare, "fitted_prices", lambda tables: OPUS)
+    state = tmp_path / "home" / "state.json"
+    quota_beside(state, SIDES_SAMPLES)
+    assert run_compare(tmp_path / "logs", state, AT, days=3, as_json=True, today=TODAY) == 0
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert set(payload) == {"at", "days", "before", "after", "metrics", "priced_models", "unpriced"}
+    assert payload["metrics"]["quota_points"]["after"] == {"median": 3.5, "low": 1.0, "high": 6.0, "days": 2}
+    assert payload["priced_models"] == ["claude-opus-5"]
+    assert "secret-client" not in out and str(tmp_path) not in out
+    assert not any(f'"{sid}"' in out for sid in ("s1", "s2", "s3"))
+
+
+def test_a_day_that_is_not_past_yet_is_refused_before_the_history_is_read(tmp_path, capsys):
+    for day in (TODAY, date(2026, 9, 20)):
+        assert run_compare(tmp_path / "nowhere", tmp_path / "state.json", day, days=3, today=TODAY) == 2
+        assert capsys.readouterr().err == (f"--at {day.isoformat()} is not a past day: compare needs complete days "
+                                           "after it.\n")
+    assert not (tmp_path / "history.sqlite").exists()
+
+
+def test_a_side_with_no_responses_outside_the_sdk_is_refused_and_says_which(tmp_path, capsys):
+    two_sides(tmp_path / "logs")
+    state = tmp_path / "home" / "state.json"
+    assert run_compare(tmp_path / "logs", state, date(2026, 9, 11), days=3, today=TODAY) == 2
+    assert capsys.readouterr().err == ("No complete day after 2026-09-11 holds responses outside Agent SDK sessions "
+                                       "yet.\n")
+    assert run_compare(tmp_path / "logs", state, date(2026, 9, 9), days=3, today=TODAY) == 2
+    assert capsys.readouterr().err.startswith("No complete day after 2026-09-09 ")
+    assert run_compare(tmp_path / "logs", state, date(2026, 9, 5), days=3, today=TODAY) == 2
+    assert capsys.readouterr().err == ("None of the 3 days before 2026-09-05 holds responses outside Agent SDK "
+                                       "sessions.\n")
+
+
+def test_an_unusable_store_exits_1_and_a_source_with_no_transcripts_exits_2(tmp_path, capsys):
+    two_sides(tmp_path / "logs")
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / "history.sqlite").write_text("not a database")
+    assert run_compare(tmp_path / "logs", tmp_path / "home" / "state.json", AT, days=3, today=TODAY) == 1
+    assert "Move it aside" in capsys.readouterr().err
+    (tmp_path / "empty").mkdir()
+    assert run_compare(tmp_path / "empty", tmp_path / "other" / "state.json", AT, days=3, today=TODAY) == 2
+    assert "No Claude Code transcripts found" in capsys.readouterr().err
+
+
+def test_with_no_days_given_each_side_is_a_week(tmp_path, capsys):
+    two_sides(tmp_path / "logs")
+    assert run_compare(tmp_path / "logs", tmp_path / "home" / "state.json", AT, as_json=True,
+                       today=date(2026, 9, 30)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert (payload["days"], payload["before"]["first"], payload["after"]["last"]) == (7, "2026-09-01", "2026-09-15")
+
+
+def test_the_command_line_passes_its_date_days_and_json_through(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(compare, "run_compare", lambda *args, **kwargs: calls.append((args, kwargs)) or 0)
+    paths = ["--source", str(tmp_path / "logs"), "--state", str(tmp_path / "state.json")]
+    assert main(["compare", "--at", "2026-09-08", "--days", "3", "--json", *paths]) == 0
+    assert main(["compare", "--at", "2026-09-08", *paths]) == 0
+    assert [(args[2], kwargs) for args, kwargs in calls] == [
+        (date(2026, 9, 8), {"days": 3, "as_json": True}), (date(2026, 9, 8), {"days": None, "as_json": False})]
+    for bad in (["compare", *paths], ["compare", "--at", "2026-13-01", *paths],
+                ["compare", "--at", "2026-09-08", "--days", "0", *paths]):
+        with pytest.raises(SystemExit):
+            main(bad)
+
+
+def test_a_sides_compactions_print_as_a_count_and_their_range_and_a_side_without_versions_says_so():
+    # Two significant figures, as the version table prints token counts.
+    assert compactions_cell({"count": 3, "min": 820_000, "median": 904_000, "max": 968_000}) == (
+        "3: 820k-970k, median 900k")
+    assert compactions_cell({"count": 3, "min": 968_000, "median": 969_000, "max": 970_000}) == "3 at 970k"
+    assert compactions_cell({"count": 1, "min": 670_000, "median": 670_000, "max": 670_000}) == "1 at 670k"
+    assert compactions_cell({"count": 0, "min": None, "median": None, "max": None}) == "none"
+    assert versions_text({}) == "none"
+
+
+def test_a_version_that_ran_at_all_shows_as_under_1_percent_rather_than_as_0():
+    assert versions_text({"2.1.276": 0.012, "2.1.278": 0.004, "2.1.280": 0.984}) == (
+        "2.1.276 1%, 2.1.278 <1%, 2.1.280 98%")
+
+
+def test_counts_of_left_out_responses_print_with_thousands_separators(tmp_path):
+    summary = compare_summary(two_sides(tmp_path), AT, 3, TODAY, [])
+    summary["before"]["sdk_left_out"], summary["after"]["sdk_left_out"] = 1925, 395
+    assert ("Left out, as `ccdrift cost` leaves them out: main-thread responses in Agent SDK sessions, 1,925 "
+            "before and 395 after.") in compare.compare_lines(summary)

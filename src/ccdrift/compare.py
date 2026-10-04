@@ -9,17 +9,25 @@ number here."""
 
 from __future__ import annotations
 
+import json
 import math
+import sys
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Sequence
+from pathlib import Path
+from typing import Any, Optional, Sequence
 
 import pandas as pd
 
+from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import Tables, outside_sdk
 from ccdrift.prices import Price
+from ccdrift.quota import quota_path, read_samples
 from ccdrift.sessions import session_starts
-from ccdrift.spend import fitted_prices, priced_total, spend_turns, unpriced_models
-from ccdrift.texts import version_key
+from ccdrift.spend import (MATERIAL_SHARE, fitted_prices, priced_in_window, priced_total, spend_turns,
+                           unpriced_models)
+from ccdrift.texts import (COMPARE_LINES, COMPARE_ROWS, COMPARE_TABLE, SIDE_NAMES, compactions_cell,
+                           no_transcripts_message, spread_cell, starts_cell, table_header, table_row,
+                           unpriced_models_text, version_key, versions_text)
 
 # Days on each side when --days isn't given: a week, so each side holds every weekday once
 # and a weekly rhythm in the work lands on both sides rather than on one.
@@ -192,4 +200,77 @@ def compare_summary(tables: Tables, at: date, days: int, today: date, samples: S
             "before": side(before), "after": side(after),
             "metrics": {name: {"before": spread(daily[name], before), "after": spread(daily[name], after)}
                         for name in METRICS},
+            "priced_models": sorted(priced_in_window(turns, prices)),
             "unpriced": [{"model": model, "share": share} for model, share in unpriced_models(turns, prices)]}
+
+
+def compare_lines(summary: dict[str, Any]) -> list[str]:
+    """The comparison as the terminal shows it: each side's days, the table, then what
+    frames it: versions, what was left out, the quota rows' reach and models with no price."""
+    before, after, metrics = summary["before"], summary["after"], summary["metrics"]
+    lines = [COMPARE_LINES["before"].format(at=summary["at"], first=before["first"], last=before["last"],
+                                            present=before["days_with_responses"], spanned=before["days_spanned"]),
+             COMPARE_LINES["after"].format(first=after["first"], last=after["last"],
+                                           present=after["days_with_responses"], spanned=after["days_spanned"]),
+             COMPARE_LINES["neither"].format(at=summary["at"]),
+             COMPARE_LINES["cells"], "", table_header(COMPARE_TABLE)]
+    for metric in ("dollars_per_day", "dollars_per_prompt", "context_per_response"):
+        lines.append(table_row(COMPARE_TABLE, [COMPARE_ROWS[metric], spread_cell(metric, metrics[metric]["before"]),
+                                               spread_cell(metric, metrics[metric]["after"])]))
+    lines.append(table_row(COMPARE_TABLE, [COMPARE_ROWS["session_start"],
+                                           starts_cell(metrics["session_start"]["before"], before["session_starts"]),
+                                           starts_cell(metrics["session_start"]["after"], after["session_starts"])]))
+    lines.append(table_row(COMPARE_TABLE, [COMPARE_ROWS["compactions"], compactions_cell(before["compactions"]),
+                                           compactions_cell(after["compactions"])]))
+    quota = metrics["quota_points"]
+    sampled = quota["before"]["days"] or quota["after"]["days"]
+    if sampled:
+        lines.append(table_row(COMPARE_TABLE, [COMPARE_ROWS["quota_points"],
+                                               spread_cell("quota_points", quota["before"]),
+                                               spread_cell("quota_points", quota["after"])]))
+    lines.append("")
+    lines += [COMPARE_LINES["versions"].format(side=SIDE_NAMES[name],
+                                               versions=versions_text(summary[name]["versions"]))
+              for name in ("before", "after")]
+    lines.append(COMPARE_LINES["sdk"].format(before=before["sdk_left_out"], after=after["sdk_left_out"]))
+    lines.append(COMPARE_LINES["quota" if sampled else "no_quota"])
+    if not summary["priced_models"]:
+        lines.append(COMPARE_LINES["no_prices"])
+    elif summary["unpriced"]:
+        lines.append(COMPARE_LINES["unpriced"].format(models=unpriced_models_text(summary["unpriced"]),
+                                                      cutoff=MATERIAL_SHARE))
+    lines.append(COMPARE_LINES["not_evidence"])
+    return lines
+
+
+def compare_json(summary: dict[str, Any]) -> str:
+    """The comparison as JSON: the summary itself, which holds aggregates only."""
+    return json.dumps(summary, indent=1) + "\n"
+
+
+def run_compare(source: Path, state_path: Path, at: date, days: Optional[int] = None, as_json: bool = False,
+                today: Optional[date] = None) -> int:
+    """Print the days before `at` beside the days after it. Reads the history like `cost`
+    and the quota samples beside the state file, saves nothing, and judges nothing."""
+    today = today or datetime.now(timezone.utc).date()
+    days = days or DEFAULT_DAYS
+    if at >= today:
+        print(COMPARE_LINES["at_not_past"].format(at=at.isoformat()), file=sys.stderr)
+        return 2
+    try:
+        tables = load_history(source, state_path, claim=False)
+    except HistoryError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if tables.responses.empty:
+        print(no_transcripts_message(source), file=sys.stderr)
+        return 2
+    summary = compare_summary(tables, at, days, today, read_samples(quota_path(state_path)))
+    if not summary["after"]["days_with_responses"]:
+        print(COMPARE_LINES["no_after"].format(at=at.isoformat()), file=sys.stderr)
+        return 2
+    if not summary["before"]["days_with_responses"]:
+        print(COMPARE_LINES["no_before"].format(days=days, at=at.isoformat()), file=sys.stderr)
+        return 2
+    print(compare_json(summary) if as_json else "\n".join(compare_lines(summary)) + "\n", end="")
+    return 0
