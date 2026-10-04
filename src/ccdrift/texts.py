@@ -970,11 +970,13 @@ COMPARE_LINES = {"before": "Before {at}: {first} to {last}, {present} of {spanne
                           "status line sampled them.",
                  "no_quota": "No quota samples on these days: ccdrift keeps them once your status line runs "
                              "`ccdrift status --short --stdin`.",
-                 "unpriced": "No price for {models}: a day where unpriced models carry {cutoff:.0%} of its tokens "
+                 "unpriced": "No price for {models}: its spend is left out of the dollars on a day where unpriced "
+                             "models stay under {cutoff:.0%} of its tokens, and a day where they reach {cutoff:.0%} "
                              "has no dollar figure.",
                  "no_prices": "No cost records price these days, so they have no dollar figures.",
                  "not_evidence": "A difference inside either side's range is not evidence the change did anything.",
                  "at_not_past": "--at {at} is not a past day: compare needs complete days after it.",
+                 "no_day_after": "{at} was yesterday: compare needs a complete day after it. Run it again tomorrow.",
                  "no_after": "No complete day after {at} holds responses outside Agent SDK sessions yet.",
                  "no_before": "None of the {days} days before {at} holds responses outside Agent SDK sessions."}
 COMPARE_TABLE = (("", "<22"), ("before", "<36"), ("after", ""))

@@ -113,22 +113,28 @@ def _readings(samples: Sequence[Any]) -> list[tuple[datetime, float, Any]]:
 def quota_points(samples: Sequence[Any]) -> pd.Series:
     """Quota points used each UTC day, from the 7-day window's used share in the status
     line samples: how far each sample raised the highest share seen so far in its window
-    (one resets_at), counted on that sample's day. A day sampled with no rise used 0; a
-    window's first sample has nothing to rise from and gives its day no figure.
+    (one resets_at), counted on that sample's day when the window's sample before it is
+    from the same day. A day sampled with no rise used 0.
 
     The highest so far, not each rise between neighbours. On the owner's samples (526 of
     them, 2026-09-28 to 2026-10-04) 31 of the 33 falls inside one window were undone by the
     very next sample: a session idle since an older reading interleaving with a busy one.
-    Summing every rise counted 42 points on 09-30, where the highest share rose by 20."""
+    Summing every rise counted 42 points on 09-30, where the highest share rose by 20.
+
+    Only rises seen within one day. What was used between a day's last sample and the next
+    day's first, on claude.ai or another machine or while this one was off, belongs to no
+    day this machine sampled, so it is left out rather than added to whichever day the
+    samples resume on, which could be the first day after the date being compared. A
+    window's first sample of a day gives that day no rise of its own."""
     level: dict[Any, float] = {}
+    last_day: dict[Any, str] = {}
     points: dict[str, float] = {}
     for when, used, window in sorted(_readings(samples), key=lambda reading: reading[0]):
-        if window in level:
-            day = when.date().isoformat()
+        day = when.date().isoformat()
+        if last_day.get(window) == day:
             points[day] = points.get(day, 0.0) + max(0.0, used - level[window])
-            level[window] = max(level[window], used)
-        else:
-            level[window] = used
+        level[window] = max(level.get(window, used), used)
+        last_day[window] = day
     return pd.Series(points, dtype="float64").sort_index(kind="stable")
 
 
@@ -266,6 +272,9 @@ def run_compare(source: Path, state_path: Path, at: date, days: Optional[int] = 
         print(no_transcripts_message(source), file=sys.stderr)
         return 2
     summary = compare_summary(tables, at, days, today, read_samples(quota_path(state_path)))
+    if not summary["after"]["days_spanned"]:
+        print(COMPARE_LINES["no_day_after"].format(at=at.isoformat()), file=sys.stderr)
+        return 2
     if not summary["after"]["days_with_responses"]:
         print(COMPARE_LINES["no_after"].format(at=at.isoformat()), file=sys.stderr)
         return 2

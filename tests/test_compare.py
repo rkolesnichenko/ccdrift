@@ -133,16 +133,25 @@ def test_quota_points_count_how_far_each_sample_raised_the_highest_share_so_far_
 
 
 def test_a_reset_starts_a_new_window_whose_first_sample_rises_from_nothing():
+    # The old window's 96 after the reset is a stale reading from a session idle since then.
     samples = [sample("2026-09-05T10:00:00+00:00", 90, resets=1), sample("2026-09-05T23:00:00+00:00", 95, resets=1),
                sample("2026-09-06T01:00:00+00:00", 2, resets=2), sample("2026-09-06T05:00:00+00:00", 5, resets=2),
                sample("2026-09-06T06:00:00+00:00", 96, resets=1)]
-    assert quota_points(samples).to_dict() == {"2026-09-05": 5.0, "2026-09-06": 4.0}
+    assert quota_points(samples).to_dict() == {"2026-09-05": 5.0, "2026-09-06": 3.0}
 
 
 def test_a_day_sampled_with_no_rise_used_no_points_and_a_day_counts_by_its_samples_utc_date():
     samples = [sample("2026-09-05T22:00:00+00:00", 10), sample("2026-09-06T01:30:00+03:00", 12),
-               sample("2026-09-06T10:00:00+00:00", 12)]
+               sample("2026-09-06T10:00:00+00:00", 12), sample("2026-09-06T11:00:00+00:00", 12)]
     assert quota_points(samples).to_dict() == {"2026-09-05": 2.0, "2026-09-06": 0.0}
+
+
+def test_points_used_while_nothing_was_sampled_are_not_added_to_the_next_sampled_day():
+    # Nothing sampled from Sep 6 to 8: the 28 points used then, on claude.ai or another
+    # machine, belong to no day this machine saw, least of all Sep 9.
+    samples = [sample("2026-09-05T10:00:00+00:00", 10), sample("2026-09-05T20:00:00+00:00", 12),
+               sample("2026-09-09T09:00:00+00:00", 40), sample("2026-09-09T20:00:00+00:00", 41)]
+    assert quota_points(samples).to_dict() == {"2026-09-05": 2.0, "2026-09-09": 1.0}
 
 
 def test_samples_without_a_usable_seven_day_window_or_time_are_skipped():
@@ -163,6 +172,12 @@ def test_a_sides_spread_is_its_median_lowest_and_highest_day_and_how_many_of_its
     assert spread(daily, ["2026-09-05", "2026-09-06", "2026-09-07"]) == {"median": 3.0, "low": 1.0, "high": 8.0,
                                                                          "days": 3}
     assert spread(daily, ["2026-09-10"]) == {"median": None, "low": None, "high": None, "days": 0}
+
+
+# 4 points on Sep 6, then 6 on Sep 9 and 1 on Sep 10, each seen rising within its own day.
+SIDES_SAMPLES = [sample("2026-09-06T10:00:00+00:00", 10), sample("2026-09-06T12:00:00+00:00", 14),
+                 sample("2026-09-09T10:00:00+00:00", 20), sample("2026-09-09T12:00:00+00:00", 26),
+                 sample("2026-09-10T10:00:00+00:00", 26), sample("2026-09-10T12:00:00+00:00", 27)]
 
 
 def two_sides(tmp_path, project="p"):
@@ -232,9 +247,7 @@ def test_each_side_counts_its_session_starts_and_reports_their_median_size(tmp_p
 
 
 def test_the_quota_row_reads_the_samples_it_is_given_on_each_sides_days(tmp_path):
-    samples = [sample("2026-09-06T10:00:00+00:00", 10), sample("2026-09-06T12:00:00+00:00", 14),
-               sample("2026-09-09T12:00:00+00:00", 20), sample("2026-09-10T12:00:00+00:00", 21)]
-    summary = compare_summary(two_sides(tmp_path), AT, 3, TODAY, samples)
+    summary = compare_summary(two_sides(tmp_path), AT, 3, TODAY, SIDES_SAMPLES)
     assert summary["metrics"]["quota_points"]["before"] == {"median": 4.0, "low": 4.0, "high": 4.0, "days": 1}
     assert summary["metrics"]["quota_points"]["after"] == {"median": 3.5, "low": 1.0, "high": 6.0, "days": 2}
 
@@ -251,8 +264,6 @@ def quota_beside(state, samples):
     (state.parent / "quota.jsonl").write_text("".join(json.dumps(one) + "\n" for one in samples))
 
 
-SIDES_SAMPLES = [sample("2026-09-06T10:00:00+00:00", 10), sample("2026-09-06T12:00:00+00:00", 14),
-                 sample("2026-09-09T12:00:00+00:00", 20), sample("2026-09-10T12:00:00+00:00", 21)]
 
 EXPECTED = """\
 Before 2026-09-08: 2026-09-05 to 2026-09-07, 2 of 3 days with responses.
@@ -305,8 +316,8 @@ def test_a_model_with_no_price_beside_priced_ones_is_named_with_its_share(tmp_pa
     monkeypatch.setattr(compare, "fitted_prices", lambda tables: OPUS)
     assert run_compare(tmp_path / "logs", tmp_path / "home" / "state.json", AT, days=3, today=TODAY) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert ("No price for claude-fable-5-1 (0.4%): a day where unpriced models carry 1% of its tokens has no "
-            "dollar figure.") in lines
+    assert ("No price for claude-fable-5-1 (0.4%): its spend is left out of the dollars on a day where unpriced "
+            "models stay under 1% of its tokens, and a day where they reach 1% has no dollar figure.") in lines
     assert lines[6].startswith("dollars per day         $37.50 (")
 
 
@@ -337,8 +348,8 @@ def test_a_side_with_no_responses_outside_the_sdk_is_refused_and_says_which(tmp_
     two_sides(tmp_path / "logs")
     state = tmp_path / "home" / "state.json"
     assert run_compare(tmp_path / "logs", state, date(2026, 9, 11), days=3, today=TODAY) == 2
-    assert capsys.readouterr().err == ("No complete day after 2026-09-11 holds responses outside Agent SDK sessions "
-                                       "yet.\n")
+    assert capsys.readouterr().err == ("2026-09-11 was yesterday: compare needs a complete day after it. Run it "
+                                       "again tomorrow.\n")
     assert run_compare(tmp_path / "logs", state, date(2026, 9, 9), days=3, today=TODAY) == 2
     assert capsys.readouterr().err.startswith("No complete day after 2026-09-09 ")
     assert run_compare(tmp_path / "logs", state, date(2026, 9, 5), days=3, today=TODAY) == 2
