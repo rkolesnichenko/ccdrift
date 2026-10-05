@@ -117,6 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_source(compare)
     _add_state(compare)
 
+    rate = commands.add_parser("quota", help="what a point of the 7-day usage limit cost, day by day")
+    rate.add_argument("--days", type=_days, default=None, help="how many recent sampled days to cover (default: 14)")
+    rate.add_argument("--json", action="store_true", help="print the rates as JSON")
+    _add_source(rate)
+    _add_state(rate)
+
     status = commands.add_parser("status", help="how the last check went and what ccdrift is following")
     status.add_argument("--short", action="store_true",
                         help="one line when something needs attention, nothing otherwise (for a status line)")
@@ -305,6 +311,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         from ccdrift.compare import run_compare
         return run_compare(_source(args), _state(args), date.fromisoformat(args.at), days=args.days,
                            as_json=args.json)
+    if args.command == "quota":
+        from ccdrift.exchange import run_quota
+        return run_quota(_source(args), _state(args), days=args.days, as_json=args.json)
     if args.command == "status":
         from ccdrift.status import run_status
         if args.stdin and not args.short:

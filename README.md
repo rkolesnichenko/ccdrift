@@ -211,10 +211,10 @@ printf '%s' "$input" | ccdrift status --short --stdin
 `~/.ccdrift/quota.jsonl` (beside the state file), holds its time, the Claude Code version,
 the model and the limits' numbers, and nothing else from the JSON. Nothing alerts on the
 samples yet: a rule on how fast a limit fills for the tokens you use needs weeks of them,
-which is why collecting starts first. `ccdrift status` counts them, and `ccdrift compare`
-shows the quota points used each day. With no samples after a
-few responses, your plan's limits aren't in the JSON, which Claude Code sends only on Pro
-and Max plans.
+which is why collecting starts first. `ccdrift status` counts them, `ccdrift compare`
+shows the quota points used each day, and `ccdrift quota` what each point cost. With no
+samples after a few responses, your plan's limits aren't in the JSON, which Claude Code
+sends only on Pro and Max plans.
 
 ## Alerts elsewhere
 
@@ -243,6 +243,7 @@ ccdrift check [--notify] [--exec CMD] [--no-digest] [--source DIR] [--state FILE
 ccdrift report [--days N] [--by day|version] [--json | --html FILE] [--source DIR] [--state FILE]
 ccdrift cost [--days N] [--by thread|agent|skill|plugin|mcp|model|project|branch] [--json] [--source DIR] [--state FILE]
 ccdrift compare --at DATE [--days N] [--json] [--source DIR] [--state FILE]
+ccdrift quota [--days N] [--json] [--source DIR] [--state FILE]
 ccdrift status [--short [--stdin]] [--state FILE]
 ccdrift incident list [--source DIR] [--state FILE]
 ccdrift incident add {cache|haiku|subagent-cache} START..END [--state FILE]
@@ -259,7 +260,7 @@ ccdrift --version
 
 `report` covers the last 21 days by default, and every version with `--by version`;
 `cost` covers the last 30 days with responses; `compare` puts the 7 days before a date
-beside the 7 days after it.
+beside the 7 days after it; `quota` covers the last 14 days the status line sampled.
 
 `report --by version` also shows each version's median session start size once it has
 3 or more sessions, where automatic compaction started, up to 2 release note lines
@@ -334,6 +335,20 @@ measured on real logs, which `compare` doesn't have. It lists the versions each 
 rather than refusing when Claude Code updated in between, so read a difference against
 them. `compare --json` holds the same aggregates, with no paths, session ids or project
 names.
+
+`ccdrift quota` says what a point of the 7-day usage limit cost: the list price of this
+machine's responses in the hours your status line sampled, over the points the limit rose
+in those hours, day by day and over the window. It counts every response on this machine,
+both threads and Agent SDK sessions alike, since any of them can run on your plan, and says
+what share of the dollars the SDK carried. A point is counted when the highest share seen
+so far rises between two samples of one UTC day, so an idle session's older reading can't
+count twice and use between a day's last sample and the next day's first is left out. The
+window's rate is its dollars over its points, so a quiet day can't swing it; each day's own
+rate sits beside its point count. It lists any point that rose while this machine logged
+nothing since the limit last moved: use on claude.ai or another device, or by someone else.
+The rate is for all models together, since the status line carries no per-model limit, and
+like `compare` it judges nothing yet. `quota --json` holds the same aggregates, an empty
+rise as its day and points only.
 
 Transcripts are read from `$CLAUDE_CONFIG_DIR/projects` when that variable is set,
 otherwise from `~/.claude/projects`. With `--source` pointed at one project's own
