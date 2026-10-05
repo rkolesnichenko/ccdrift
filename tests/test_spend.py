@@ -672,7 +672,7 @@ def test_a_rounding_error_model_no_longer_blanks_the_bucket_it_landed_in(tmp_pat
     run_spend(tmp_path / "logs", state, today=TODAY)
     out = capsys.readouterr().out
     assert "$36.00" in out.splitlines()[0]
-    assert out.splitlines()[2].startswith("No price for claude-fable-5-1, 0.0% of the window's tokens:")
+    assert out.splitlines()[2].startswith("No price for claude-fable-5-1, <0.1% of the window's tokens:")
     assert "$11.00" in bucket_line(out, "subagent")
     assert "$25.00" in bucket_line(out, "main thread")
     # The bucket that is the model says it once: repeating its own name explains nothing.

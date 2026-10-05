@@ -38,11 +38,12 @@ METRICS = ("dollars_per_day", "dollars_per_prompt", "context_per_response", "ses
 
 
 def sides(at: date, days: int, today: date) -> tuple[list[str], list[str]]:
-    """The calendar days of each side as ISO dates: the `days` before `at`, and those of the
-    `days` after it that are complete, so none on or after `today`. `at` is on neither
-    side: the change was made some time that day."""
-    before = [(at - timedelta(days=k)).isoformat() for k in range(days, 0, -1)]
-    after = [(at + timedelta(days=k)).isoformat() for k in range(1, days + 1) if at + timedelta(days=k) < today]
+    """The calendar days of each side as ISO dates: the `days` before `at`, back no further
+    than the first date Python holds, and those of the `days` after it that are complete,
+    so none on or after `today`. `at` is on neither side: the change was made some time
+    that day."""
+    before = [(at - timedelta(days=k)).isoformat() for k in range(min(days, (at - date.min).days), 0, -1)]
+    after = [(at + timedelta(days=k)).isoformat() for k in range(1, min(days, (today - at).days - 1) + 1)]
     return before, after
 
 
@@ -148,14 +149,16 @@ def spread(daily: pd.Series, days: Sequence[str]) -> dict[str, Any]:
 
 
 def compaction_spread(compactions: pd.DataFrame, days: Sequence[str]) -> dict[str, Any]:
-    """A side's compactions, counted with the smallest, median and largest context each
-    began at. Too few on most days for a daily median, and the one that stands out is the
-    one worth seeing, so they are not summarised by day."""
-    values = (compactions.loc[_days(compactions).isin(list(days)), "pre_tokens"].dropna().astype(float)
-              if not compactions.empty else pd.Series(dtype="float64"))
+    """A side's compactions, counted with how many logged no size and the smallest, median
+    and largest context the others began at. Too few on most days for a daily median, and
+    the one that stands out is the one worth seeing, so they are not summarised by day."""
+    sizes = (compactions.loc[_days(compactions).isin(list(days)), "pre_tokens"]
+             if not compactions.empty else pd.Series(dtype="float64"))
+    values = sizes.dropna().astype(float)
+    count, unknown = int(len(sizes)), int(sizes.isna().sum())
     if values.empty:
-        return {"count": 0, "min": None, "median": None, "max": None}
-    return {"count": int(len(values)), "min": float(values.min()), "median": float(values.median()),
+        return {"count": count, "unknown": unknown, "min": None, "median": None, "max": None}
+    return {"count": count, "unknown": unknown, "min": float(values.min()), "median": float(values.median()),
             "max": float(values.max())}
 
 
@@ -206,6 +209,7 @@ def compare_summary(tables: Tables, at: date, days: int, today: date, samples: S
             "before": side(before), "after": side(after),
             "metrics": {name: {"before": spread(daily[name], before), "after": spread(daily[name], after)}
                         for name in METRICS},
+            "quota_samples": len(samples),
             "priced_models": sorted(priced_in_window(turns, prices)),
             "unpriced": [{"model": model, "share": share} for model, share in unpriced_models(turns, prices)]}
 
@@ -239,12 +243,17 @@ def compare_lines(summary: dict[str, Any]) -> list[str]:
                                                versions=versions_text(summary[name]["versions"]))
               for name in ("before", "after")]
     lines.append(COMPARE_LINES["sdk"].format(before=before["sdk_left_out"], after=after["sdk_left_out"]))
-    lines.append(COMPARE_LINES["quota" if sampled else "no_quota"])
+    if sampled:
+        lines.append(COMPARE_LINES["quota"])
+    elif summary["quota_samples"]:
+        lines.append(COMPARE_LINES["quota_none_here"].format(samples=summary["quota_samples"]))
+    else:
+        lines.append(COMPARE_LINES["no_quota"])
     if not summary["priced_models"]:
         lines.append(COMPARE_LINES["no_prices"])
     elif summary["unpriced"]:
-        lines.append(COMPARE_LINES["unpriced"].format(models=unpriced_models_text(summary["unpriced"]),
-                                                      cutoff=MATERIAL_SHARE))
+        lines.append(COMPARE_LINES["unpriced_one" if len(summary["unpriced"]) == 1 else "unpriced_many"].format(
+            models=unpriced_models_text(summary["unpriced"]), cutoff=MATERIAL_SHARE))
     lines.append(COMPARE_LINES["not_evidence"])
     return lines
 
@@ -252,6 +261,14 @@ def compare_lines(summary: dict[str, Any]) -> list[str]:
 def compare_json(summary: dict[str, Any]) -> str:
     """The comparison as JSON: the summary itself, which holds aggregates only."""
     return json.dumps(summary, indent=1) + "\n"
+
+
+def _refusal(line: str, side: dict[str, Any]) -> str:
+    """A refusal for a side with nothing outside the Agent SDK, with how many SDK responses
+    it left out when there were some: those are why the side looks empty."""
+    if not side["sdk_left_out"]:
+        return line
+    return f"{line} {COMPARE_LINES['sdk_refused'].format(sdk=side['sdk_left_out'])}"
 
 
 def run_compare(source: Path, state_path: Path, at: date, days: Optional[int] = None, as_json: bool = False,
@@ -276,10 +293,11 @@ def run_compare(source: Path, state_path: Path, at: date, days: Optional[int] = 
         print(COMPARE_LINES["no_day_after"].format(at=at.isoformat()), file=sys.stderr)
         return 2
     if not summary["after"]["days_with_responses"]:
-        print(COMPARE_LINES["no_after"].format(at=at.isoformat()), file=sys.stderr)
+        print(_refusal(COMPARE_LINES["no_after"].format(at=at.isoformat()), summary["after"]), file=sys.stderr)
         return 2
     if not summary["before"]["days_with_responses"]:
-        print(COMPARE_LINES["no_before"].format(days=days, at=at.isoformat()), file=sys.stderr)
+        print(_refusal(COMPARE_LINES["no_before"].format(days=days, at=at.isoformat()), summary["before"]),
+              file=sys.stderr)
         return 2
     print(compare_json(summary) if as_json else "\n".join(compare_lines(summary)) + "\n", end="")
     return 0
