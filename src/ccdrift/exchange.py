@@ -8,8 +8,18 @@ rate needs weeks of samples on both sides of a change, and a gate measured on th
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Iterator, NamedTuple, Sequence
+
+import pandas as pd
+
+from ccdrift.logs import Tables, outside_sdk
+from ccdrift.prices import Price
+from ccdrift.spend import fitted_prices, priced_in_window, priced_total, response_dollars, unpriced_models
+
+# Days in the window when --days isn't given: two of the 7-day limit's weeks, so a reset
+# falls inside it and each day of the week appears twice.
+DEFAULT_DAYS = 14
 
 
 class Step(NamedTuple):
@@ -71,3 +81,88 @@ def steps(found: Sequence[tuple[datetime, float, Any]]) -> Iterator[Step]:
         if window not in level or used > level[window]:
             level[window], level_at[window] = used, when
         last_day[window] = day
+
+
+def spans(found: Sequence[tuple[datetime, float, Any]]) -> dict[str, list[tuple[datetime, datetime]]]:
+    """Each UTC day's sampled spans: for every window sampled that day, its first and last
+    sample's time. A reset day has one span per window, and they can overlap, since an idle
+    session can still show the old window after the reset."""
+    bounds: dict[tuple[str, Any], tuple[datetime, datetime]] = {}
+    for when, _, window in found:
+        key = (when.date().isoformat(), window)
+        bounds[key] = (bounds[key][0] if key in bounds else when, when)
+    out: dict[str, list[tuple[datetime, datetime]]] = {}
+    for (day, _), span in bounds.items():
+        out.setdefault(day, []).append(span)
+    return out
+
+
+def _within(times: pd.Series, start: datetime, end: datetime) -> pd.Series:
+    return (times > start) & (times <= end)
+
+
+def in_spans(responses: pd.DataFrame, day_spans: Sequence[tuple[datetime, datetime]]) -> pd.DataFrame:
+    """The responses timestamped inside any of `day_spans`, each once however many of the
+    spans it falls in."""
+    mask = pd.Series(False, index=responses.index)
+    for start, end in day_spans:
+        mask |= _within(responses["timestamp"], start, end)
+    return responses[mask]
+
+
+def empty_rises(responses: pd.DataFrame, found: Sequence[Step]) -> list[Step]:
+    """The steps that raised a window's highest share while this machine logged no response
+    at all since that share was set: use on another surface, or by someone else. Counted by
+    responses rather than dollars, so a response with no price is still activity."""
+    times = responses["timestamp"]
+    return [step for step in found if step.points > 0 and not _within(times, step.since, step.when).any()]
+
+
+def day_rows(responses: pd.DataFrame, prices: dict[str, Price], found: Sequence[tuple[datetime, float, Any]],
+             days: Sequence[str]) -> list[dict[str, Any]]:
+    """One row per day of `days`: its points, the list dollars of this machine's responses
+    in its sampled spans (none when its unpriced models carry MATERIAL_SHARE of their tokens,
+    as `cost` decides), and dollars per point when both exist and points rose."""
+    points: dict[str, float] = {}
+    for step in steps(found):
+        points[step.day] = points.get(step.day, 0.0) + step.points
+    day_spans = spans(found)
+    rows = []
+    for day in days:
+        dollars = priced_total(in_spans(responses, day_spans.get(day, [])), prices)
+        gained = points.get(day, 0.0)
+        rows.append({"day": day, "points": gained, "dollars": dollars,
+                     "rate": dollars / gained if dollars is not None and gained > 0 else None})
+    return rows
+
+
+def quota_summary(tables: Tables, samples: Sequence[Any], days: int, today: date) -> dict[str, Any]:
+    """Everything `ccdrift quota` reports, as plain values: the window's days, each day's
+    points, dollars and rate, the window's dollars over its points on the days that have
+    both, the spread of the day rates, the Agent SDK share of the window's dollars, the
+    models with no price, the empty rises, and how many samples there were. Every response
+    on this machine counts, both threads and Agent SDK sessions alike."""
+    found = readings(samples)
+    walked = list(steps(found))
+    window = sorted({step.day for step in walked if step.day < today.isoformat()})[-days:]
+    responses = tables.responses
+    prices = fitted_prices(tables)
+    rows = day_rows(responses, prices, found, window)
+    day_spans = spans(found)
+    counted = pd.concat([in_spans(responses, day_spans[day]) for day in window]) if window else responses.iloc[0:0]
+    priced = [row for row in rows if row["rate"] is not None]
+    points, dollars = sum(row["points"] for row in priced), sum(row["dollars"] for row in priced)
+    rates = pd.Series([row["rate"] for row in priced], dtype="float64")
+    spent = response_dollars(counted, prices)
+    total = float(spent.sum())
+    return {"first": window[0] if window else None, "last": window[-1] if window else None, "days": rows,
+            "points": points, "dollars": dollars if priced else None, "rate": dollars / points if priced else None,
+            "day_rates": ({"median": float(rates.median()), "low": float(rates.min()), "high": float(rates.max())}
+                          if priced else None),
+            "sdk_share": float(spent[~outside_sdk(counted)].sum()) / total if total > 0 else None,
+            "priced_models": sorted(priced_in_window(counted, prices)),
+            "unpriced": [{"model": model, "share": share} for model, share in unpriced_models(counted, prices)],
+            "empty": [{"when": step.when.isoformat(), "day": step.day, "points": step.points,
+                       "minutes": round((step.when - step.since).total_seconds() / 60)}
+                      for step in empty_rises(responses, [step for step in walked if step.day in window])],
+            "samples": len(samples)}
