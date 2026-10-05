@@ -272,13 +272,13 @@ After: 2026-09-09 to 2026-09-11, 1 of 3 days with responses outside Agent SDK se
 2026-09-08 itself is on neither side.
 Each cell: the median day (lowest-highest day, days with a figure).
 
-                        before                                    after
-dollars per day         $37.50 ($25.00-$50.00, 2d)                $50.00 ($50.00-$50.00, 1d)
-dollars per prompt      $37.50 ($25.00-$50.00, 2d)                $50.00 ($50.00-$50.00, 1d)
-context per response    10 (10-10, 2d)                            10 (10-10, 1d)
-session start           10 (10-10, 1d), 1 start                   10 (10-10, 1d), 1 start
-auto-compactions        none                                      none
-quota points per day    4 (4-4, 1d)                               3.5 (1-6, 2d)
+                        before                                            after
+dollars per day         $37.50 ($25.00-$50.00, 2d)                        $50.00 ($50.00-$50.00, 1d)
+dollars per prompt      $37.50 ($25.00-$50.00, 2d)                        $50.00 ($50.00-$50.00, 1d)
+context per response    10 (10-10, 2d)                                    10 (10-10, 1d)
+session start           10 (10-10, 1d), 1 start                           10 (10-10, 1d), 1 start
+auto-compactions        none                                              none
+quota points per day    4 (4-4, 1d)                                       3.5 (1-6, 2d)
 
 Versions before: 2.1.280 100%.
 Versions after: 2.1.289 50%, 2.1.1000 50%.
@@ -318,7 +318,7 @@ def test_a_model_with_no_price_beside_priced_ones_is_named_with_its_share(tmp_pa
     assert run_compare(tmp_path / "logs", tmp_path / "home" / "state.json", AT, days=3, today=TODAY) == 0
     lines = capsys.readouterr().out.splitlines()
     assert ("No price for claude-fable-5-1 (0.4%): its spend is left out of the dollars on a day where it stays under "
-            "1% of its tokens, and a day where it reaches 1% has no dollar figure.") in lines
+            "1% of that day's tokens, and a day where it reaches 1% has no dollar figure.") in lines
     assert lines[6].startswith("dollars per day         $37.50 (")
 
 
@@ -427,11 +427,11 @@ def unpriced_summary(tmp_path, unpriced):
 def test_one_unpriced_model_says_its_spend_and_several_say_their_spend(tmp_path):
     one = compare.compare_lines(unpriced_summary(tmp_path, [{"model": "claude-fable-5-1", "share": 0.004}]))
     assert ("No price for claude-fable-5-1 (0.4%): its spend is left out of the dollars on a day where it stays under "
-            "1% of its tokens, and a day where it reaches 1% has no dollar figure.") in one
+            "1% of that day's tokens, and a day where it reaches 1% has no dollar figure.") in one
     two = compare.compare_lines(unpriced_summary(tmp_path, [{"model": "claude-fable-5-1", "share": 0.001},
                                                             {"model": "claude-sonnet-5-5", "share": 0.0002}]))
     assert ("No price for claude-fable-5-1 (0.1%), claude-sonnet-5-5 (<0.1%): their spend is left out of the dollars "
-            "on a day where they stay under 1% of its tokens, and a day where they reach 1% has no dollar "
+            "on a day where they stay under 1% of that day's tokens, and a day where they reach 1% has no dollar "
             "figure.") in two
 
 
@@ -455,7 +455,9 @@ def test_compactions_with_no_size_logged_are_counted_and_said_to_be_of_unknown_s
                                                       "max": 968_000}
     assert compaction_spread(compactions, after) == {"count": 1, "unknown": 1, "min": None, "median": None,
                                                      "max": None}
-    assert compactions_cell(compaction_spread(compactions, before)) == "2 at 970k, 1 of unknown size"
+    assert compactions_cell(compaction_spread(compactions, before)) == "1 at 970k, 1 of unknown size"
+    assert compactions_cell({"count": 3, "unknown": 1, "min": 820_000, "median": 904_000, "max": 968_000}) == (
+        "2: 820k-970k, median 900k, 1 of unknown size")
     assert compactions_cell(compaction_spread(compactions, after)) == "1, size unknown"
     assert compactions_cell({"count": 1500, "unknown": 0, "min": 820_000, "median": 904_000, "max": 968_000}) == (
         "1,500: 820k-970k, median 900k")
@@ -472,7 +474,7 @@ def test_quota_samples_that_give_no_rise_on_these_days_are_not_mistaken_for_no_s
     summary = compare_summary(two_sides(tmp_path), AT, 3, TODAY, only_five_hour)
     assert summary["quota_samples"] == 2
     lines = compare.compare_lines(summary)
-    assert ("None of the 2 status line samples on file shows the 7-day limit rising within one day on these "
+    assert ("None of the status line samples on file (2) shows the 7-day limit rising within one day on these "
             "days.") in lines
     assert not any(line.startswith("No quota samples") for line in lines)
     assert compare_summary(two_sides(tmp_path / "again"), AT, 3, TODAY, [])["quota_samples"] == 0
@@ -522,3 +524,29 @@ def test_a_day_held_only_by_subagents_is_a_day_with_responses_but_names_no_main_
     summary = compare_summary(parse_all(tmp_path), AT, 3, TODAY, [])
     assert summary["after"]["days_with_responses"] == 1
     assert "Versions after: no main-thread responses." in compare.compare_lines(summary)
+
+
+def test_one_response_left_out_of_a_refusal_is_said_in_the_singular(tmp_path, capsys):
+    write(tmp_path / "logs" / "p" / "s1.jsonl", [line("m1", text(40), ts=day_at(4), entrypoint="cli")])
+    write(tmp_path / "logs" / "p" / "s2.jsonl", [line("x1", text(40), ts=day_at(8), sid="s2", entrypoint="sdk-py")])
+    assert run_compare(tmp_path / "logs", tmp_path / "home" / "state.json", AT, days=3, today=TODAY) == 2
+    assert capsys.readouterr().err == ("No complete day after 2026-09-08 holds responses outside Agent SDK sessions "
+                                       "yet. 1 main-thread response in Agent SDK sessions was left out.\n")
+
+
+def test_a_refused_before_side_names_the_days_it_holds_not_the_days_asked_for(tmp_path, capsys):
+    two_sides(tmp_path / "logs")
+    day = date(2026, 9, 1)
+    assert run_compare(tmp_path / "logs", tmp_path / "home" / "state.json", day, days=1_000_000, today=TODAY) == 2
+    assert capsys.readouterr().err == (f"None of the {(day - date.min).days:,} days before 2026-09-01 holds responses "
+                                       "outside Agent SDK sessions.\n")
+
+
+def test_a_compactions_cell_with_a_range_and_unknown_sizes_keeps_the_after_column_in_line(tmp_path):
+    summary = compare_summary(two_sides(tmp_path), AT, 3, TODAY, [])
+    summary["before"]["compactions"] = {"count": 15, "unknown": 3, "min": 820_000, "median": 904_000,
+                                        "max": 968_000}
+    summary["after"]["compactions"] = {"count": 1, "unknown": 0, "min": 670_000, "median": 670_000, "max": 670_000}
+    lines = compare.compare_lines(summary)
+    row = next(line for line in lines if line.startswith("auto-compactions"))
+    assert row.index("1 at 670k") == lines[5].index("after")

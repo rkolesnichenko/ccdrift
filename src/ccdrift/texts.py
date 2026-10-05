@@ -89,7 +89,7 @@ def spend_line(bucket: str, responses: int, tokens: float, share: float, dollars
     else:
         money = ""
     pooled = f"  {projects} projects" if projects > 1 else ""
-    return f"  {bucket:<34}  {responses:>8,}  {approx(tokens):>7}  {share:>6.1%}{money}{pooled}"
+    return f"  {bucket:<34}  {responses:>8,}  {approx(tokens):>7}  {share_text(share):>6}{money}{pooled}"
 
 
 # Models named in the "no price" line before it gives up and counts the rest.
@@ -979,23 +979,26 @@ COMPARE_LINES = {"before": "Before {at}: {first} to {last}, {present:,} of {span
                           "status line sampled them.",
                  "no_quota": "No quota samples on these days: ccdrift keeps them once your status line runs "
                              "`ccdrift status --short --stdin`.",
-                 "quota_none_here": "None of the {samples:,} status line samples on file shows the 7-day limit "
+                 "quota_none_here": "None of the status line samples on file ({samples:,}) shows the 7-day limit "
                                     "rising within one day on these days.",
                  "unpriced_one": "No price for {models}: its spend is left out of the dollars on a day where it stays "
-                                 "under {cutoff:.0%} of its tokens, and a day where it reaches {cutoff:.0%} has no "
-                                 "dollar figure.",
+                                 "under {cutoff:.0%} of that day's tokens, and a day where it reaches {cutoff:.0%} has "
+                                 "no dollar figure.",
                  "unpriced_many": "No price for {models}: their spend is left out of the dollars on a day where they "
-                                  "stay under {cutoff:.0%} of its tokens, and a day where they reach {cutoff:.0%} has "
-                                  "no dollar figure.",
+                                  "stay under {cutoff:.0%} of that day's tokens, and a day where they reach "
+                                  "{cutoff:.0%} has no dollar figure.",
                  "no_prices": "No cost records price these days, so they have no dollar figures.",
                  "not_evidence": "A difference inside either side's range is not evidence the change did anything.",
                  "at_not_past": "--at {at} is not a past day: compare needs complete days after it.",
                  "no_day_after": "{at} was yesterday: compare needs a complete day after it. Run it again tomorrow.",
                  "no_after": "No complete day after {at} holds responses outside Agent SDK sessions yet.",
                  "no_before": "None of the {days:,} days before {at} holds responses outside Agent SDK sessions.",
+                 "sdk_refused_one": "1 main-thread response in Agent SDK sessions was left out.",
                  "sdk_refused": "{sdk:,} main-thread responses in Agent SDK sessions were left out."}
-# The before column holds a cell of five-figure dollars a day, "$99,999.99 ($99,999.99-$99,999.99, 7d)".
-COMPARE_TABLE = (("", "<22"), ("before", "<40"), ("after", ""))
+# The before column holds its widest likely cells: five-figure dollars a day, "$99,999.99
+# ($99,999.99-$99,999.99, 7d)", and two-digit compactions with a range and unknown sizes,
+# "12: 820k-970k, median 900k, 3 of unknown size".
+COMPARE_TABLE = (("", "<22"), ("before", "<48"), ("after", ""))
 COMPARE_ROWS = {"dollars_per_day": "dollars per day", "dollars_per_prompt": "dollars per prompt",
                 "context_per_response": "context per response", "session_start": "session start",
                 "quota_points": "quota points per day", "compactions": "auto-compactions"}
@@ -1031,15 +1034,16 @@ def starts_cell(spread: dict[str, Any], starts: int) -> str:
 
 def compactions_cell(compactions: dict[str, Any]) -> str:
     """"3: 820k-970k, median 900k", "3 at 970k" when the smallest and largest print alike,
-    "2 at 970k, 1 of unknown size" when a compaction logged no size, "1, size unknown" when
-    none did, or "none"."""
+    "1 at 970k, 1 of unknown size" when a compaction logged no size (the sizes count only the
+    compactions that have one), "1, size unknown" when none did, or "none"."""
     count, unknown = compactions["count"], compactions["unknown"]
     if not count:
         return "none"
     if unknown == count:
         return f"{count:,}, size unknown"
+    known = count - unknown
     low, high = approx(compactions["min"]), approx(compactions["max"])
-    sizes = f"{count:,} at {low}" if low == high else f"{count:,}: {low}-{high}, median {approx(compactions['median'])}"
+    sizes = f"{known:,} at {low}" if low == high else f"{known:,}: {low}-{high}, median {approx(compactions['median'])}"
     return sizes + (f", {unknown:,} of unknown size" if unknown else "")
 
 

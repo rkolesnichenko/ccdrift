@@ -677,6 +677,8 @@ def test_a_rounding_error_model_no_longer_blanks_the_bucket_it_landed_in(tmp_pat
     assert "$25.00" in bucket_line(out, "main thread")
     # The bucket that is the model says it once: repeating its own name explains nothing.
     assert bucket_line(out, "claude-fable-5-1").endswith("no price")
+    # Its share, like the line above, says it is there rather than 0.0%.
+    assert "  <0.1%  " in bucket_line(out, "claude-fable-5-1")
 
 
 def test_a_bucket_a_model_with_no_price_weighs_on_still_names_it(tmp_path, capsys):

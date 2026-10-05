@@ -268,6 +268,8 @@ def _refusal(line: str, side: dict[str, Any]) -> str:
     it left out when there were some: those are why the side looks empty."""
     if not side["sdk_left_out"]:
         return line
+    if side["sdk_left_out"] == 1:
+        return f"{line} {COMPARE_LINES['sdk_refused_one']}"
     return f"{line} {COMPARE_LINES['sdk_refused'].format(sdk=side['sdk_left_out'])}"
 
 
@@ -296,7 +298,8 @@ def run_compare(source: Path, state_path: Path, at: date, days: Optional[int] = 
         print(_refusal(COMPARE_LINES["no_after"].format(at=at.isoformat()), summary["after"]), file=sys.stderr)
         return 2
     if not summary["before"]["days_with_responses"]:
-        print(_refusal(COMPARE_LINES["no_before"].format(days=days, at=at.isoformat()), summary["before"]),
+        print(_refusal(COMPARE_LINES["no_before"].format(days=summary["before"]["days_spanned"], at=at.isoformat()),
+                       summary["before"]),
               file=sys.stderr)
         return 2
     print(compare_json(summary) if as_json else "\n".join(compare_lines(summary)) + "\n", end="")
