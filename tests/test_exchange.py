@@ -252,7 +252,9 @@ def test_with_no_cost_records_every_figure_is_a_dash_and_the_window_says_no_day_
     assert run_quota(tmp_path / "logs", state, today=TODAY) == 0
     lines = capsys.readouterr().out.splitlines()
     assert lines[1] == "2026-09-01 to 2026-09-02: no day has both points and a dollar figure."
-    assert lines[4].split() == ["2026-09-01", "4", "-", "-"]
+    assert lines[2] == ("The window's figures leave out 2 days that have points and no dollar figure, and their "
+                        "7 points.")
+    assert lines[5].split() == ["2026-09-01", "4", "-", "-"]
     assert "No cost records price these days, so they have no dollar figures." in lines
     assert "Counted: every response on this machine, both threads, Agent SDK sessions included." in lines
 
@@ -265,8 +267,8 @@ def test_the_json_is_the_summary_with_empty_rises_as_day_and_points_and_names_no
     assert run_quota(tmp_path / "logs", state, as_json=True, today=TODAY) == 0
     out = capsys.readouterr().out
     payload = json.loads(out)
-    assert set(payload) == {"first", "last", "days", "points", "dollars", "rate", "day_rates", "sdk_share",
-                            "priced_models", "unpriced", "empty", "samples"}
+    assert set(payload) == {"first", "last", "days", "points", "dollars", "rate", "day_rates", "left_out",
+                            "sdk_share", "priced_models", "unpriced", "responses", "empty", "samples"}
     assert payload["empty"] == [{"day": "2026-09-02", "points": 2.0}]
     assert payload["rate"] == pytest.approx(4 * ONE / 7)
     assert "secret-client" not in out and str(tmp_path) not in out and '"s1"' not in out and "11:30" not in out
@@ -319,3 +321,55 @@ def test_the_command_line_passes_its_days_and_json_through(tmp_path, monkeypatch
 def test_a_rise_of_one_point_after_one_minute_is_said_in_the_singular():
     assert empty_rise_line({"when": "2026-09-02T11:30:00+00:00", "day": "2026-09-02", "points": 1.0,
                             "minutes": 1}) == "  09-02 11:30, 1 point, nothing on this machine in the 1 minute before"
+
+
+def test_a_quiet_days_dollars_count_in_the_windows_rate_though_its_share_rose_on_a_later_day(tmp_path, monkeypatch):
+    # Shares are whole numbers: Sep 1's response bought part of the point that shows on Sep 2.
+    samples = [sample("2026-09-01T10:00:00+00:00", 10), sample("2026-09-01T12:00:00+00:00", 10),
+               sample("2026-09-02T10:00:00+00:00", 10), sample("2026-09-02T12:00:00+00:00", 11)]
+    records = [answer("m1", "2026-09-01T11:00:00+00:00"), answer("n1", "2026-09-02T11:00:00+00:00")]
+    summary = summary_of(tmp_path, monkeypatch, records, samples)
+    assert (summary["points"], summary["dollars"], summary["rate"]) == (1.0, pytest.approx(2 * ONE),
+                                                                         pytest.approx(2 * ONE))
+    assert summary["day_rates"] == pytest.approx({"median": ONE, "low": ONE, "high": ONE})
+
+
+def test_the_sdk_share_is_taken_over_the_same_days_dollars_as_the_window(tmp_path, monkeypatch):
+    # Sep 1 has no dollar figure (its unpriced model carries most of its tokens), so its
+    # Agent SDK response is in neither the window's dollars nor their SDK share.
+    samples = [sample("2026-09-01T10:00:00+00:00", 10), sample("2026-09-01T12:00:00+00:00", 12),
+               sample("2026-09-02T10:00:00+00:00", 20), sample("2026-09-02T12:00:00+00:00", 21)]
+    records = [answer("m1", "2026-09-01T10:30:00+00:00"), answer("f1", "2026-09-01T10:40:00+00:00",
+                                                                    model="claude-fable-5-1"),
+               answer("x1", "2026-09-01T11:00:00+00:00", entrypoint="sdk-py"),
+               answer("n1", "2026-09-02T11:00:00+00:00")]
+    summary = summary_of(tmp_path, monkeypatch, records, samples)
+    assert summary["days"][0]["dollars"] is None
+    assert summary["sdk_share"] == 0.0
+
+
+def test_a_day_with_points_and_no_dollar_figure_is_named_as_left_out_of_the_windows_figures(
+        tmp_path, capsys, monkeypatch):
+    state = tmp_path / "home" / "state.json"
+    # Sep 3 has no dollar figure either, but gained no point, so there is nothing to leave out.
+    samples_beside(state, [sample("2026-09-01T10:00:00+00:00", 10), sample("2026-09-01T12:00:00+00:00", 12),
+                           sample("2026-09-02T10:00:00+00:00", 20), sample("2026-09-02T12:00:00+00:00", 25),
+                           sample("2026-09-03T10:00:00+00:00", 25), sample("2026-09-03T12:00:00+00:00", 25)])
+    write(tmp_path / "logs" / "p" / "s1.jsonl", [answer("m1", "2026-09-01T11:00:00+00:00")])
+    monkeypatch.setattr(exchange, "fitted_prices", lambda tables: OPUS)
+    assert run_quota(tmp_path / "logs", state, today=TODAY) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1].startswith("2026-09-01 to 2026-09-03: 2 points, ")
+    assert lines[2] == "The window's figures leave out 1 day that has points and no dollar figure, and its 5 points."
+
+
+def test_with_no_response_in_any_sampled_hour_it_says_so_rather_than_that_there_are_no_cost_records(
+        tmp_path, capsys, monkeypatch):
+    state = tmp_path / "home" / "state.json"
+    samples_beside(state, [sample("2026-09-01T10:00:00+00:00", 10), sample("2026-09-01T12:00:00+00:00", 12)])
+    write(tmp_path / "logs" / "p" / "s1.jsonl", [answer("m1", "2026-09-01T09:30:00+00:00")])
+    monkeypatch.setattr(exchange, "fitted_prices", lambda tables: OPUS)
+    assert run_quota(tmp_path / "logs", state, today=TODAY) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert "No response on this machine fell in the hours the status line sampled." in lines
+    assert "No cost records price these days, so they have no dollar figures." not in lines

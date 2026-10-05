@@ -22,8 +22,8 @@ from ccdrift.prices import Price
 from ccdrift.quota import quota_path, read_samples
 from ccdrift.spend import (MATERIAL_SHARE, fitted_prices, priced_in_window, priced_total, response_dollars,
                            unpriced_models)
-from ccdrift.texts import (COMPARE_LINES, QUOTA_LINES, QUOTA_TABLE, empty_rise_line, no_transcripts_message,
-                           quota_row, table_header, unpriced_models_text)
+from ccdrift.texts import (COMPARE_LINES, QUOTA_LINES, QUOTA_TABLE, empty_rise_line, left_out_line,
+                           no_transcripts_message, quota_row, table_header, unpriced_models_text)
 
 # Days in the window when --days isn't given: two of the 7-day limit's weeks, so a reset
 # falls inside it and each day of the week appears twice.
@@ -146,10 +146,15 @@ def day_rows(responses: pd.DataFrame, prices: dict[str, Price], found: Sequence[
 
 def quota_summary(tables: Tables, samples: Sequence[Any], days: int, today: date) -> dict[str, Any]:
     """Everything `ccdrift quota` reports, as plain values: the window's days, each day's
-    points, dollars and rate, the window's dollars over its points on the days that have
-    both, the spread of the day rates, the Agent SDK share of the window's dollars, the
-    models with no price, the empty rises, and how many samples there were. Every response
-    on this machine counts, both threads and Agent SDK sessions alike."""
+    points, dollars and rate, the window's dollars over its points on every day with a
+    dollar figure, the days with points and none, the spread of the day rates, the Agent
+    SDK share of the window's dollars, the models with no price, how many responses fell in
+    the sampled hours, the empty rises, and how many samples there were. Every response on
+    this machine counts, both threads and Agent SDK sessions alike.
+
+    A day that gained no point still adds its dollars to the window's: shares are whole
+    numbers, so what a quiet day bought shows up in a later day's rise, and leaving its
+    dollars out would understate the rate wherever use is light."""
     found = readings(samples)
     walked = list(steps(found))
     window = sorted({step.day for step in walked if step.day < today.isoformat()})[-days:]
@@ -158,22 +163,26 @@ def quota_summary(tables: Tables, samples: Sequence[Any], days: int, today: date
     rows = day_rows(responses, prices, found, window)
     day_spans = spans(found)
     counted = pd.concat([in_spans(responses, day_spans[day]) for day in window]) if window else responses.iloc[0:0]
-    priced = [row for row in rows if row["rate"] is not None]
-    points, dollars = sum(row["points"] for row in priced), sum(row["dollars"] for row in priced)
-    rates = pd.Series([row["rate"] for row in priced], dtype="float64")
-    spent = response_dollars(counted, prices)
+    dated = [row for row in rows if row["dollars"] is not None]
+    left = [row for row in rows if row["dollars"] is None and row["points"] > 0]
+    points, dollars = sum(row["points"] for row in dated), sum(row["dollars"] for row in dated)
+    rates = pd.Series([row["rate"] for row in rows if row["rate"] is not None], dtype="float64")
+    paid = (pd.concat([in_spans(responses, day_spans[row["day"]]) for row in dated]) if dated
+            else responses.iloc[0:0])
+    spent = response_dollars(paid, prices)
     total = float(spent.sum())
     return {"first": window[0] if window else None, "last": window[-1] if window else None, "days": rows,
-            "points": points, "dollars": dollars if priced else None, "rate": dollars / points if priced else None,
+            "points": points, "dollars": dollars if dated else None, "rate": dollars / points if points > 0 else None,
             "day_rates": ({"median": float(rates.median()), "low": float(rates.min()), "high": float(rates.max())}
-                          if priced else None),
-            "sdk_share": float(spent[~outside_sdk(counted)].sum()) / total if total > 0 else None,
+                          if points > 0 else None),
+            "left_out": {"days": len(left), "points": sum(row["points"] for row in left)},
+            "sdk_share": float(spent[~outside_sdk(paid)].sum()) / total if total > 0 else None,
             "priced_models": sorted(priced_in_window(counted, prices)),
             "unpriced": [{"model": model, "share": share} for model, share in unpriced_models(counted, prices)],
             "empty": [{"when": step.when.isoformat(), "day": step.day, "points": step.points,
                        "minutes": round((step.when - step.since).total_seconds() / 60)}
                       for step in empty_rises(responses, [step for step in walked if step.day in window])],
-            "samples": len(samples)}
+            "responses": len(counted), "samples": len(samples)}
 
 
 def quota_lines(summary: dict[str, Any]) -> list[str]:
@@ -188,12 +197,16 @@ def quota_lines(summary: dict[str, Any]) -> list[str]:
                                                   points=summary["points"], dollars=summary["dollars"],
                                                   rate=summary["rate"], median=spread["median"], low=spread["low"],
                                                   high=spread["high"]))
+    if summary["left_out"]["days"]:
+        lines.append(left_out_line(summary["left_out"]["days"], summary["left_out"]["points"]))
     lines += ["", table_header(QUOTA_TABLE), *[quota_row(row) for row in summary["days"]], ""]
     if summary["empty"]:
         lines += [QUOTA_LINES["empty"], *[empty_rise_line(rise) for rise in summary["empty"]]]
     else:
         lines.append(QUOTA_LINES["no_empty"])
-    if not summary["priced_models"]:
+    if not summary["responses"]:
+        lines.append(QUOTA_LINES["nothing_here"])
+    elif not summary["priced_models"]:
         lines.append(COMPARE_LINES["no_prices"])
     elif summary["unpriced"]:
         lines.append(COMPARE_LINES["unpriced_one" if len(summary["unpriced"]) == 1 else "unpriced_many"].format(

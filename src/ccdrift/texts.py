@@ -1069,6 +1069,11 @@ QUOTA_LINES = {"head": "Quota points of the 7-day limit, priced at list from thi
                "window": "{first} to {last}: {points:,g} points, ${dollars:,.2f} list, ${rate:,.2f} a point (days: "
                          "median ${median:,.2f}, lowest ${low:,.2f}, highest ${high:,.2f}).",
                "window_unpriced": "{first} to {last}: no day has both points and a dollar figure.",
+               "left_out_one": "The window's figures leave out 1 day that has points and no dollar figure, and "
+                               "its {points}.",
+               "left_out_many": "The window's figures leave out {days:,} days that have points and no dollar figure, "
+                                "and their {points}.",
+               "nothing_here": "No response on this machine fell in the hours the status line sampled.",
                "no_empty": "No point rose while this machine spent nothing.",
                "empty": "Points rose while this machine spent nothing (UTC):",
                "counted": "Counted: every response on this machine, both threads, Agent SDK sessions included "
@@ -1087,6 +1092,12 @@ def quota_row(row: dict[str, Any]) -> str:
     """One day of the table: "2026-09-28        10       182         18.20", "-" for a figure it hasn't."""
     return table_row(QUOTA_TABLE, [row["day"], format(row["points"], ",g"), number(row["dollars"], ",.0f"),
                                    number(row["rate"], ",.2f")])
+
+
+def left_out_line(days: int, points: float) -> str:
+    """The line naming the days the window's figures leave out: points, but no dollar figure."""
+    counted = f"{points:,g} point{'' if points == 1 else 's'}"
+    return QUOTA_LINES["left_out_one" if days == 1 else "left_out_many"].format(days=days, points=counted)
 
 
 def empty_rise_line(rise: dict[str, Any]) -> str:
