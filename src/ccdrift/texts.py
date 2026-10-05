@@ -1061,6 +1061,43 @@ def unpriced_models_text(unpriced: Sequence[dict[str, Any]]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# ccdrift quota
+# ---------------------------------------------------------------------------
+
+QUOTA_LINES = {"head": "Quota points of the 7-day limit, priced at list from this machine's responses in the hours "
+                       "the status line sampled.",
+               "window": "{first} to {last}: {points:,g} points, ${dollars:,.2f} list, ${rate:,.2f} a point (days: "
+                         "median ${median:,.2f}, lowest ${low:,.2f}, highest ${high:,.2f}).",
+               "window_unpriced": "{first} to {last}: no day has both points and a dollar figure.",
+               "no_empty": "No point rose while this machine spent nothing.",
+               "empty": "Points rose while this machine spent nothing (UTC):",
+               "counted": "Counted: every response on this machine, both threads, Agent SDK sessions included "
+                          "({share:.0%} of these dollars).",
+               "counted_plain": "Counted: every response on this machine, both threads, Agent SDK sessions included.",
+               "elsewhere": "This machine only: use on claude.ai or another device raises points with no dollars here.",
+               "models": "Per-model limits aren't in the status line, so the rate is for all models together.",
+               "no_samples": "No status line sample carries the 7-day limit yet: ccdrift keeps them once your status "
+                             "line runs `ccdrift status --short --stdin`, on Pro and Max plans.",
+               "no_steps": "None of the status line samples on file ({samples:,}) shows the 7-day limit twice in one "
+                           "day before today, so there is no point to price yet."}
+QUOTA_TABLE = (("day", "<10"), ("points", ">8"), ("list $", ">10"), ("$ per point", ">13"))
+
+
+def quota_row(row: dict[str, Any]) -> str:
+    """One day of the table: "2026-09-28        10       182         18.20", "-" for a figure it hasn't."""
+    return table_row(QUOTA_TABLE, [row["day"], format(row["points"], ",g"), number(row["dollars"], ",.0f"),
+                                   number(row["rate"], ",.2f")])
+
+
+def empty_rise_line(rise: dict[str, Any]) -> str:
+    """"  10-03 14:05, 3 points, nothing on this machine in the 40 minutes before"."""
+    when = datetime.fromisoformat(rise["when"])
+    points = f"{rise['points']:g} point{'' if rise['points'] == 1 else 's'}"
+    return (f"  {when.strftime('%m-%d %H:%M')}, {points}, nothing on this machine in the {rise['minutes']:,} "
+            f"minute{'' if rise['minutes'] == 1 else 's'} before")
+
+
+# ---------------------------------------------------------------------------
 # The report's sections from the rules: settings, subagents, projects, hooks, failures
 # ---------------------------------------------------------------------------
 

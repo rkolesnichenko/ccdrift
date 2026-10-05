@@ -7,15 +7,23 @@ rate needs weeks of samples on both sides of a change, and a gate measured on th
 
 from __future__ import annotations
 
+import json
 import math
+import sys
 from datetime import date, datetime, timezone
-from typing import Any, Iterator, NamedTuple, Sequence
+from pathlib import Path
+from typing import Any, Iterator, NamedTuple, Optional, Sequence
 
 import pandas as pd
 
+from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import Tables, outside_sdk
 from ccdrift.prices import Price
-from ccdrift.spend import fitted_prices, priced_in_window, priced_total, response_dollars, unpriced_models
+from ccdrift.quota import quota_path, read_samples
+from ccdrift.spend import (MATERIAL_SHARE, fitted_prices, priced_in_window, priced_total, response_dollars,
+                           unpriced_models)
+from ccdrift.texts import (COMPARE_LINES, QUOTA_LINES, QUOTA_TABLE, empty_rise_line, no_transcripts_message,
+                           quota_row, table_header, unpriced_models_text)
 
 # Days in the window when --days isn't given: two of the 7-day limit's weeks, so a reset
 # falls inside it and each day of the week appears twice.
@@ -166,3 +174,64 @@ def quota_summary(tables: Tables, samples: Sequence[Any], days: int, today: date
                        "minutes": round((step.when - step.since).total_seconds() / 60)}
                       for step in empty_rises(responses, [step for step in walked if step.day in window])],
             "samples": len(samples)}
+
+
+def quota_lines(summary: dict[str, Any]) -> list[str]:
+    """The rates as the terminal shows them: the window's rate and spread, a row a day, the
+    empty rises, then what was counted and what the rate can't see."""
+    lines = [QUOTA_LINES["head"]]
+    if summary["rate"] is None:
+        lines.append(QUOTA_LINES["window_unpriced"].format(first=summary["first"], last=summary["last"]))
+    else:
+        spread = summary["day_rates"]
+        lines.append(QUOTA_LINES["window"].format(first=summary["first"], last=summary["last"],
+                                                  points=summary["points"], dollars=summary["dollars"],
+                                                  rate=summary["rate"], median=spread["median"], low=spread["low"],
+                                                  high=spread["high"]))
+    lines += ["", table_header(QUOTA_TABLE), *[quota_row(row) for row in summary["days"]], ""]
+    if summary["empty"]:
+        lines += [QUOTA_LINES["empty"], *[empty_rise_line(rise) for rise in summary["empty"]]]
+    else:
+        lines.append(QUOTA_LINES["no_empty"])
+    if not summary["priced_models"]:
+        lines.append(COMPARE_LINES["no_prices"])
+    elif summary["unpriced"]:
+        lines.append(COMPARE_LINES["unpriced_one" if len(summary["unpriced"]) == 1 else "unpriced_many"].format(
+            models=unpriced_models_text(summary["unpriced"]), cutoff=MATERIAL_SHARE))
+    lines.append(QUOTA_LINES["counted_plain"] if summary["sdk_share"] is None
+                 else QUOTA_LINES["counted"].format(share=summary["sdk_share"]))
+    lines += [QUOTA_LINES["elsewhere"], QUOTA_LINES["models"]]
+    return lines
+
+
+def quota_json(summary: dict[str, Any]) -> str:
+    """The rates as JSON: the summary, with each empty rise as its day and points only."""
+    shared = {**summary, "empty": [{"day": rise["day"], "points": rise["points"]} for rise in summary["empty"]]}
+    return json.dumps(shared, indent=1) + "\n"
+
+
+def run_quota(source: Path, state_path: Path, days: Optional[int] = None, as_json: bool = False,
+              today: Optional[date] = None) -> int:
+    """Print what a point of the 7-day limit cost on each sampled day. Reads the samples beside
+    the state file first, so a machine with none is told how to start before the history is
+    read, then the history like `cost`. Saves nothing and judges nothing."""
+    today = today or datetime.now(timezone.utc).date()
+    samples = read_samples(quota_path(state_path))
+    found = readings(samples)
+    if not found:
+        print(QUOTA_LINES["no_samples"], file=sys.stderr)
+        return 2
+    if not any(step.day < today.isoformat() for step in steps(found)):
+        print(QUOTA_LINES["no_steps"].format(samples=len(samples)), file=sys.stderr)
+        return 2
+    try:
+        tables = load_history(source, state_path, claim=False)
+    except HistoryError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if tables.responses.empty:
+        print(no_transcripts_message(source), file=sys.stderr)
+        return 2
+    summary = quota_summary(tables, samples, days or DEFAULT_DAYS, today)
+    print(quota_json(summary) if as_json else "\n".join(quota_lines(summary)) + "\n", end="")
+    return 0

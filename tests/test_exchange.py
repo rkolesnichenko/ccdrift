@@ -1,11 +1,14 @@
 """What a point of the usage limit costs: the walk over the quota samples, and its prices."""
 
+import json
 from datetime import date, datetime, timezone
 
 import pytest
 
 from ccdrift import exchange
-from ccdrift.exchange import Step, day_rows, quota_summary, readings, steps
+from ccdrift.cli import main
+from ccdrift.exchange import Step, day_rows, quota_summary, readings, run_quota, steps
+from ccdrift.texts import empty_rise_line
 from ccdrift.logs import parse_all
 from ccdrift.prices import Price
 from tests.helpers import line, text, write
@@ -181,3 +184,138 @@ def test_the_summary_names_the_priced_and_unpriced_models_and_counts_the_samples
     assert summary["priced_models"] == ["claude-opus-5"]
     assert [model["model"] for model in summary["unpriced"]] == ["claude-fable-5-1"]
     assert summary["samples"] == 2
+
+
+def two_days(root, project="p"):
+    """Sep 1: 4 points over 10:00-12:00 while a main-thread, a subagent and an Agent SDK
+    response ran in it. Sep 2: 1 point bought by a response at 10:15, then 2 more by 11:30
+    with nothing on this machine since 10:30."""
+    write(root / project / "s1.jsonl", [
+        answer("m0", "2026-09-01T09:30:00+00:00"), answer("m1", "2026-09-01T10:30:00+00:00"),
+        answer("a1", "2026-09-01T10:40:00+00:00", sidechain=True),
+        answer("x1", "2026-09-01T11:30:00+00:00", entrypoint="sdk-py"),
+        answer("m2", "2026-09-02T10:15:00+00:00")])
+    return [sample("2026-09-01T10:00:00+00:00", 10), sample("2026-09-01T11:00:00+00:00", 12),
+            sample("2026-09-01T12:00:00+00:00", 14), sample("2026-09-02T10:00:00+00:00", 14),
+            sample("2026-09-02T10:30:00+00:00", 15), sample("2026-09-02T11:30:00+00:00", 17)]
+
+
+def samples_beside(state, samples):
+    """The quota samples file `ccdrift status --short --stdin` keeps beside the state file."""
+    state.parent.mkdir(parents=True, exist_ok=True)
+    (state.parent / "quota.jsonl").write_text("".join(json.dumps(one) + "\n" for one in samples))
+
+
+EXPECTED = """\
+Quota points of the 7-day limit, priced at list from this machine's responses in the hours the status line sampled.
+2026-09-01 to 2026-09-02: 7 points, $100.00 list, $14.29 a point (days: median $13.54, lowest $8.33, highest $18.75).
+
+day           points      list $    $ per point
+2026-09-01         4          75          18.75
+2026-09-02         3          25           8.33
+
+Points rose while this machine spent nothing (UTC):
+  09-02 11:30, 2 points, nothing on this machine in the 60 minutes before
+Counted: every response on this machine, both threads, Agent SDK sessions included (25% of these dollars).
+This machine only: use on claude.ai or another device raises points with no dollars here.
+Per-model limits aren't in the status line, so the rate is for all models together.
+"""
+
+
+def test_the_command_prints_the_windows_rate_a_row_a_day_the_empty_rises_and_what_it_counted(
+        tmp_path, capsys, monkeypatch):
+    state = tmp_path / "home" / "state.json"
+    samples_beside(state, two_days(tmp_path / "logs"))
+    monkeypatch.setattr(exchange, "fitted_prices", lambda tables: OPUS)
+    assert run_quota(tmp_path / "logs", state, today=TODAY) == 0
+    assert capsys.readouterr().out == EXPECTED
+
+
+def test_with_no_empty_rise_the_command_says_none_rose_and_names_a_model_with_no_price(
+        tmp_path, capsys, monkeypatch):
+    state = tmp_path / "home" / "state.json"
+    samples_beside(state, [sample("2026-09-01T10:00:00+00:00", 10), sample("2026-09-01T11:00:00+00:00", 12)])
+    write(tmp_path / "logs" / "p" / "s1.jsonl", [
+        answer("m1", "2026-09-01T10:30:00+00:00"),
+        line("f1", text(40), ts="2026-09-01T10:40:00Z", entrypoint="cli", model="claude-fable-5-1")])
+    monkeypatch.setattr(exchange, "fitted_prices", lambda tables: OPUS)
+    assert run_quota(tmp_path / "logs", state, today=TODAY) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert "No point rose while this machine spent nothing." in lines
+    assert ("No price for claude-fable-5-1 (<0.1%): its spend is left out of the dollars on a day where it stays "
+            "under 1% of that day's tokens, and a day where it reaches 1% has no dollar figure.") in lines
+
+
+def test_with_no_cost_records_every_figure_is_a_dash_and_the_window_says_no_day_has_one(tmp_path, capsys):
+    state = tmp_path / "home" / "state.json"
+    samples_beside(state, two_days(tmp_path / "logs"))
+    assert run_quota(tmp_path / "logs", state, today=TODAY) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1] == "2026-09-01 to 2026-09-02: no day has both points and a dollar figure."
+    assert lines[4].split() == ["2026-09-01", "4", "-", "-"]
+    assert "No cost records price these days, so they have no dollar figures." in lines
+    assert "Counted: every response on this machine, both threads, Agent SDK sessions included." in lines
+
+
+def test_the_json_is_the_summary_with_empty_rises_as_day_and_points_and_names_no_path_or_session(
+        tmp_path, capsys, monkeypatch):
+    state = tmp_path / "home" / "state.json"
+    samples_beside(state, two_days(tmp_path / "logs", project="secret-client"))
+    monkeypatch.setattr(exchange, "fitted_prices", lambda tables: OPUS)
+    assert run_quota(tmp_path / "logs", state, as_json=True, today=TODAY) == 0
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert set(payload) == {"first", "last", "days", "points", "dollars", "rate", "day_rates", "sdk_share",
+                            "priced_models", "unpriced", "empty", "samples"}
+    assert payload["empty"] == [{"day": "2026-09-02", "points": 2.0}]
+    assert payload["rate"] == pytest.approx(4 * ONE / 7)
+    assert "secret-client" not in out and str(tmp_path) not in out and '"s1"' not in out and "11:30" not in out
+
+
+def test_with_no_seven_day_sample_it_says_how_to_start_before_reading_the_history(tmp_path, capsys):
+    state = tmp_path / "home" / "state.json"
+    for samples in ([], [{"at": "2026-09-01T10:00:00+00:00", "five_hour": {"used_percentage": 5, "resets_at": 1}}]):
+        samples_beside(state, samples)
+        assert run_quota(tmp_path / "nowhere", state, today=TODAY) == 2
+        assert capsys.readouterr().err == (
+            "No status line sample carries the 7-day limit yet: ccdrift keeps them once your status line runs "
+            "`ccdrift status --short --stdin`, on Pro and Max plans.\n")
+    assert not (state.parent / "history.sqlite").exists()
+
+
+def test_samples_that_never_show_the_limit_twice_in_one_past_day_are_refused_with_their_count(tmp_path, capsys):
+    state = tmp_path / "home" / "state.json"
+    samples_beside(state, [sample("2026-09-01T10:00:00+00:00", 10), sample("2026-09-02T10:00:00+00:00", 12),
+                           sample("2026-09-10T08:00:00+00:00", 13), sample("2026-09-10T09:00:00+00:00", 14)])
+    assert run_quota(tmp_path / "nowhere", state, today=TODAY) == 2
+    assert capsys.readouterr().err == ("None of the status line samples on file (4) shows the 7-day limit twice in "
+                                       "one day before today, so there is no point to price yet.\n")
+
+
+def test_an_unusable_store_exits_1_and_a_source_with_no_transcripts_exits_2(tmp_path, capsys):
+    state = tmp_path / "home" / "state.json"
+    samples_beside(state, two_days(tmp_path / "logs"))
+    (state.parent / "history.sqlite").write_text("not a database")
+    assert run_quota(tmp_path / "logs", state, today=TODAY) == 1
+    assert "Move it aside" in capsys.readouterr().err
+    other = tmp_path / "other" / "state.json"
+    samples_beside(other, two_days(tmp_path / "unused"))
+    (tmp_path / "empty").mkdir()
+    assert run_quota(tmp_path / "empty", other, today=TODAY) == 2
+    assert "No Claude Code transcripts found" in capsys.readouterr().err
+
+
+def test_the_command_line_passes_its_days_and_json_through(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(exchange, "run_quota", lambda *args, **kwargs: calls.append(kwargs) or 0)
+    paths = ["--source", str(tmp_path / "logs"), "--state", str(tmp_path / "state.json")]
+    assert main(["quota", "--days", "3", "--json", *paths]) == 0
+    assert main(["quota", *paths]) == 0
+    assert calls == [{"days": 3, "as_json": True}, {"days": None, "as_json": False}]
+    with pytest.raises(SystemExit):
+        main(["quota", "--days", "0", *paths])
+
+
+def test_a_rise_of_one_point_after_one_minute_is_said_in_the_singular():
+    assert empty_rise_line({"when": "2026-09-02T11:30:00+00:00", "day": "2026-09-02", "points": 1.0,
+                            "minutes": 1}) == "  09-02 11:30, 1 point, nothing on this machine in the 1 minute before"
