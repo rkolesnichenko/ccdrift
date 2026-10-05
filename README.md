@@ -321,7 +321,8 @@ on neither side, since the change happened some time that day. It counts the res
 `cost` counts, so Agent SDK sessions are left out, and it says how many. Each side shows
 dollars per day; dollars per main-thread prompt, subagents' spend included; the median
 main-thread prompt size; the median session start; the automatic compactions, with the
-smallest, median and largest context each began at; and, on the days your status line
+smallest, median and largest context each began at, and those that logged no size counted
+apart; and, on the days your status line
 sampled them, the quota points used. A quota point counts every surface on your account,
 claude.ai included, so it can move with work this machine never saw. Dollars follow
 `cost`'s rule: a day whose models with no price carry 1% of its tokens has none.

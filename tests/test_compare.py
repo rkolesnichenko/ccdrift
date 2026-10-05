@@ -15,7 +15,7 @@ from ccdrift.logs import parse_all
 from ccdrift.prices import Price
 from ccdrift.quota import read_samples
 from ccdrift.spend import spend_turns
-from ccdrift.texts import compactions_cell, versions_text
+from ccdrift.texts import compactions_cell, share_text, starts_cell, versions_text
 from tests.helpers import DAY, at, compact_boundary, line, nth_day, prompt, text, write
 
 # Sep 8, with three days a side: before is Sep 5-7, after is Sep 9-11, and Sep 12 is today.
@@ -117,11 +117,12 @@ def test_only_main_thread_auto_compactions_outside_the_sdk_count_with_their_smal
     ])
     compactions = auto_compactions(parse_all(tmp_path).compactions)
     before, after = sides(AT, 3, TODAY)
-    assert compaction_spread(compactions, before) == {"count": 3, "min": 968_000, "median": 969_000,
+    assert compaction_spread(compactions, before) == {"count": 3, "unknown": 0, "min": 968_000, "median": 969_000,
                                                       "max": 970_000}
-    assert compaction_spread(compactions, after) == {"count": 1, "min": 670_000, "median": 670_000,
+    assert compaction_spread(compactions, after) == {"count": 1, "unknown": 0, "min": 670_000, "median": 670_000,
                                                      "max": 670_000}
-    assert compaction_spread(compactions.iloc[0:0], after) == {"count": 0, "min": None, "median": None, "max": None}
+    assert compaction_spread(compactions.iloc[0:0], after) == {"count": 0, "unknown": 0, "min": None, "median": None,
+                                                               "max": None}
 
 
 def test_quota_points_count_how_far_each_sample_raised_the_highest_share_so_far_not_every_rise():
@@ -266,18 +267,18 @@ def quota_beside(state, samples):
 
 
 EXPECTED = """\
-Before 2026-09-08: 2026-09-05 to 2026-09-07, 2 of 3 days with responses.
-After: 2026-09-09 to 2026-09-11, 1 of 3 days with responses.
+Before 2026-09-08: 2026-09-05 to 2026-09-07, 2 of 3 days with responses outside Agent SDK sessions.
+After: 2026-09-09 to 2026-09-11, 1 of 3 days with responses outside Agent SDK sessions.
 2026-09-08 itself is on neither side.
 Each cell: the median day (lowest-highest day, days with a figure).
 
-                        before                                after
-dollars per day         $37.50 ($25.00-$50.00, 2d)            $50.00 ($50.00-$50.00, 1d)
-dollars per prompt      $37.50 ($25.00-$50.00, 2d)            $50.00 ($50.00-$50.00, 1d)
-context per response    10 (10-10, 2d)                        10 (10-10, 1d)
-session start           10 (10-10, 1d), 1 start               10 (10-10, 1d), 1 start
-auto-compactions        none                                  none
-quota points per day    4 (4-4, 1d)                           3.5 (1-6, 2d)
+                        before                                            after
+dollars per day         $37.50 ($25.00-$50.00, 2d)                        $50.00 ($50.00-$50.00, 1d)
+dollars per prompt      $37.50 ($25.00-$50.00, 2d)                        $50.00 ($50.00-$50.00, 1d)
+context per response    10 (10-10, 2d)                                    10 (10-10, 1d)
+session start           10 (10-10, 1d), 1 start                           10 (10-10, 1d), 1 start
+auto-compactions        none                                              none
+quota points per day    4 (4-4, 1d)                                       3.5 (1-6, 2d)
 
 Versions before: 2.1.280 100%.
 Versions after: 2.1.289 50%, 2.1.1000 50%.
@@ -316,8 +317,8 @@ def test_a_model_with_no_price_beside_priced_ones_is_named_with_its_share(tmp_pa
     monkeypatch.setattr(compare, "fitted_prices", lambda tables: OPUS)
     assert run_compare(tmp_path / "logs", tmp_path / "home" / "state.json", AT, days=3, today=TODAY) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert ("No price for claude-fable-5-1 (0.4%): its spend is left out of the dollars on a day where unpriced "
-            "models stay under 1% of its tokens, and a day where they reach 1% has no dollar figure.") in lines
+    assert ("No price for claude-fable-5-1 (0.4%): its spend is left out of the dollars on a day where it stays under "
+            "1% of that day's tokens, and a day where it reaches 1% has no dollar figure.") in lines
     assert lines[6].startswith("dollars per day         $37.50 (")
 
 
@@ -329,7 +330,8 @@ def test_the_json_is_the_summary_and_names_no_path_session_or_project(tmp_path, 
     assert run_compare(tmp_path / "logs", state, AT, days=3, as_json=True, today=TODAY) == 0
     out = capsys.readouterr().out
     payload = json.loads(out)
-    assert set(payload) == {"at", "days", "before", "after", "metrics", "priced_models", "unpriced"}
+    assert set(payload) == {"at", "days", "before", "after", "metrics", "quota_samples", "priced_models", "unpriced"}
+    assert payload["quota_samples"] == len(SIDES_SAMPLES)
     assert payload["metrics"]["quota_points"]["after"] == {"median": 3.5, "low": 1.0, "high": 6.0, "days": 2}
     assert payload["priced_models"] == ["claude-opus-5"]
     assert "secret-client" not in out and str(tmp_path) not in out
@@ -351,7 +353,8 @@ def test_a_side_with_no_responses_outside_the_sdk_is_refused_and_says_which(tmp_
     assert capsys.readouterr().err == ("2026-09-11 was yesterday: compare needs a complete day after it. Run it "
                                        "again tomorrow.\n")
     assert run_compare(tmp_path / "logs", state, date(2026, 9, 9), days=3, today=TODAY) == 2
-    assert capsys.readouterr().err.startswith("No complete day after 2026-09-09 ")
+    assert capsys.readouterr().err == ("No complete day after 2026-09-09 holds responses outside Agent SDK sessions "
+                                       "yet.\n")
     assert run_compare(tmp_path / "logs", state, date(2026, 9, 5), days=3, today=TODAY) == 2
     assert capsys.readouterr().err == ("None of the 3 days before 2026-09-05 holds responses outside Agent SDK "
                                        "sessions.\n")
@@ -392,12 +395,14 @@ def test_the_command_line_passes_its_date_days_and_json_through(tmp_path, monkey
 
 def test_a_sides_compactions_print_as_a_count_and_their_range_and_a_side_without_versions_says_so():
     # Two significant figures, as the version table prints token counts.
-    assert compactions_cell({"count": 3, "min": 820_000, "median": 904_000, "max": 968_000}) == (
+    assert compactions_cell({"count": 3, "unknown": 0, "min": 820_000, "median": 904_000, "max": 968_000}) == (
         "3: 820k-970k, median 900k")
-    assert compactions_cell({"count": 3, "min": 968_000, "median": 969_000, "max": 970_000}) == "3 at 970k"
-    assert compactions_cell({"count": 1, "min": 670_000, "median": 670_000, "max": 670_000}) == "1 at 670k"
-    assert compactions_cell({"count": 0, "min": None, "median": None, "max": None}) == "none"
-    assert versions_text({}) == "none"
+    assert compactions_cell({"count": 3, "unknown": 0, "min": 968_000, "median": 969_000, "max": 970_000}) == (
+        "3 at 970k")
+    assert compactions_cell({"count": 1, "unknown": 0, "min": 670_000, "median": 670_000, "max": 670_000}) == (
+        "1 at 670k")
+    assert compactions_cell({"count": 0, "unknown": 0, "min": None, "median": None, "max": None}) == "none"
+    assert versions_text({}) == "no main-thread responses"
 
 
 def test_a_version_that_ran_at_all_shows_as_under_1_percent_rather_than_as_0():
@@ -410,3 +415,138 @@ def test_counts_of_left_out_responses_print_with_thousands_separators(tmp_path):
     summary["before"]["sdk_left_out"], summary["after"]["sdk_left_out"] = 1925, 395
     assert ("Left out, as `ccdrift cost` leaves them out: main-thread responses in Agent SDK sessions, 1,925 "
             "before and 395 after.") in compare.compare_lines(summary)
+
+
+def unpriced_summary(tmp_path, unpriced):
+    """The summary of two_sides with OPUS priced and `unpriced` as the models with no price."""
+    summary = compare_summary(two_sides(tmp_path), AT, 3, TODAY, [])
+    summary["priced_models"], summary["unpriced"] = ["claude-opus-5"], unpriced
+    return summary
+
+
+def test_one_unpriced_model_says_its_spend_and_several_say_their_spend(tmp_path):
+    one = compare.compare_lines(unpriced_summary(tmp_path, [{"model": "claude-fable-5-1", "share": 0.004}]))
+    assert ("No price for claude-fable-5-1 (0.4%): its spend is left out of the dollars on a day where it stays under "
+            "1% of that day's tokens, and a day where it reaches 1% has no dollar figure.") in one
+    two = compare.compare_lines(unpriced_summary(tmp_path, [{"model": "claude-fable-5-1", "share": 0.001},
+                                                            {"model": "claude-sonnet-5-5", "share": 0.0002}]))
+    assert ("No price for claude-fable-5-1 (0.1%), claude-sonnet-5-5 (<0.1%): their spend is left out of the dollars "
+            "on a day where they stay under 1% of that day's tokens, and a day where they reach 1% has no dollar "
+            "figure.") in two
+
+
+def test_a_share_too_small_to_show_at_one_decimal_prints_as_under_0_1_percent_and_never_as_0():
+    assert share_text(0.0002) == "<0.1%"
+    assert share_text(0.0004999) == "<0.1%"
+    assert share_text(0.004) == "0.4%"
+    assert share_text(0.0) == "0.0%"
+
+
+def test_compactions_with_no_size_logged_are_counted_and_said_to_be_of_unknown_size(tmp_path):
+    write(tmp_path / "p" / "s1.jsonl", [
+        line("m1", text(40), ts=day_at(4), entrypoint="cli", version="2.1.280"),
+        compact_boundary(day_at(4, 60), trigger="auto", pre_tokens=968_000, version="2.1.280"),
+        compact_boundary(day_at(5, 60), trigger="auto", version="2.1.280"),
+        compact_boundary(day_at(9, 60), trigger="auto", version="2.1.280"),
+    ])
+    compactions = auto_compactions(parse_all(tmp_path).compactions)
+    before, after = sides(AT, 3, TODAY)
+    assert compaction_spread(compactions, before) == {"count": 2, "unknown": 1, "min": 968_000, "median": 968_000,
+                                                      "max": 968_000}
+    assert compaction_spread(compactions, after) == {"count": 1, "unknown": 1, "min": None, "median": None,
+                                                     "max": None}
+    assert compactions_cell(compaction_spread(compactions, before)) == "1 at 970k, 1 of unknown size"
+    assert compactions_cell({"count": 3, "unknown": 1, "min": 820_000, "median": 904_000, "max": 968_000}) == (
+        "2: 820k-970k, median 900k, 1 of unknown size")
+    assert compactions_cell(compaction_spread(compactions, after)) == "1, size unknown"
+    assert compactions_cell({"count": 1500, "unknown": 0, "min": 820_000, "median": 904_000, "max": 968_000}) == (
+        "1,500: 820k-970k, median 900k")
+
+
+def test_session_starts_print_with_thousands_separators():
+    assert starts_cell({"median": 85_000.0, "low": 63_000.0, "high": 96_000.0, "days": 6}, 1500) == (
+        "85k (63k-96k, 6d), 1,500 starts")
+
+
+def test_quota_samples_that_give_no_rise_on_these_days_are_not_mistaken_for_no_samples_at_all(tmp_path):
+    only_five_hour = [{"at": "2026-09-06T10:00:00+00:00", "five_hour": {"used_percentage": 5, "resets_at": 1}},
+                      {"at": "2026-09-06T11:00:00+00:00", "five_hour": {"used_percentage": 9, "resets_at": 1}}]
+    summary = compare_summary(two_sides(tmp_path), AT, 3, TODAY, only_five_hour)
+    assert summary["quota_samples"] == 2
+    lines = compare.compare_lines(summary)
+    assert ("None of the status line samples on file (2) shows the 7-day limit rising within one day on these "
+            "days.") in lines
+    assert not any(line.startswith("No quota samples") for line in lines)
+    assert compare_summary(two_sides(tmp_path / "again"), AT, 3, TODAY, [])["quota_samples"] == 0
+
+
+def test_a_refusal_for_a_side_of_agent_sdk_sessions_alone_says_how_many_it_left_out(tmp_path, capsys):
+    write(tmp_path / "logs" / "p" / "s1.jsonl", [
+        line("m1", text(40), ts=day_at(4), entrypoint="cli")])
+    write(tmp_path / "logs" / "p" / "s2.jsonl", [
+        line(f"x{i}", text(40), ts=day_at(8, i), sid="s2", entrypoint="sdk-py") for i in range(1200)])
+    assert run_compare(tmp_path / "logs", tmp_path / "home" / "state.json", AT, days=3, today=TODAY) == 2
+    assert capsys.readouterr().err == ("No complete day after 2026-09-08 holds responses outside Agent SDK sessions "
+                                       "yet. 1,200 main-thread responses in Agent SDK sessions were left out.\n")
+
+
+def test_a_days_window_reaching_past_the_first_date_python_holds_stops_there(tmp_path, capsys):
+    before, after = sides(AT, 1_000_000, TODAY)
+    assert (before[0], before[-1], len(before)) == ("0001-01-01", "2026-09-07", (AT - date.min).days)
+    assert after == ["2026-09-09", "2026-09-10", "2026-09-11"]
+    two_sides(tmp_path / "logs")
+    assert run_compare(tmp_path / "logs", tmp_path / "home" / "state.json", AT, days=1_000_000, today=TODAY) == 0
+    assert capsys.readouterr().out.startswith(
+        "Before 2026-09-08: 0001-01-01 to 2026-09-07, 2 of 739,866 days with responses outside Agent SDK sessions.")
+
+
+def test_a_dollar_cell_of_tens_of_thousands_keeps_the_after_column_in_line(tmp_path):
+    summary = compare_summary(two_sides(tmp_path), AT, 3, TODAY, [])
+    summary["metrics"]["dollars_per_day"] = {
+        "before": {"median": 99_999.99, "low": 99_999.99, "high": 99_999.99, "days": 7},
+        "after": {"median": 50.0, "low": 50.0, "high": 50.0, "days": 1}}
+    lines = compare.compare_lines(summary)
+    assert lines[6].index("$50.00") == lines[5].index("after")
+
+
+def test_a_main_thread_response_with_no_version_counts_as_unknown(tmp_path):
+    write(tmp_path / "p" / "s1.jsonl", [
+        line("m1", text(40), ts=day_at(4), entrypoint="cli"),
+        line("m2", text(40), ts=day_at(4, 60), entrypoint="cli", version="2.1.280")])
+    summary = compare_summary(parse_all(tmp_path), AT, 3, TODAY, [])
+    assert summary["before"]["versions"] == {"2.1.280": 0.5, "unknown": 0.5}
+
+
+def test_a_day_held_only_by_subagents_is_a_day_with_responses_but_names_no_main_thread_version(tmp_path):
+    write(tmp_path / "p" / "s1.jsonl", [
+        line("m1", text(40), ts=day_at(4), entrypoint="cli", version="2.1.280"),
+        line("a1", text(40), ts=day_at(8), entrypoint="cli", version="2.1.289", sidechain=True)])
+    summary = compare_summary(parse_all(tmp_path), AT, 3, TODAY, [])
+    assert summary["after"]["days_with_responses"] == 1
+    assert "Versions after: no main-thread responses." in compare.compare_lines(summary)
+
+
+def test_one_response_left_out_of_a_refusal_is_said_in_the_singular(tmp_path, capsys):
+    write(tmp_path / "logs" / "p" / "s1.jsonl", [line("m1", text(40), ts=day_at(4), entrypoint="cli")])
+    write(tmp_path / "logs" / "p" / "s2.jsonl", [line("x1", text(40), ts=day_at(8), sid="s2", entrypoint="sdk-py")])
+    assert run_compare(tmp_path / "logs", tmp_path / "home" / "state.json", AT, days=3, today=TODAY) == 2
+    assert capsys.readouterr().err == ("No complete day after 2026-09-08 holds responses outside Agent SDK sessions "
+                                       "yet. 1 main-thread response in Agent SDK sessions was left out.\n")
+
+
+def test_a_refused_before_side_names_the_days_it_holds_not_the_days_asked_for(tmp_path, capsys):
+    two_sides(tmp_path / "logs")
+    day = date(2026, 9, 1)
+    assert run_compare(tmp_path / "logs", tmp_path / "home" / "state.json", day, days=1_000_000, today=TODAY) == 2
+    assert capsys.readouterr().err == (f"None of the {(day - date.min).days:,} days before 2026-09-01 holds responses "
+                                       "outside Agent SDK sessions.\n")
+
+
+def test_a_compactions_cell_with_a_range_and_unknown_sizes_keeps_the_after_column_in_line(tmp_path):
+    summary = compare_summary(two_sides(tmp_path), AT, 3, TODAY, [])
+    summary["before"]["compactions"] = {"count": 15, "unknown": 3, "min": 820_000, "median": 904_000,
+                                        "max": 968_000}
+    summary["after"]["compactions"] = {"count": 1, "unknown": 0, "min": 670_000, "median": 670_000, "max": 670_000}
+    lines = compare.compare_lines(summary)
+    row = next(line for line in lines if line.startswith("auto-compactions"))
+    assert row.index("1 at 670k") == lines[5].index("after")

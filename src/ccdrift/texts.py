@@ -89,11 +89,18 @@ def spend_line(bucket: str, responses: int, tokens: float, share: float, dollars
     else:
         money = ""
     pooled = f"  {projects} projects" if projects > 1 else ""
-    return f"  {bucket:<34}  {responses:>8,}  {approx(tokens):>7}  {share:>6.1%}{money}{pooled}"
+    return f"  {bucket:<34}  {responses:>8,}  {approx(tokens):>7}  {share_text(share):>6}{money}{pooled}"
 
 
 # Models named in the "no price" line before it gives up and counts the rest.
 UNPRICED_SHOWN = 3
+
+
+def share_text(share: float) -> str:
+    """A share of tokens to one decimal, "0.4%", or "<0.1%" for one that rounds to nothing
+    though it is there: "0.0%" would say the model spent nothing."""
+    text = f"{share:.1%}"
+    return "<0.1%" if share > 0 and text == "0.0%" else text
 
 
 def unpriced_line(unpriced: Sequence[tuple[str, float]], total_withheld: bool, cutoff: float) -> str:
@@ -105,12 +112,12 @@ def unpriced_line(unpriced: Sequence[tuple[str, float]], total_withheld: bool, c
     together = sum(share for _, share in unpriced)
     if len(unpriced) == 1:
         # One model's own share is the summed share, so it is said once, not twice.
-        names, share = unpriced[0][0], f"{together:.1%} of the window's tokens"
+        names, share = unpriced[0][0], f"{share_text(together)} of the window's tokens"
     else:
-        shown = ", ".join(f"{model} ({each:.1%})" for model, each in unpriced[:UNPRICED_SHOWN])
+        shown = ", ".join(f"{model} ({share_text(each)})" for model, each in unpriced[:UNPRICED_SHOWN])
         rest = len(unpriced) - UNPRICED_SHOWN
         names = shown + (f" and {rest} more" if rest > 0 else "")
-        share = f"{together:.1%} of the window's tokens between them"
+        share = f"{share_text(together)} of the window's tokens between them"
     if total_withheld:
         return (f"No total: no price for {names}, {share}. A bucket where it reaches "
                 f"{cutoff:.0%} shows no dollars either.")
@@ -959,8 +966,10 @@ DETACHED_NAME = "detached HEAD"  # the branch bucket for gitBranch "HEAD": nothi
 # ccdrift compare
 # ---------------------------------------------------------------------------
 
-COMPARE_LINES = {"before": "Before {at}: {first} to {last}, {present} of {spanned} days with responses.",
-                 "after": "After: {first} to {last}, {present} of {spanned} days with responses.",
+COMPARE_LINES = {"before": "Before {at}: {first} to {last}, {present:,} of {spanned:,} days with responses outside "
+                           "Agent SDK sessions.",
+                 "after": "After: {first} to {last}, {present:,} of {spanned:,} days with responses outside Agent SDK "
+                          "sessions.",
                  "neither": "{at} itself is on neither side.",
                  "cells": "Each cell: the median day (lowest-highest day, days with a figure).",
                  "versions": "Versions {side}: {versions}.",
@@ -970,16 +979,26 @@ COMPARE_LINES = {"before": "Before {at}: {first} to {last}, {present} of {spanne
                           "status line sampled them.",
                  "no_quota": "No quota samples on these days: ccdrift keeps them once your status line runs "
                              "`ccdrift status --short --stdin`.",
-                 "unpriced": "No price for {models}: its spend is left out of the dollars on a day where unpriced "
-                             "models stay under {cutoff:.0%} of its tokens, and a day where they reach {cutoff:.0%} "
-                             "has no dollar figure.",
+                 "quota_none_here": "None of the status line samples on file ({samples:,}) shows the 7-day limit "
+                                    "rising within one day on these days.",
+                 "unpriced_one": "No price for {models}: its spend is left out of the dollars on a day where it stays "
+                                 "under {cutoff:.0%} of that day's tokens, and a day where it reaches {cutoff:.0%} has "
+                                 "no dollar figure.",
+                 "unpriced_many": "No price for {models}: their spend is left out of the dollars on a day where they "
+                                  "stay under {cutoff:.0%} of that day's tokens, and a day where they reach "
+                                  "{cutoff:.0%} has no dollar figure.",
                  "no_prices": "No cost records price these days, so they have no dollar figures.",
                  "not_evidence": "A difference inside either side's range is not evidence the change did anything.",
                  "at_not_past": "--at {at} is not a past day: compare needs complete days after it.",
                  "no_day_after": "{at} was yesterday: compare needs a complete day after it. Run it again tomorrow.",
                  "no_after": "No complete day after {at} holds responses outside Agent SDK sessions yet.",
-                 "no_before": "None of the {days} days before {at} holds responses outside Agent SDK sessions."}
-COMPARE_TABLE = (("", "<22"), ("before", "<36"), ("after", ""))
+                 "no_before": "None of the {days:,} days before {at} holds responses outside Agent SDK sessions.",
+                 "sdk_refused_one": "1 main-thread response in Agent SDK sessions was left out.",
+                 "sdk_refused": "{sdk:,} main-thread responses in Agent SDK sessions were left out."}
+# The before column holds its widest likely cells: five-figure dollars a day, "$99,999.99
+# ($99,999.99-$99,999.99, 7d)", and two-digit compactions with a range and unknown sizes,
+# "12: 820k-970k, median 900k, 3 of unknown size".
+COMPARE_TABLE = (("", "<22"), ("before", "<48"), ("after", ""))
 COMPARE_ROWS = {"dollars_per_day": "dollars per day", "dollars_per_prompt": "dollars per prompt",
                 "context_per_response": "context per response", "session_start": "session start",
                 "quota_points": "quota points per day", "compactions": "auto-compactions"}
@@ -1010,30 +1029,35 @@ def spread_cell(metric: str, spread: dict[str, Any]) -> str:
 
 def starts_cell(spread: dict[str, Any], starts: int) -> str:
     """The session start row's cell, with how many sessions started: "130k (90k-180k, 6d), 12 starts"."""
-    return f"{spread_cell('session_start', spread)}, {starts} start{'' if starts == 1 else 's'}"
+    return f"{spread_cell('session_start', spread)}, {starts:,} start{'' if starts == 1 else 's'}"
 
 
 def compactions_cell(compactions: dict[str, Any]) -> str:
     """"3: 820k-970k, median 900k", "3 at 970k" when the smallest and largest print alike,
-    "1 at 670k" or "none"."""
-    if not compactions["count"]:
+    "1 at 970k, 1 of unknown size" when a compaction logged no size (the sizes count only the
+    compactions that have one), "1, size unknown" when none did, or "none"."""
+    count, unknown = compactions["count"], compactions["unknown"]
+    if not count:
         return "none"
+    if unknown == count:
+        return f"{count:,}, size unknown"
+    known = count - unknown
     low, high = approx(compactions["min"]), approx(compactions["max"])
-    if low == high:
-        return f"{compactions['count']} at {low}"
-    return f"{compactions['count']}: {low}-{high}, median {approx(compactions['median'])}"
+    sizes = f"{known:,} at {low}" if low == high else f"{known:,}: {low}-{high}, median {approx(compactions['median'])}"
+    return sizes + (f", {unknown:,} of unknown size" if unknown else "")
 
 
 def versions_text(shares: dict[str, float]) -> str:
-    """"2.1.278 <1%, 2.1.280 60%, 2.1.281 40%", or "none". A version that ran at all shows
-    as under 1% rather than as 0%."""
+    """"2.1.278 <1%, 2.1.280 60%, 2.1.281 40%", or "no main-thread responses" for a side
+    whose days hold subagents alone. A version that ran at all shows as under 1% rather
+    than as 0%."""
     return ", ".join(f"{version} {'<1%' if share < 0.01 else format(share, '.0%')}"
-                     for version, share in shares.items()) or "none"
+                     for version, share in shares.items()) or "no main-thread responses"
 
 
 def unpriced_models_text(unpriced: Sequence[dict[str, Any]]) -> str:
     """"claude-fable-5-1 (0.4%)" for each model with no price, with its share of these days' tokens."""
-    return ", ".join(f"{model['model']} ({model['share']:.1%})" for model in unpriced)
+    return ", ".join(f"{model['model']} ({share_text(model['share'])})" for model in unpriced)
 
 
 # ---------------------------------------------------------------------------
