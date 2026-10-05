@@ -10,7 +10,6 @@ number here."""
 from __future__ import annotations
 
 import json
-import math
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -18,6 +17,7 @@ from typing import Any, Optional, Sequence
 
 import pandas as pd
 
+from ccdrift.exchange import readings, steps
 from ccdrift.history import HistoryError, load_history
 from ccdrift.logs import Tables, outside_sdk
 from ccdrift.prices import Price
@@ -90,52 +90,12 @@ def auto_compactions(compactions: pd.DataFrame) -> pd.DataFrame:
                        & (compactions["trigger"] == "auto")]
 
 
-def _finite(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-
-
-def _readings(samples: Sequence[Any]) -> list[tuple[datetime, float, Any]]:
-    """Each sample's time, the 7-day window's used share and which window it is (its
-    resets_at), for the samples that carry all three."""
-    out = []
-    for sample in samples:
-        window = sample.get("seven_day") if isinstance(sample, dict) else None
-        if not isinstance(window, dict) or not (_finite(window.get("used_percentage"))
-                                                and _finite(window.get("resets_at"))):
-            continue
-        try:
-            when = datetime.fromisoformat(sample["at"]).astimezone(timezone.utc)
-        except (KeyError, TypeError, ValueError):
-            continue
-        out.append((when, float(window["used_percentage"]), window["resets_at"]))
-    return out
-
-
 def quota_points(samples: Sequence[Any]) -> pd.Series:
-    """Quota points used each UTC day, from the 7-day window's used share in the status
-    line samples: how far each sample raised the highest share seen so far in its window
-    (one resets_at), counted on that sample's day when the window's sample before it is
-    from the same day. A day sampled with no rise used 0.
-
-    The highest so far, not each rise between neighbours. On the owner's samples (526 of
-    them, 2026-09-28 to 2026-10-04) 31 of the 33 falls inside one window were undone by the
-    very next sample: a session idle since an older reading interleaving with a busy one.
-    Summing every rise counted 42 points on 09-30, where the highest share rose by 20.
-
-    Only rises seen within one day. What was used between a day's last sample and the next
-    day's first, on claude.ai or another machine or while this one was off, belongs to no
-    day this machine sampled, so it is left out rather than added to whichever day the
-    samples resume on, which could be the first day after the date being compared. A
-    window's first sample of a day gives that day no rise of its own."""
-    level: dict[Any, float] = {}
-    last_day: dict[Any, str] = {}
+    """Quota points used each UTC day: the points of exchange.steps summed by day, so a day
+    sampled with no rise used 0 and a day with no step has no figure."""
     points: dict[str, float] = {}
-    for when, used, window in sorted(_readings(samples), key=lambda reading: reading[0]):
-        day = when.date().isoformat()
-        if last_day.get(window) == day:
-            points[day] = points.get(day, 0.0) + max(0.0, used - level[window])
-        level[window] = max(level.get(window, used), used)
-        last_day[window] = day
+    for step in steps(readings(samples)):
+        points[step.day] = points.get(step.day, 0.0) + step.points
     return pd.Series(points, dtype="float64").sort_index(kind="stable")
 
 
