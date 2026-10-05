@@ -227,6 +227,7 @@ def test_the_command_prints_the_windows_rate_a_row_a_day_the_empty_rises_and_wha
     state = tmp_path / "home" / "state.json"
     samples_beside(state, two_days(tmp_path / "logs"))
     monkeypatch.setattr(exchange, "fitted_prices", lambda tables: OPUS)
+    monkeypatch.setattr(exchange, "default_source", lambda: tmp_path / "logs")
     assert run_quota(tmp_path / "logs", state, today=TODAY) == 0
     assert capsys.readouterr().out == EXPECTED
 
@@ -268,7 +269,8 @@ def test_the_json_is_the_summary_with_empty_rises_as_day_and_points_and_names_no
     out = capsys.readouterr().out
     payload = json.loads(out)
     assert set(payload) == {"first", "last", "days", "points", "dollars", "rate", "day_rates", "left_out",
-                            "sdk_share", "priced_models", "unpriced", "responses", "empty", "samples"}
+                            "sdk_share", "priced_models", "unpriced", "responses", "empty", "samples",
+                            "default_source"}
     assert payload["empty"] == [{"day": "2026-09-02", "points": 2.0}]
     assert payload["rate"] == pytest.approx(4 * ONE / 7)
     assert "secret-client" not in out and str(tmp_path) not in out and '"s1"' not in out and "11:30" not in out
@@ -373,3 +375,41 @@ def test_with_no_response_in_any_sampled_hour_it_says_so_rather_than_that_there_
     lines = capsys.readouterr().out.splitlines()
     assert "No response on this machine fell in the hours the status line sampled." in lines
     assert "No cost records price these days, so they have no dollar figures." not in lines
+
+
+def test_a_windows_day_opens_at_its_first_sample_at_or_above_the_share_carried_in_and_passes_over_stale_ones():
+    # 42 was the highest by Sep 1's end. Sep 2's 40 at 08:00 is an idle session's older
+    # reading, so the day opens at 08:30's 46, and the 4 points from 42 to 46, used overnight
+    # or before 08:30, belong to no step. Every Sep 3 sample is stale, so Sep 3 has none.
+    found = walk([sample("2026-09-01T22:00:00+00:00", 42), sample("2026-09-02T08:00:00+00:00", 40),
+                  sample("2026-09-02T08:30:00+00:00", 46), sample("2026-09-02T09:00:00+00:00", 47),
+                  sample("2026-09-03T10:00:00+00:00", 45), sample("2026-09-03T11:00:00+00:00", 46)])
+    assert found == [Step(utc("2026-09-02T09:00:00+00:00"), "2026-09-02", 1_790_000_000, 1.0,
+                          utc("2026-09-02T08:30:00+00:00"))]
+
+
+def test_a_days_span_starts_where_its_window_opened_and_not_at_a_stale_sample_before(tmp_path, monkeypatch):
+    samples = [sample("2026-09-01T22:00:00+00:00", 42), sample("2026-09-02T08:00:00+00:00", 40),
+               sample("2026-09-02T08:30:00+00:00", 46), sample("2026-09-02T09:00:00+00:00", 47)]
+    records = [answer("m1", "2026-09-02T08:15:00+00:00"), answer("m2", "2026-09-02T08:45:00+00:00")]
+    summary = summary_of(tmp_path, monkeypatch, records, samples)
+    assert summary["days"] == [pytest.approx({"day": "2026-09-02", "points": 1.0, "dollars": ONE, "rate": ONE})]
+
+
+def test_a_source_other_than_this_machines_transcript_folder_is_said_to_narrow_the_dollars_and_not_the_points(
+        tmp_path, capsys, monkeypatch):
+    state = tmp_path / "home" / "state.json"
+    samples_beside(state, two_days(tmp_path / "logs"))
+    monkeypatch.setattr(exchange, "fitted_prices", lambda tables: OPUS)
+    note = ("The dollars come only from the transcripts under --source, while the points count everything on this "
+            "account: a source missing any of this machine's projects lowers the rate and lists the rises they "
+            "bought as empty.")
+    assert run_quota(tmp_path / "logs", state, today=TODAY) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == note
+    assert run_quota(tmp_path / "logs", state, as_json=True, today=TODAY) == 0
+    assert json.loads(capsys.readouterr().out)["default_source"] is False
+    monkeypatch.setattr(exchange, "default_source", lambda: tmp_path / "logs")
+    assert run_quota(tmp_path / "logs", state, today=TODAY) == 0
+    assert note not in capsys.readouterr().out.splitlines()
+    assert run_quota(tmp_path / "logs", state, as_json=True, today=TODAY) == 0
+    assert json.loads(capsys.readouterr().out)["default_source"] is True

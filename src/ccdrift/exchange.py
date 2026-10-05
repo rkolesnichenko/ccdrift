@@ -17,7 +17,7 @@ from typing import Any, Iterator, NamedTuple, Optional, Sequence
 import pandas as pd
 
 from ccdrift.history import HistoryError, load_history
-from ccdrift.logs import Tables, outside_sdk
+from ccdrift.logs import Tables, default_source, outside_sdk
 from ccdrift.prices import Price
 from ccdrift.quota import quota_path, read_samples
 from ccdrift.spend import (MATERIAL_SHARE, fitted_prices, priced_in_window, priced_total, response_dollars,
@@ -31,9 +31,9 @@ DEFAULT_DAYS = 14
 
 
 class Step(NamedTuple):
-    """One sample whose window's previous sample is on the same UTC day: when, which day and
-    window, how far it raised the window's highest share so far, and since when that highest
-    share stood, but no earlier than the window's first sample that day."""
+    """One sample after its window's day opened (see `steps`): when, which day and window,
+    how far it raised the window's highest share so far, and since when that highest share
+    stood, but no earlier than the sample the window's day opened at."""
     when: datetime
     day: str
     window: Any
@@ -75,30 +75,35 @@ def steps(found: Sequence[tuple[datetime, float, Any]]) -> Iterator[Step]:
     Only rises seen within one day. What was used between a day's last sample and the next
     day's first, on claude.ai or another machine or while this one was off, belongs to no
     day this machine sampled, so it is left out rather than added to whichever day the
-    samples resume on. A window's first sample of a day is no step."""
+    samples resume on. A window's day opens at its first sample that day at or above the
+    highest share carried in from earlier days, and that sample is no step. A sample below
+    it before then is an idle session's older reading and is passed over: opening on it
+    would put the use since the day before into the day's first real rise. On the owner's
+    samples that happened on none of 8 window-days, 2026-09-28 to 2026-10-04."""
     level: dict[Any, float] = {}
     level_at: dict[Any, datetime] = {}
-    last_day: dict[Any, str] = {}
-    day_start: dict[Any, datetime] = {}
+    opened: dict[Any, tuple[str, datetime]] = {}
     for when, used, window in found:
         day = when.date().isoformat()
-        if last_day.get(window) == day:
-            yield Step(when, day, window, max(0.0, used - level[window]), max(level_at[window], day_start[window]))
+        if window in opened and opened[window][0] == day:
+            yield Step(when, day, window, max(0.0, used - level[window]), max(level_at[window], opened[window][1]))
+        elif window in level and used < level[window]:
+            continue
         else:
-            day_start[window] = when
+            opened[window] = (day, when)
         if window not in level or used > level[window]:
             level[window], level_at[window] = used, when
-        last_day[window] = day
 
 
 def spans(found: Sequence[tuple[datetime, float, Any]]) -> dict[str, list[tuple[datetime, datetime]]]:
-    """Each UTC day's sampled spans: for every window sampled that day, its first and last
-    sample's time. A reset day has one span per window, and they can overlap, since an idle
+    """Each UTC day's sampled spans: for every window with a step that day, from the sample
+    its day opened at to its last step, so the hours priced are the hours its points were
+    counted over. A reset day has one span per window, and they can overlap, since an idle
     session can still show the old window after the reset."""
     bounds: dict[tuple[str, Any], tuple[datetime, datetime]] = {}
-    for when, _, window in found:
-        key = (when.date().isoformat(), window)
-        bounds[key] = (bounds[key][0] if key in bounds else when, when)
+    for step in steps(found):
+        key = (step.day, step.window)
+        bounds[key] = (bounds[key][0] if key in bounds else step.since, step.when)
     out: dict[str, list[tuple[datetime, datetime]]] = {}
     for (day, _), span in bounds.items():
         out.setdefault(day, []).append(span)
@@ -214,6 +219,8 @@ def quota_lines(summary: dict[str, Any]) -> list[str]:
     lines.append(QUOTA_LINES["counted_plain"] if summary["sdk_share"] is None
                  else QUOTA_LINES["counted"].format(share=summary["sdk_share"]))
     lines += [QUOTA_LINES["elsewhere"], QUOTA_LINES["models"]]
+    if not summary["default_source"]:
+        lines.append(QUOTA_LINES["named_source"])
     return lines
 
 
@@ -246,5 +253,6 @@ def run_quota(source: Path, state_path: Path, days: Optional[int] = None, as_jso
         print(no_transcripts_message(source), file=sys.stderr)
         return 2
     summary = quota_summary(tables, samples, days or DEFAULT_DAYS, today)
+    summary["default_source"] = source.expanduser().resolve() == default_source().expanduser().resolve()
     print(quota_json(summary) if as_json else "\n".join(quota_lines(summary)) + "\n", end="")
     return 0
