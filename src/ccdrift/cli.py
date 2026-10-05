@@ -109,6 +109,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_source(cost)
     _add_state(cost)
 
+    compare = commands.add_parser("compare", help="the days before a change you made beside the days after it")
+    compare.add_argument("--at", type=_day, required=True, metavar="DATE",
+                         help="the UTC day you made the change (YYYY-MM-DD); it counts on neither side")
+    compare.add_argument("--days", type=_days, default=None, help="how many days on each side (default: 7)")
+    compare.add_argument("--json", action="store_true", help="print the comparison as JSON")
+    _add_source(compare)
+    _add_state(compare)
+
     status = commands.add_parser("status", help="how the last check went and what ccdrift is following")
     status.add_argument("--short", action="store_true",
                         help="one line when something needs attention, nothing otherwise (for a status line)")
@@ -293,6 +301,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.command == "cost":
         from ccdrift.spend import run_spend
         return run_spend(_source(args), _state(args), days=args.days, by=args.by, as_json=args.json)
+    if args.command == "compare":
+        from ccdrift.compare import run_compare
+        return run_compare(_source(args), _state(args), date.fromisoformat(args.at), days=args.days,
+                           as_json=args.json)
     if args.command == "status":
         from ccdrift.status import run_status
         if args.stdin and not args.short:

@@ -3,8 +3,8 @@ hands a status line command carries how much of the plan's 5-hour and 7-day limi
 is used (Pro and Max only), which its transcripts never record. `ccdrift status
 --short --stdin` keeps a sample of it beside the state file each time it changes, at
 most once a minute, and nothing else from that JSON: no session id, path, project,
-repository or branch. Nothing reads the samples back yet beyond a count; a rule on
-quota used per token needs weeks of them first.
+repository or branch. Beyond a count, only `ccdrift compare` reads them back, as quota
+points used per day; a rule on quota used per token needs weeks of them first.
 
 It runs on every status line refresh, so it imports only the standard library and
 never raises."""
@@ -123,19 +123,26 @@ def read_payload(stream: TextIO) -> Optional[str]:
         return None
 
 
-def samples_summary(path: Path) -> Optional[dict[str, Any]]:
-    """How many samples `path` holds, with the first and last one's time; None when the
-    file is missing or holds none. Lines that don't parse are skipped."""
+def read_samples(path: Path) -> list[dict[str, Any]]:
+    """Every sample in `path` that parses and carries its time, in file order; none when
+    the file is missing. Lines that don't parse are skipped."""
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, ValueError):
-        return None
-    times = []
+        return []
+    samples = []
     for line in text.splitlines():
         try:
             sample = json.loads(line)
         except ValueError:
             continue
         if isinstance(sample, dict) and isinstance(sample.get("at"), str):
-            times.append(sample["at"])
-    return {"count": len(times), "first": times[0], "last": times[-1]} if times else None
+            samples.append(sample)
+    return samples
+
+
+def samples_summary(path: Path) -> Optional[dict[str, Any]]:
+    """How many samples `path` holds, with the first and last one's time; None when the
+    file is missing or holds none."""
+    samples = read_samples(path)
+    return {"count": len(samples), "first": samples[0]["at"], "last": samples[-1]["at"]} if samples else None

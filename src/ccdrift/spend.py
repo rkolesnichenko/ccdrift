@@ -333,16 +333,22 @@ def spend_lines(turns: pd.DataFrame, dimension: str, prices: dict[str, Price]) -
     return lines
 
 
+def fitted_prices(tables: Tables) -> dict[str, Price]:
+    """The prices fitted from the history's cost records, keyed as responses name their
+    model: what `ccdrift cost`, withheld_total and `ccdrift compare` all price with."""
+    usage = record_write_tiers(tables.model_usage, tables.responses)
+    return joined_prices(fit_prices(usage), usage)
+
+
 def window_prices(tables: Tables, today: date, days: Optional[int] = None) -> tuple[pd.DataFrame, list[str],
                                                                                    dict[str, Price]]:
     """The responses of the window (the last `days`, DEFAULT_DAYS by default, complete UTC
-    days with any), its days, and the prices fitted from the history's cost records, keyed
-    as responses name their model: what `ccdrift cost` and withheld_total both work from."""
+    days with any), its days, and fitted_prices: what `ccdrift cost` and withheld_total both
+    work from."""
     turns = spend_turns(tables.responses, today)
     window = sorted(turns["day"].astype(str).unique())[-(days or DEFAULT_DAYS):]
     turns = turns[turns["day"].astype(str).isin(window)]
-    usage = record_write_tiers(tables.model_usage, tables.responses)
-    return turns, window, joined_prices(fit_prices(usage), usage)
+    return turns, window, fitted_prices(tables)
 
 
 def withheld_total(tables: Tables, today: date) -> Optional[list[tuple[str, float]]]:

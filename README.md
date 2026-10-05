@@ -211,7 +211,8 @@ printf '%s' "$input" | ccdrift status --short --stdin
 `~/.ccdrift/quota.jsonl` (beside the state file), holds its time, the Claude Code version,
 the model and the limits' numbers, and nothing else from the JSON. Nothing alerts on the
 samples yet: a rule on how fast a limit fills for the tokens you use needs weeks of them,
-which is why collecting starts first. `ccdrift status` counts them. With no samples after a
+which is why collecting starts first. `ccdrift status` counts them, and `ccdrift compare`
+shows the quota points used each day. With no samples after a
 few responses, your plan's limits aren't in the JSON, which Claude Code sends only on Pro
 and Max plans.
 
@@ -241,6 +242,7 @@ stop the check.
 ccdrift check [--notify] [--exec CMD] [--no-digest] [--source DIR] [--state FILE]   what the schedule runs
 ccdrift report [--days N] [--by day|version] [--json | --html FILE] [--source DIR] [--state FILE]
 ccdrift cost [--days N] [--by thread|agent|skill|plugin|mcp|model|project|branch] [--json] [--source DIR] [--state FILE]
+ccdrift compare --at DATE [--days N] [--json] [--source DIR] [--state FILE]
 ccdrift status [--short [--stdin]] [--state FILE]
 ccdrift incident list [--source DIR] [--state FILE]
 ccdrift incident add {cache|haiku|subagent-cache} START..END [--state FILE]
@@ -256,7 +258,8 @@ ccdrift --version
 ```
 
 `report` covers the last 21 days by default, and every version with `--by version`;
-`cost` covers the last 30 days with responses.
+`cost` covers the last 30 days with responses; `compare` puts the 7 days before a date
+beside the 7 days after it.
 
 `report --by version` also shows each version's median session start size once it has
 3 or more sessions, where automatic compaction started, up to 2 release note lines
@@ -311,6 +314,25 @@ dropping them without saying so. It carries the evidence behind the money as wel
 residual, record count and cache-read ratio of each fitted price under
 `priced_models`, and what it could not price, with that model's share of the window,
 under `unpriced_models`.
+
+`ccdrift compare --at DATE` puts the days before a change you made beside the days
+after it: by default the 7 complete UTC days before DATE and the 7 after, with DATE itself
+on neither side, since the change happened some time that day. It counts the responses
+`cost` counts, so Agent SDK sessions are left out, and it says how many. Each side shows
+dollars per day; dollars per main-thread prompt, subagents' spend included; the median
+main-thread prompt size; the median session start; the automatic compactions, with the
+smallest, median and largest context each began at; and, on the days your status line
+sampled them, the quota points used. A quota point counts every surface on your account,
+claude.ai included, so it can move with work this machine never saw. Dollars follow
+`cost`'s rule: a day whose models with no price carry 1% of its tokens has none.
+
+Each cell is the side's median day, then its lowest and highest day and how many days had
+a figure. There is no verdict: a difference inside either side's range is not evidence
+the change did anything, and telling a real change from that spread takes a threshold
+measured on real logs, which `compare` doesn't have. It lists the versions each side ran
+rather than refusing when Claude Code updated in between, so read a difference against
+them. `compare --json` holds the same aggregates, with no paths, session ids or project
+names.
 
 Transcripts are read from `$CLAUDE_CONFIG_DIR/projects` when that variable is set,
 otherwise from `~/.claude/projects`. With `--source` pointed at one project's own
