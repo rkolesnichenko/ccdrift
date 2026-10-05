@@ -63,9 +63,9 @@ def readings(samples: Sequence[Any]) -> list[tuple[datetime, float, Any]]:
 
 
 def steps(found: Sequence[tuple[datetime, float, Any]]) -> Iterator[Step]:
-    """The steps of `found` (readings, in time order): every sample whose window's sample
-    before it is on the same UTC day, with how far it raised that window's highest share so
-    far, 0 when it didn't.
+    """The steps of `found` (readings, in time order): every sample after its window's day
+    opened (below), with how far it raised that window's highest share so far, 0 when it
+    didn't.
 
     The highest so far, not each rise between neighbours. On the owner's samples (526 of
     them, 2026-09-28 to 2026-10-04) 31 of the 33 falls inside one window were undone by the
@@ -79,7 +79,9 @@ def steps(found: Sequence[tuple[datetime, float, Any]]) -> Iterator[Step]:
     highest share carried in from earlier days, and that sample is no step. A sample below
     it before then is an idle session's older reading and is passed over: opening on it
     would put the use since the day before into the day's first real rise. On the owner's
-    samples that happened on none of 8 window-days, 2026-09-28 to 2026-10-04."""
+    samples that happened on none of 8 window-days, 2026-09-28 to 2026-10-04. An older
+    reading equal to the carried share still opens the day, since samples carry no session
+    to tell it from a current one, so the use from then to the next rise lands there."""
     level: dict[Any, float] = {}
     level_at: dict[Any, datetime] = {}
     opened: dict[Any, tuple[str, datetime]] = {}

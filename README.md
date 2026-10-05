@@ -343,7 +343,9 @@ both threads and Agent SDK sessions alike, since any of them can run on your pla
 what share of the dollars the SDK carried. A point is counted when the highest share seen
 so far rises between two samples of one UTC day, so an idle session's older reading can't
 count twice and use between a day's last sample and the next day's first is left out, even
-when an older reading is the first thing the status line sends that morning. The
+when a lower, older reading is the first thing the status line sends that morning (one
+equal to the night before's can't be told from a current one, since samples carry no
+session). The
 window's rate is its dollars over its points, so a quiet day can't swing it; each day's own
 rate sits beside its point count. It lists any point that rose while this machine logged
 nothing since the limit last moved: use on claude.ai or another device, or by someone else.

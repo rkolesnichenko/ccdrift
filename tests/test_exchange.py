@@ -413,3 +413,7 @@ def test_a_source_other_than_this_machines_transcript_folder_is_said_to_narrow_t
     assert note not in capsys.readouterr().out.splitlines()
     assert run_quota(tmp_path / "logs", state, as_json=True, today=TODAY) == 0
     assert json.loads(capsys.readouterr().out)["default_source"] is True
+    # The same folder by another path, through a link and a `..`, is still the default.
+    (tmp_path / "link").symlink_to(tmp_path / "logs")
+    assert run_quota(tmp_path / "link" / ".." / "link", state, today=TODAY) == 0
+    assert note not in capsys.readouterr().out.splitlines()

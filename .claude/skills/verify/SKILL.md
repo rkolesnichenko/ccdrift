@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Run the full ccdrift suite plus the privacy, determinism and status-line-weight invariant checks, and report only what was actually observed. Use before claiming work is complete, before tagging a release, and after any change to logs.py, history.py, state.py, report.py, draft.py, page.py, spend.py or prices.py.
+description: Run the full ccdrift suite plus the privacy, determinism and status-line-weight invariant checks, and report only what was actually observed. Use before claiming work is complete, before tagging a release, and after any change to logs.py, history.py, state.py, report.py, draft.py, page.py, spend.py, prices.py, compare.py or exchange.py.
 ---
 
 Run each step and paste the real output. Do not summarize a step you did not run, and do not call anything passing without the line that says so.
@@ -28,7 +28,7 @@ If a heavy import crept in, the fix is to defer it into the command branch in cl
 `report --json`, `cost --json`, `compare --json`, `quota --json` and `incident draft` emit aggregates only: no paths, session ids or project names. `peek` reports text, ids and paths as lengths, a content block as its type and the size of the rest, and omits the transcript path because it names the project folder.
 
 ```
-uv run --group dev --group lab pytest -q tests/test_report.py tests/test_draft.py tests/test_page.py tests/test_cli.py tests/test_spend.py
+uv run --group dev --group lab pytest -q tests/test_report.py tests/test_draft.py tests/test_page.py tests/test_cli.py tests/test_spend.py tests/test_compare.py tests/test_exchange.py
 ```
 
 ## 4. Determinism
