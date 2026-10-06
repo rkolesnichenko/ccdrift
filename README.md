@@ -267,8 +267,17 @@ beside the 7 days after it; `quota` covers the last 14 days the status line samp
 about caching, Haiku and default models, effort, the system prompt and tool
 definitions, hooks, or subagent models, and a sub-line under each version for why the
 cache missed, as Claude Code recorded it. `ccdrift report` also shows stop-hook runs,
-the models subagents ran on, and tool-loop cache misses on the main thread and in
-subagents, which `report --by version` shows as a share per version.
+the models subagents ran on, what each model a subagent was asked for resolved to, and
+tool-loop cache misses on the main thread and in subagents, which `report --by version`
+shows as a share per version.
+
+Each Agent call names the model it wants, its result names the model Claude Code resolved
+that to, and the subagent's own responses name the model that served them. The check
+alerts once when a spawn was resolved to another model than it asked for (an alias such as
+`opus` honoured by any Opus, a full id only by itself) or served by another model than the
+one resolved, judging the last 7 days; a model's "[1m]" marker is ignored, since Claude
+Code serves it under the plain id. An alias moving to a new model, as `opus` does at a
+release, shows in the report and never alerts.
 
 `report --json` holds aggregates only: no paths, session ids or project names. It adds
 a `miss_reasons` key of counts per cache-miss reason, on the day view's window as a

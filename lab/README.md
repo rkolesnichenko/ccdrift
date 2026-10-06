@@ -67,6 +67,10 @@ uv run --group lab python -m lab.thinking
 # cache, without false alarms? Reads the transcripts; judges the cutoff ccdrift ships
 uv run --group lab python -m lab.subagent_cache
 
+# G18: does the rule that judges each subagent spawn's requested, resolved and served model
+# raise no false alarm on your logs, and catch every planted mismatch? Reads the transcripts
+uv run --group lab python -m lab.spawn_models
+
 # What the attachment arrival rule reports on your logs, for a grid of share cutoffs and
 # minimum session counts; a census, so no PASS or FAIL
 uv run --group lab python -m lab.attachments
