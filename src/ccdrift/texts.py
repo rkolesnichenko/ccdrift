@@ -1169,6 +1169,42 @@ def subagent_lines(summary: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+MISMATCH_NAMES = {"not_honoured": "resolved to another model than asked",
+                  "served_differs": "served another model than resolved"}
+
+
+def _span(first: str, last: str) -> str:
+    return first if first == last else f"{first} to {last}"
+
+
+def _resolution(model: dict[str, Any]) -> str:
+    """"claude-opus-5 2026-09-01 to 2026-09-02 (Claude Code 2.1.99 to 2.1.280, 2 spawns)"."""
+    versions = _span(model["versions"][0], model["versions"][-1]) if model["versions"] else "unknown"
+    return (f"{model['model']} {_span(model['first'], model['last'])} (Claude Code {versions}, "
+            f"{model['spawns']:,} spawn{'' if model['spawns'] == 1 else 's'})")
+
+
+def spawn_lines(history: dict[str, Any]) -> list[str]:
+    """The report's spawn section, starting with a blank line: for each model a request asked
+    for, what Claude Code resolved it to, when and on which versions; then every spawn that
+    got another model, or that none did. Empty without spawns."""
+    if not history["spawns"]:
+        return []
+    lines = ["", f"Subagent spawns over these days: {history['spawns']:,}, {history['judged']:,} answered. "
+                 "What each request was resolved to:"]
+    for alias in history["aliases"]:
+        label = "no model asked" if alias["alias"] == "none" else alias["alias"]
+        lines.append(f"  {label}: " + "; ".join(_resolution(model) for model in alias["models"]))
+    if not history["mismatches"]:
+        lines.append("Every answered spawn got the model it asked for.")
+        return lines
+    lines.append(f"Spawns that got another model: {len(history['mismatches']):,}")
+    for m in history["mismatches"]:
+        lines.append(f"  {m['day']} {MISMATCH_NAMES[m['kind']]}: asked {_asked(m['requested'])}, resolved "
+                     f"{m['resolved'] or 'nothing logged'}, served {m['served']}, Claude Code {m['version'] or 'unknown'}")
+    return lines
+
+
 PROJECTS_IN_REPORT = 5
 
 

@@ -8,10 +8,12 @@ import pandas as pd
 
 from ccdrift.history import History
 from ccdrift.logs import parse_all
+from ccdrift.report import run_report
 from ccdrift.spawns import (JOINED_COLUMNS, alias_history, honours, judge, mismatches, model_mismatch_alerts, model_name,
                             spawn_models)
 from ccdrift.texts import spawn_model_message
-from tests.helpers import PRIVATE_TEXT, agent_call, agent_result, at, line, text, tool_use, write
+from tests.helpers import (DAY, PRIVATE_TEXT, agent_call, agent_result, at, line, main_thread_days, text, tool_use,
+                           write)
 
 
 def spawning(root, name="s1", sidechain=False, sid="s1"):
@@ -230,3 +232,59 @@ def test_the_alert_names_what_was_asked_resolved_and_served_in_each_way_a_spawn_
                                 "served": "claude-haiku-4-5"}) == (
         "A subagent Claude Code resolved to claude-opus-5 (asking for no model) was served claude-haiku-4-5, on "
         "Claude Code 2.1.290, first on 2026-09-15.")
+
+
+def report_corpus(root):
+    """Three CLI days, and four spawns: "opus" resolved to Opus 5, then to Opus 5.5 on a later
+    version; "sonnet" resolved to Opus 5.5; a call naming no model, whose subagent never answered.
+    A fifth, spawned by a subagent 40 days earlier, is on no day the report shows."""
+    main_thread_days(root, [{}] * 3)
+    write(root / "p" / "old" / "subagents" / "agent-z.jsonl", [
+        line("q0", agent_call("t0", model="haiku"), ts=at(-40 * DAY), sid="old", sidechain=True, agent_id="z"),
+        agent_result(at(-40 * DAY + 1), "t0", "b0", resolved="claude-opus-5", sid="old", sidechain=True)])
+    calls = [("t1", "opus", "b1", "claude-opus-5[1m]", "2.1.280", 60),
+             ("t2", "opus", "b2", "claude-opus-5-5", "2.1.288", DAY + 60),
+             ("t3", "sonnet", "b3", "claude-opus-5-5", "2.1.288", 2 * DAY + 60),
+             ("t4", None, "b4", "claude-opus-5-5", "2.1.288", 2 * DAY + 70)]
+    records = []
+    for call, model, agent, resolved, version, ts in calls:
+        records += [line(f"q{call}", agent_call(call, model=model), ts=at(ts), sid="sp", version=version, entrypoint="cli"),
+                    agent_result(at(ts + 1), call, agent, resolved=resolved, sid="sp", version=version)]
+    write(root / "p" / "sp.jsonl", records)
+    for agent, ts, model in (("b1", 60.5, "claude-opus-5"), ("b2", DAY + 60.5, "claude-opus-5-5"),
+                             ("b3", 2 * DAY + 60.5, "claude-opus-5-5")):
+        write(root / "p" / "sp" / "subagents" / f"agent-{agent}.jsonl", [
+            line(f"r{agent}", text(20), ts=at(ts), sid="sp", sidechain=True, model=model, agent_id=agent)])
+
+
+def test_the_day_report_shows_what_each_request_resolved_to_and_every_spawn_that_got_another_model(tmp_path, capsys):
+    report_corpus(tmp_path / "logs")
+    assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 4)) == 0
+    out = capsys.readouterr().out.splitlines()
+    start = out.index("Subagent spawns over these days: 4, 3 answered. What each request was resolved to:")
+    assert out[start:start + 6] == [
+        "Subagent spawns over these days: 4, 3 answered. What each request was resolved to:",
+        "  no model asked: claude-opus-5-5 2026-09-03 (Claude Code 2.1.288, 1 spawn)",
+        "  opus: claude-opus-5 2026-09-01 (Claude Code 2.1.280, 1 spawn); claude-opus-5-5 2026-09-02 "
+        "(Claude Code 2.1.288, 1 spawn)",
+        "  sonnet: claude-opus-5-5 2026-09-03 (Claude Code 2.1.288, 1 spawn)",
+        "Spawns that got another model: 1",
+        "  2026-09-03 resolved to another model than asked: asked sonnet, resolved claude-opus-5-5, served "
+        "claude-opus-5-5, Claude Code 2.1.288"]
+
+
+def test_with_no_spawn_getting_another_model_the_report_says_so_and_the_page_shows_it_too(tmp_path, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 2)
+    write(tmp_path / "logs" / "p" / "sp.jsonl", [
+        line("q1", agent_call("t1", model="haiku"), ts=at(60), sid="sp", version="2.1.288", entrypoint="cli"),
+        agent_result(at(61), "t1", "b1", resolved="claude-haiku-4-5", sid="sp", version="2.1.288")])
+    write(tmp_path / "logs" / "p" / "sp" / "subagents" / "agent-b1.jsonl", [
+        line("r1", text(20), ts=at(60.5), sid="sp", sidechain=True, model="claude-haiku-4-5", agent_id="b1")])
+    assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 3)) == 0
+    lines = capsys.readouterr().out.splitlines()
+    start = lines.index("Subagent spawns over these days: 1, 1 answered. What each request was resolved to:")
+    assert lines[start + 1:start + 3] == ["  haiku: claude-haiku-4-5 2026-09-01 (Claude Code 2.1.288, 1 spawn)",
+                                          "Every answered spawn got the model it asked for."]
+    page = tmp_path / "report.html"
+    assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 3), html_path=page) == 0
+    assert "Every answered spawn got the model it asked for." in page.read_text()
