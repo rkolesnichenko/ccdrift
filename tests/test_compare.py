@@ -133,6 +133,13 @@ def test_quota_points_count_how_far_each_sample_raised_the_highest_share_so_far_
     assert quota_points(samples).to_dict() == {"2026-09-05": 6.0}
 
 
+def test_quota_points_leave_out_use_before_a_days_first_current_sample_though_a_stale_one_came_first():
+    # 42 by Sep 1's end; Sep 2's 40 is stale, so the day starts at 46 and only 46 to 47 counts.
+    samples = [sample("2026-09-01T22:00:00+00:00", 42), sample("2026-09-02T08:00:00+00:00", 40),
+               sample("2026-09-02T08:30:00+00:00", 46), sample("2026-09-02T09:00:00+00:00", 47)]
+    assert quota_points(samples).to_dict() == {"2026-09-02": 1.0}
+
+
 def test_a_reset_starts_a_new_window_whose_first_sample_rises_from_nothing():
     # The old window's 96 after the reset is a stale reading from a session idle since then.
     samples = [sample("2026-09-05T10:00:00+00:00", 90, resets=1), sample("2026-09-05T23:00:00+00:00", 95, resets=1),

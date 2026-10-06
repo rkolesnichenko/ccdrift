@@ -1081,6 +1081,9 @@ QUOTA_LINES = {"head": "Quota points of the 7-day limit, priced at list from thi
                "counted_plain": "Counted: every response on this machine, both threads, Agent SDK sessions included.",
                "elsewhere": "This machine only: use on claude.ai or another device raises points with no dollars here.",
                "models": "Per-model limits aren't in the status line, so the rate is for all models together.",
+               "named_source": "The dollars come only from the transcripts under --source, while the points count "
+                               "everything on this account: a source missing any of this machine's projects lowers "
+                               "the rate and lists the rises they bought as empty.",
                "no_samples": "No status line sample carries the 7-day limit yet: ccdrift keeps them once your status "
                              "line runs `ccdrift status --short --stdin`, on Pro and Max plans.",
                "no_steps": "None of the status line samples on file ({samples:,}) shows the 7-day limit twice in one "
