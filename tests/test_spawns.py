@@ -2,9 +2,14 @@
 one the subagent was served."""
 
 import sqlite3
+from datetime import date
+
+import pandas as pd
 
 from ccdrift.history import History
 from ccdrift.logs import parse_all
+from ccdrift.spawns import (JOINED_COLUMNS, alias_history, honours, judge, mismatches, model_mismatch_alerts, model_name,
+                            spawn_models)
 from tests.helpers import PRIVATE_TEXT, agent_call, agent_result, at, line, text, tool_use, write
 
 
@@ -95,3 +100,117 @@ def test_the_store_keeps_spawns_and_agent_ids_as_the_transcripts_read_them(tmp_p
                "session_id", "timestamp"]
     assert stored[columns].to_dict("records") == read.spawns[columns].to_dict("records")
     assert sorted(responses["agent_id"].dropna()) == sorted(read.responses["agent_id"].dropna()) == ["a1", "a1"]
+
+
+def spawn(agent, requested, resolved, served, version="2.1.289", day="2026-09-01", responses=1):
+    """One row as spawn_models gives it."""
+    return {"agent_id": agent, "requested": requested, "resolved": resolved, "version": version, "day": day,
+            "timestamp": pd.Timestamp(f"{day}T10:00:00Z"), "served": tuple(served),
+            "responses": responses if served else 0}
+
+
+def joined(*rows):
+    return pd.DataFrame(list(rows), columns=list(JOINED_COLUMNS))
+
+
+def test_a_model_compares_in_lowercase_without_its_one_million_context_marker():
+    assert model_name("Claude-Opus-5[1m]") == "claude-opus-5"
+    assert [model_name(raw) for raw in ("", "  ", None, 3)] == [None, None, None, None]
+
+
+def test_an_alias_is_honoured_by_any_model_of_its_family_and_a_full_id_only_by_itself():
+    assert honours("opus", "claude-opus-5") and honours("opus", "claude-opus-5-5")
+    assert honours("haiku", "claude-haiku-4-5-20251001")
+    assert not honours("opus", "claude-sonnet-5")
+    assert honours("claude-opus-5-5", "claude-opus-5-5")
+    assert not honours("claude-opus-5", "claude-opus-5-5")
+
+
+def test_a_spawn_resolved_to_another_model_than_it_asked_for_is_not_honoured():
+    assert judge("sonnet", "claude-opus-5", ("claude-opus-5",)) == ["not_honoured"]
+
+
+def test_a_spawn_served_another_model_than_the_one_resolved_differs_but_the_one_million_marker_does_not():
+    assert judge("opus", "claude-opus-5-5[1m]", ("claude-sonnet-5",)) == ["served_differs"]
+    assert judge("opus", "claude-opus-5[1m]", ("claude-opus-5",)) == []
+
+
+def test_with_no_resolved_model_logged_the_request_is_judged_against_what_was_served():
+    assert judge("haiku", None, ("claude-sonnet-5",)) == ["not_honoured"]
+    assert judge("haiku", None, ("claude-haiku-4-5",)) == []
+
+
+def test_a_spawn_naming_no_model_or_inherit_is_judged_only_on_what_was_served():
+    assert judge(None, "claude-opus-5", ("claude-opus-5",)) == []
+    assert judge("inherit", "claude-opus-5", ("claude-opus-5",)) == []
+    assert judge("inherit", "claude-opus-5", ("claude-haiku-4-5",)) == ["served_differs"]
+
+
+def test_a_spawn_with_no_served_response_is_not_judged():
+    assert judge("sonnet", "claude-opus-5", ()) == []
+
+
+def test_a_spawn_served_two_models_differs_when_either_is_not_the_one_resolved():
+    assert judge("haiku", "claude-haiku-4-5", ("claude-haiku-4-5", "claude-sonnet-5")) == ["served_differs"]
+
+
+def test_each_spawn_carries_the_models_its_responses_were_served_and_how_many(tmp_path):
+    spawning(tmp_path)
+    tables = parse_all(tmp_path)
+    found = spawn_models(tables.spawns, tables.responses)
+    assert found[["agent_id", "served", "responses"]].to_dict("records") == [
+        {"agent_id": "a1", "served": ("claude-sonnet-5",), "responses": 2},
+        {"agent_id": "a2", "served": (), "responses": 0}]
+
+
+def test_a_mismatch_names_what_was_asked_resolved_and_served_with_none_for_no_request():
+    found = mismatches(joined(spawn("a1", None, "claude-opus-5", ["claude-haiku-4-5", "claude-opus-5"]),
+                              spawn("a2", "Sonnet", "claude-opus-5[1m]", ["claude-opus-5"], version="2.1.290")))
+    assert found.to_dict("records") == [
+        {"kind": "served_differs", "requested": "none", "resolved": "claude-opus-5",
+         "served": "claude-haiku-4-5, claude-opus-5", "version": "2.1.289", "day": "2026-09-01"},
+        {"kind": "not_honoured", "requested": "sonnet", "resolved": "claude-opus-5", "served": "claude-opus-5",
+         "version": "2.1.290", "day": "2026-09-01"}]
+
+
+def test_a_mismatch_with_no_version_logged_names_none_however_pandas_reads_the_gap():
+    found = mismatches(joined(spawn("a1", "sonnet", "claude-opus-5", ["claude-opus-5"], version=float("nan"))))
+    assert found["version"].tolist() == [None]
+
+
+def test_the_history_shows_each_alias_moving_to_a_new_model_with_its_days_versions_and_spawns():
+    rows = joined(spawn("a1", "opus", "claude-opus-5[1m]", ["claude-opus-5"], version="2.1.99", day="2026-09-01"),
+                  spawn("a2", "opus", "claude-opus-5", ["claude-opus-5"], version="2.1.280", day="2026-09-02"),
+                  spawn("a3", "opus", "claude-opus-5-5", ["claude-opus-5-5"], version="2.1.288", day="2026-09-03"),
+                  spawn("a4", None, "claude-sonnet-5", [], day="2026-09-03"),
+                  spawn("a5", "haiku", "claude-haiku-4-5", ["claude-haiku-4-5"], day="2026-08-31"))
+    assert alias_history(rows, ["2026-09-01", "2026-09-02", "2026-09-03"]) == {
+        "aliases": [{"alias": "none", "models": [{"model": "claude-sonnet-5", "first": "2026-09-03",
+                                                  "last": "2026-09-03", "versions": ["2.1.289"], "spawns": 1}]},
+                    {"alias": "opus", "models": [
+                        {"model": "claude-opus-5", "first": "2026-09-01", "last": "2026-09-02",
+                         "versions": ["2.1.99", "2.1.280"], "spawns": 2},
+                        {"model": "claude-opus-5-5", "first": "2026-09-03", "last": "2026-09-03",
+                         "versions": ["2.1.288"], "spawns": 1}]}],
+        "spawns": 4, "judged": 3, "no_response": 1, "mismatches": []}
+
+
+def test_a_mismatch_alerts_once_per_kind_models_and_version_and_again_when_the_version_moves():
+    state = {"model_mismatches": []}
+    first = joined(spawn("a1", "sonnet", "claude-opus-5", ["claude-opus-5"], day="2026-09-07"),
+                   spawn("a2", "sonnet", "claude-opus-5", ["claude-opus-5"], day="2026-09-08"))
+    new = model_mismatch_alerts(first, state, date(2026, 9, 8))
+    assert new == [{"kind": "not_honoured", "requested": "sonnet", "resolved": "claude-opus-5",
+                    "served": "claude-opus-5", "version": "2.1.289", "first_day": "2026-09-07",
+                    "reported_on": "2026-09-08"}]
+    assert state["model_mismatches"] == new
+    assert model_mismatch_alerts(first, state, date(2026, 9, 9)) == []
+    moved = joined(spawn("a3", "sonnet", "claude-opus-5", ["claude-opus-5"], version="2.1.290", day="2026-09-09"))
+    assert [m["version"] for m in model_mismatch_alerts(moved, state, date(2026, 9, 9))] == ["2.1.290"]
+
+
+def test_a_mismatch_older_than_the_alert_window_is_left_to_the_report():
+    state = {"model_mismatches": []}
+    rows = joined(spawn("a1", "sonnet", "claude-opus-5", ["claude-opus-5"], day="2026-09-01"),
+                  spawn("a2", "haiku", "claude-opus-5", ["claude-opus-5"], day="2026-09-02"))
+    assert [m["requested"] for m in model_mismatch_alerts(rows, state, date(2026, 9, 8))] == ["haiku"]
