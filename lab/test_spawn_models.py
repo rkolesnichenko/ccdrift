@@ -55,3 +55,10 @@ def test_the_plants_come_from_the_first_answered_spawn_of_each_alias_with_a_full
 def test_the_one_million_count_takes_only_answered_spawns_resolved_to_a_1m_model():
     joined = pd.concat([clean(), pd.DataFrame([spawn("a6", "opus", "claude-opus-5[1M]", [])])], ignore_index=True)
     assert one_million_alarms(joined) == 1
+
+
+def test_logs_where_no_spawn_gives_a_plant_fail_the_gate_rather_than_pass_it_untested():
+    unanswered = pd.DataFrame([spawn("a1", "opus", "claude-opus-5", []),
+                               spawn("a2", None, "claude-opus-5", ["claude-opus-5"]),
+                               spawn("a3", "opus", None, ["claude-opus-5"])], columns=list(JOINED_COLUMNS))
+    assert gate(unanswered) == (False, ["false alarms: 0", "plants judged as expected: 0 of 0"])

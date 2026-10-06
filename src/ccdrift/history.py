@@ -294,10 +294,12 @@ class History:
         # it, since a row stays with the path that sorts first, and 79 spawns there would
         # otherwise show no response.
         if from_version < 10 and columns:
-            named = [(name[len("agent-"):-len(".jsonl")], file_id)
+            named = [(agent, file_id)
                      for file_id, path in self.db.execute("SELECT id, path FROM files").fetchall()
                      for name in [Path(path).name]
-                     if Path(path).parent.name == "subagents" and name.startswith("agent-") and name.endswith(".jsonl")]
+                     for agent in [name[len("agent-"):-len(".jsonl")]]
+                     if Path(path).parent.name == "subagents" and name.startswith("agent-")
+                     and name.endswith(".jsonl") and agent]
             with self.db:
                 self.db.executemany("UPDATE responses SET agent_id = ? WHERE file_id = ? AND agent_id IS NULL", named)
         file_columns = {row[1] for row in self.db.execute("PRAGMA table_info(files)")}
@@ -628,8 +630,8 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
             return Tables(history.responses(since), history.durations(since), history.hook_runs(since),
                           history.compactions(since), history.failures(since), history.field_census(since),
                           history.model_usage(since), history.components(since), history.hook_coverage(since),
-                          history.attachment_census(since), history.skipped, history.no_responses,
-                          history.spawns(since))
+                          history.attachment_census(since), skipped=history.skipped,
+                          no_responses=history.no_responses, spawns=history.spawns(since))
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc
     except pd.errors.DatabaseError as exc:

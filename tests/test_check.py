@@ -484,14 +484,19 @@ def test_check_alerts_once_when_a_model_starts_thinking_twice_as_much(tmp_path, 
     assert sent == []
 
 
-def test_check_alerts_once_when_a_subagent_is_resolved_to_another_model_than_it_asked_for(tmp_path, sent, capsys):
-    main_thread_days(tmp_path / "logs", [{}] * 15)
+def mismatched_spawn(root):
+    """Fifteen CLI days, and on the last a call asking for Sonnet resolved to and served Opus 5."""
+    main_thread_days(root, [{}] * 15)
     ts = 14 * DAY + 3600
-    write(tmp_path / "logs" / "p" / "spawner.jsonl", [
+    write(root / "p" / "spawner.jsonl", [
         line("q1", agent_call("t1", model="sonnet"), ts=at(ts), sid="sp", version="2.1.290", entrypoint="cli"),
         agent_result(at(ts + 60), "t1", "a7", resolved="claude-opus-5", sid="sp", version="2.1.290")])
-    write(tmp_path / "logs" / "p" / "spawner" / "subagents" / "agent-a7.jsonl", [
+    write(root / "p" / "spawner" / "subagents" / "agent-a7.jsonl", [
         line("q2", text(20), ts=at(ts + 30), sid="sp", sidechain=True, model="claude-opus-5", agent_id="a7")])
+
+
+def test_check_alerts_once_when_a_subagent_is_resolved_to_another_model_than_it_asked_for(tmp_path, sent, capsys):
+    mismatched_spawn(tmp_path / "logs")
     kinds = tmp_path / "kinds.txt"
     check_logs(tmp_path, today=date(2026, 9, 16), exec_command=f'echo "$CCDRIFT_ALERT" >> "{kinds}"')
     assert sent == ["ccdrift: a subagent got another model"] and kinds.read_text() == "spawn_model\n"
@@ -500,6 +505,31 @@ def test_check_alerts_once_when_a_subagent_is_resolved_to_another_model_than_it_
     sent.clear()
     check_logs(tmp_path, today=date(2026, 9, 17))
     assert sent == []
+
+
+def test_a_state_from_before_spawns_were_judged_still_alerts_on_a_mismatch_once(tmp_path, sent):
+    mismatched_spawn(tmp_path / "logs")
+    old = {**new_state(), "last_ok": "2026-09-15T09:00:00+00:00"}
+    del old["model_mismatches"]
+    save_state(tmp_path / "state.json", old)
+    check_logs(tmp_path, today=date(2026, 9, 16))
+    assert sent == ["ccdrift: a subagent got another model"]
+    sent.clear()
+    check_logs(tmp_path, today=date(2026, 9, 17))
+    assert sent == []
+
+
+def test_the_spawn_alert_quotes_a_release_note_about_subagent_models_not_one_about_haiku(tmp_path, sent, capsys):
+    mismatched_spawn(tmp_path / "logs")
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "cache" / "changelog.md").write_text(
+        "## 2.1.290\n\n- Fixed the background Haiku auto-title request picking a fallback model\n"
+        "- Fixed subagents with `model: sonnet` leaving the session's model\n")
+    check_logs(tmp_path, today=date(2026, 9, 16))
+    assert sent == ["ccdrift: a subagent got another model"]
+    out = capsys.readouterr().out
+    assert "    release notes 2.1.290: Fixed subagents with `model: sonnet` leaving the session's model" in out
+    assert "auto-title" not in out
 
 
 def test_check_runs_the_exec_command_for_each_alert(tmp_path, sent, capsys):
