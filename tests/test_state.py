@@ -162,6 +162,28 @@ def test_a_second_command_waits_for_the_state_lock_saying_so_and_goes_on_once_it
     assert f"Waiting for another ccdrift command to finish with {path}..." in capfd.readouterr().err
 
 
+def test_a_command_that_wont_wait_is_told_at_once_that_another_holds_the_state_lock_and_takes_it_once_free(
+        tmp_path, capfd):
+    fcntl = pytest.importorskip("fcntl")
+    path = tmp_path / "state.json"
+    held = open(tmp_path / "state.json.lock", "a")
+    fcntl.flock(held, fcntl.LOCK_EX)
+    got = []
+
+    def take():
+        with state_lock(path, wait=False) as holding:
+            got.append(holding)
+
+    taking = threading.Thread(target=take, daemon=True)
+    taking.start()
+    taking.join(5)
+    held.close()  # releases the lock, so a mutation that waits finishes after the assert
+    assert got == [False]
+    with state_lock(path, wait=False) as holding:
+        assert holding is True
+    assert capfd.readouterr().err == ""
+
+
 def test_an_incident_added_while_a_check_holds_the_state_is_kept_along_with_the_checks_own_change(tmp_path, capsys):
     # The check reads the state, works for a while and saves it; `ccdrift incident add` run
     # meanwhile must wait for it, or one of them saves over the other's change.

@@ -177,6 +177,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_source(install_action)
     actions.add_parser("remove", help="remove the job")
     actions.add_parser("status", help="show whether the job is installed and how its last run went")
+
+    hook = commands.add_parser("hook", help="what the Claude Code plugin runs")
+    hook_actions = hook.add_subparsers(dest="action", required=True, metavar="ACTION")
+    hook_actions.add_parser("check", help="the check a session start begins; it gives up while another "
+                            "command holds the state, and runs only if the last check began an hour or more ago")
     return parser
 
 
@@ -329,4 +334,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return run_replay(_source(args), _state(args))
     if args.command == "schedule":
         return _schedule(args)
+    if args.command == "hook":
+        from ccdrift.hook import run_hook_check
+        return run_hook_check(ccdrift_home() / "check-state.json")
     raise AssertionError(COMMAND_LINES["unhandled"].format(command=args.command))
