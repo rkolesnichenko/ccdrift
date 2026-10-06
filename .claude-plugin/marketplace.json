@@ -1,0 +1,14 @@
+{
+  "name": "ccdrift",
+  "description": "ccdrift: a check for silent changes in Claude Code, read from your local session logs",
+  "owner": {
+    "name": "Roman Kolesnichenko"
+  },
+  "plugins": [
+    {
+      "name": "ccdrift",
+      "source": "./plugin",
+      "description": "Shows ccdrift's verdict at each session start and runs its check in the background once an hour"
+    }
+  ]
+}
