@@ -78,6 +78,18 @@ def test_the_hook_says_how_to_install_ccdrift_when_there_is_none(tmp_path):
     assert json.loads(result.stdout) == {"systemMessage": "ccdrift: not installed. Run: uv tool install ccdrift"}
 
 
+@pytest.mark.parametrize("path", ["/usr/bin:/bin:", ":/usr/bin:/bin", "/usr/bin:.:/bin", "/usr/bin:project:/bin"],
+                         ids=["empty-last", "empty-first", "dot", "relative"])
+def test_the_hook_never_runs_a_ccdrift_in_the_projects_folder_through_an_empty_or_relative_path_entry(tmp_path, path):
+    # Claude Code runs the hook in the project's folder, so such an entry would run the project's own ccdrift.
+    project = fake(tmp_path / "project", '{"systemMessage": "the project ran"}')
+    fake(project / "project", '{"systemMessage": "the project ran"}')
+    result = subprocess.run(["/bin/sh", str(SCRIPT)], input=PAYLOAD, capture_output=True, text=True, cwd=project,
+                            env={"HOME": str(tmp_path / "home"), "PATH": path})
+    assert json.loads(result.stdout) == {"systemMessage": "ccdrift: not installed. Run: uv tool install ccdrift"}
+    assert not (project / "args").exists() and not (project / "project" / "args").exists()
+
+
 def test_the_hook_hands_ccdrift_the_payload_and_passes_on_what_it_prints(tmp_path):
     shown = '{"systemMessage": "ccdrift: no check yet"}'
     bin_dir = fake(tmp_path / "bin", shown)

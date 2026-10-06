@@ -7,7 +7,20 @@
 # uv tool and pipx install to ~/.local/bin, which a Desktop app launched from the Dock may not
 # have on PATH; it wins over any other ccdrift on PATH, such as a development checkout's.
 bin="$HOME/.local/bin/ccdrift"
-[ -x "$bin" ] || bin=$(command -v ccdrift) || bin=""
+if [ ! -x "$bin" ]; then
+    # PATH by hand, absolute folders only: Claude Code runs hooks in the project's folder, so an
+    # empty or relative entry, which `command -v` would search, could run the project's own ccdrift.
+    bin=""
+    set -f
+    IFS=:
+    for dir in $PATH; do
+        case "$dir" in
+            /*) if [ -f "$dir/ccdrift" ] && [ -x "$dir/ccdrift" ]; then bin="$dir/ccdrift"; break; fi ;;
+        esac
+    done
+    unset IFS
+    set +f
+fi
 if [ -z "$bin" ]; then
     echo '{"systemMessage": "ccdrift: not installed. Run: uv tool install ccdrift"}'
     exit 0
