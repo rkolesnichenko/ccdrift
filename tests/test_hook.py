@@ -235,6 +235,20 @@ def test_a_check_starts_detached_with_this_python_its_output_appended_to_a_priva
     assert stat.S_IMODE(log.stat().st_mode) == 0o600
 
 
+def test_a_check_starts_in_ccdrifts_home_so_the_projects_own_modules_cant_stand_in_for_ccdrift(tmp_path, monkeypatch):
+    # Claude Code runs the hook in the project's folder, and `python -m` searches the current
+    # folder first: a repository holding a ccdrift/ or a json.py of its own would run as the check.
+    seen = []
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **options: seen.append(options))
+    project = tmp_path / "project"
+    (project / "ccdrift").mkdir(parents=True)
+    (project / "ccdrift" / "__main__.py").write_text("raise SystemExit('the project ran')\n")
+    monkeypatch.chdir(project)
+    start_check(tmp_path / "home" / "check-state.json")
+    [options] = seen
+    assert options["cwd"] == tmp_path / "home"
+
+
 def test_a_hook_that_fails_says_so_in_one_line_logs_the_traceback_privately_and_still_exits_0(
         tmp_path, monkeypatch, capsys):
     def broken(path):

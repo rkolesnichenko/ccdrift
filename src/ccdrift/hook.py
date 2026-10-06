@@ -59,10 +59,11 @@ def start_check(state_path: Path) -> None:
     """Start `ccdrift hook check` with this Python, so the same install, and return at once.
     It runs in a session of its own, so a `claude -p` that ends doesn't take it down, with
     its output appended to the check's log. It finds the state where this command did, in
-    ccdrift's home."""
+    ccdrift's home, and starts there: Claude Code runs the hook in the project's folder, where
+    `python -m` would import a ccdrift/ or a json.py the project holds before ccdrift's own."""
     with open(private_log(state_path), "a") as out:
         subprocess.Popen([sys.executable, "-m", "ccdrift", "hook", "check"], stdin=subprocess.DEVNULL,
-                         stdout=out, stderr=out, start_new_session=True)
+                         stdout=out, stderr=out, cwd=state_path.parent, start_new_session=True)
 
 
 def run_session_start(state_path: Path, stdin: TextIO, now: Optional[datetime] = None) -> int:
