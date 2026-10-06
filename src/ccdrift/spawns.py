@@ -3,7 +3,7 @@ the request to, and the one the subagent's responses were served by.
 
 A mismatch is a fact, not a statistic, so no threshold turns on anything here: one spawn
 served a model other than the one resolved for it is enough to say so. On the owner's logs
-(1,543 spawns joined to their responses, 2026-08-15 to 2026-10-06) there was none."""
+(1,560 spawns joined to their responses, 2026-08-15 to 2026-10-06) there was none."""
 
 from __future__ import annotations
 
@@ -121,15 +121,18 @@ def alias_history(joined: pd.DataFrame, days: Sequence[str]) -> dict[str, Any]:
 def model_mismatch_alerts(joined: pd.DataFrame, state: dict[str, Any], today: date) -> list[dict[str, Any]]:
     """The mismatches among spawns of the ALERT_DAYS days ending `today` not yet in
     state["model_mismatches"], which each is added to. One is reported once per kind,
-    request, resolved and served model and version, not once per spawn: a change that
-    hits every spawn alerts once, and again only when the version or the models move."""
+    request, resolved and served model, not once per spawn: a change that hits every spawn
+    alerts once, and again only when the resolved or served model moves, not on every Claude
+    Code version, since Claude Code ships near-daily and a configured override
+    (CLAUDE_CODE_SUBAGENT_MODEL with CLAUDE_CODE_SUBAGENT_MODEL_FORCE) resolves every call
+    to one model on purpose. The entry keeps the version it was first seen on."""
     since = (today - timedelta(days=ALERT_DAYS - 1)).isoformat()
     recent = joined[joined["day"].astype(str).between(since, today.isoformat())] if not joined.empty else joined
     reported = state["model_mismatches"]
-    known = {(m["kind"], m["requested"], m["resolved"], m["served"], m["version"]) for m in reported}
+    known = {(m["kind"], m["requested"], m["resolved"], m["served"]) for m in reported}
     new = []
     for row in mismatches(recent).to_dict("records"):
-        key = (row["kind"], row["requested"], row["resolved"], row["served"], row["version"])
+        key = (row["kind"], row["requested"], row["resolved"], row["served"])
         if key in known:
             continue
         known.add(key)

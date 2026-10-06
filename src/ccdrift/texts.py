@@ -242,8 +242,16 @@ def _asked(requested: str) -> str:
 
 def spawn_model_line(mismatch: dict[str, Any]) -> str:
     """A model mismatch as `status` lists it."""
-    return (f"subagent asking for {_asked(mismatch['requested'])} served {mismatch['served']} on "
-            f"{mismatch['version'] or 'an unknown version'} from {mismatch['first_day']}")
+    asked, resolved, served = _asked(mismatch["requested"]), mismatch["resolved"], mismatch["served"]
+    version = mismatch["version"] or "an unknown version"
+    if mismatch["kind"] == "served_differs":
+        return (f"subagent asking for {asked} resolved to {resolved} but served {served} on {version} "
+                f"from {mismatch['first_day']}")
+    if resolved is None:
+        return (f"subagent asking for {asked} was served {served}, with no resolved model logged, on {version} "
+                f"from {mismatch['first_day']}")
+    return (f"subagent asking for {asked} was resolved to {resolved} and served {served} on {version} "
+            f"from {mismatch['first_day']}")
 
 
 def cut_short_line(episode: dict[str, Any]) -> str:
@@ -1196,12 +1204,19 @@ def spawn_lines(history: dict[str, Any]) -> list[str]:
         label = "no model asked" if alias["alias"] == "none" else alias["alias"]
         lines.append(f"  {label}: " + "; ".join(_resolution(model) for model in alias["models"]))
     if not history["mismatches"]:
-        lines.append("Every answered spawn got the model it asked for.")
+        lines.append("Every answered spawn got the model it asked for." if history["judged"]
+                     else "No spawn in these days was answered, so none was judged.")
         return lines
     lines.append(f"Spawns that got another model: {len(history['mismatches']):,}")
+    groups: dict[tuple[str, str, str, str, str], list[str]] = {}
     for m in history["mismatches"]:
-        lines.append(f"  {m['day']} {MISMATCH_NAMES[m['kind']]}: asked {_asked(m['requested'])}, resolved "
-                     f"{m['resolved'] or 'nothing logged'}, served {m['served']}, Claude Code {m['version'] or 'unknown'}")
+        key = (m["kind"], m["requested"], m["resolved"] or "", m["served"], m["version"] or "")
+        groups.setdefault(key, []).append(str(m["day"]))
+    for key, days in sorted(groups.items(), key=lambda item: (min(item[1]), item[0])):
+        kind, requested, resolved, served, version = key
+        lines.append(f"  {MISMATCH_NAMES[kind]}: asked {_asked(requested)}, resolved {resolved or 'nothing logged'}, "
+                     f"served {served}, Claude Code {version or 'unknown'}: {len(days):,} spawn"
+                     f"{'' if len(days) == 1 else 's'}, {_span(min(days), max(days))}")
     return lines
 
 

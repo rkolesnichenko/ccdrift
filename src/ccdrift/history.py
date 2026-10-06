@@ -283,7 +283,8 @@ class History:
                 with self.db:
                     self.db.execute(f"ALTER TABLE responses ADD COLUMN {column} TEXT")
         # Filled when the parser bump that came with it reads each transcript again; the
-        # rows of transcripts Claude Code already deleted keep none.
+        # rows of transcripts Claude Code already deleted keep none, except those of subagent
+        # transcripts, which the block below fills from their name.
         if from_version < 10 and columns and "agent_id" not in columns:
             with self.db:
                 self.db.execute("ALTER TABLE responses ADD COLUMN agent_id TEXT")

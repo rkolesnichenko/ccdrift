@@ -275,7 +275,9 @@ Each Agent call names the model it wants, its result names the model Claude Code
 that to, and the subagent's own responses name the model that served them. The check
 alerts once when a spawn was resolved to another model than it asked for (an alias such as
 `opus` honoured by any Opus, a full id only by itself) or served by another model than the
-one resolved, judging the last 7 days; a model's "[1m]" marker is ignored, since Claude
+one resolved, judging the last 7 days, once per requested, resolved and served model and
+not again on each Claude Code version, so a subagent model forced on purpose alerts once
+and then shows in `report` and `status`; a model's "[1m]" marker is ignored, since Claude
 Code serves it under the plain id. An alias moving to a new model, as `opus` does at a
 release, shows in the report and never alerts.
 

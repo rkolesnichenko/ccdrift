@@ -249,7 +249,7 @@ def private_corpus(root):
         api_error(at(DAY + 40), sid="s-secret"),
         line("h2", agent_call("toolu_spawn", model="haiku", agent_type="secret-agent-type"), ts=at(DAY + 45),
              sid="s-secret", cache_read=900, cache_creation=100, version="2.1.261", entrypoint="cli"),
-        agent_result(at(DAY + 46), "toolu_spawn", "agent-secret-id", resolved="claude-haiku-4-5", sid="s-secret",
+        agent_result(at(DAY + 46), "toolu_spawn", "agent-secret-id", resolved="claude-opus-5", sid="s-secret",
                      version="2.1.261")])
     write(root / "hooked" / "subagents" / "agent-agent-secret-id.jsonl", [
         line("h3", text(40), ts=at(DAY + 45.5), sid="s-secret", sidechain=True, model="claude-haiku-4-5",
@@ -271,7 +271,7 @@ def test_report_json_names_no_folder_session_branch_hook_command_or_tool_id(tmp_
     payload = json.loads(out)
     if by == "day":  # the fixture reached every part of the view that could leak it
         assert payload["incidents"] and payload["hooks"] and payload["subagents"] and payload["failures"]
-        assert payload["spawns"]["spawns"] == 1
+        assert payload["spawns"]["spawns"] == 1 and payload["spawns"]["mismatches"]
     for private in (str(tmp_path), "secretproject", "secret-branch", PRIVATE_PATH, PRIVATE_TEXT, "toolu_secret",
                     "s-secret", "secret-hook", '"s0"', ".jsonl", "agent-secret-id", "toolu_spawn", "secret-agent-type"):
         assert private not in out

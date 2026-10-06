@@ -11,7 +11,7 @@ from ccdrift.logs import parse_all
 from ccdrift.report import run_report
 from ccdrift.spawns import (JOINED_COLUMNS, alias_history, honours, judge, mismatches, model_mismatch_alerts, model_name,
                             spawn_models)
-from ccdrift.texts import spawn_model_message
+from ccdrift.texts import spawn_lines, spawn_model_message
 from tests.helpers import (DAY, PRIVATE_TEXT, agent_call, agent_result, at, line, main_thread_days, text, tool_use,
                            write)
 
@@ -54,7 +54,7 @@ def test_each_response_carries_the_agent_id_of_the_subagent_it_came_from(tmp_pat
 
 def test_a_spawn_keeps_nothing_of_the_calls_prompt_or_description(tmp_path):
     spawning(tmp_path)
-    assert PRIVATE_TEXT not in parse_all(tmp_path).spawns.to_json()
+    assert PRIVATE_TEXT not in parse_all(tmp_path).spawns.to_json(date_format="iso")
     path = tmp_path / "history.sqlite"
     with History(path) as history:
         history.update(tmp_path / "p")
@@ -198,7 +198,7 @@ def test_the_history_shows_each_alias_moving_to_a_new_model_with_its_days_versio
         "spawns": 4, "judged": 3, "no_response": 1, "mismatches": []}
 
 
-def test_a_mismatch_alerts_once_per_kind_models_and_version_and_again_when_the_version_moves():
+def test_a_mismatch_alerts_once_per_kind_and_models_not_again_on_a_new_version_but_when_the_models_move():
     state = {"model_mismatches": []}
     first = joined(spawn("a1", "sonnet", "claude-opus-5", ["claude-opus-5"], day="2026-09-07"),
                    spawn("a2", "sonnet", "claude-opus-5", ["claude-opus-5"], day="2026-09-08"))
@@ -208,8 +208,13 @@ def test_a_mismatch_alerts_once_per_kind_models_and_version_and_again_when_the_v
                     "reported_on": "2026-09-08"}]
     assert state["model_mismatches"] == new
     assert model_mismatch_alerts(first, state, date(2026, 9, 9)) == []
-    moved = joined(spawn("a3", "sonnet", "claude-opus-5", ["claude-opus-5"], version="2.1.290", day="2026-09-09"))
-    assert [m["version"] for m in model_mismatch_alerts(moved, state, date(2026, 9, 9))] == ["2.1.290"]
+    later = joined(spawn("a3", "sonnet", "claude-opus-5", ["claude-opus-5"], version="2.1.290", day="2026-09-09"))
+    assert model_mismatch_alerts(later, state, date(2026, 9, 9)) == []
+    served = joined(spawn("a4", "sonnet", "claude-opus-5", ["claude-opus-5-5"], version="2.1.290", day="2026-09-09"))
+    assert [(m["kind"], m["served"]) for m in model_mismatch_alerts(served, state, date(2026, 9, 9))] == [
+        ("not_honoured", "claude-opus-5-5"), ("served_differs", "claude-opus-5-5")]
+    resolved = joined(spawn("a5", "sonnet", "claude-opus-5-5", ["claude-opus-5-5"], version="2.1.290", day="2026-09-09"))
+    assert [m["resolved"] for m in model_mismatch_alerts(resolved, state, date(2026, 9, 9))] == ["claude-opus-5-5"]
 
 
 def test_a_mismatch_older_than_the_alert_window_is_left_to_the_report():
@@ -269,8 +274,36 @@ def test_the_day_report_shows_what_each_request_resolved_to_and_every_spawn_that
         "(Claude Code 2.1.288, 1 spawn)",
         "  sonnet: claude-opus-5-5 2026-09-03 (Claude Code 2.1.288, 1 spawn)",
         "Spawns that got another model: 1",
-        "  2026-09-03 resolved to another model than asked: asked sonnet, resolved claude-opus-5-5, served "
-        "claude-opus-5-5, Claude Code 2.1.288"]
+        "  resolved to another model than asked: asked sonnet, resolved claude-opus-5-5, served claude-opus-5-5, "
+        "Claude Code 2.1.288: 1 spawn, 2026-09-03"]
+
+
+def test_the_report_groups_spawns_that_got_the_same_other_model_into_one_line_with_their_days():
+    days = ["2026-09-01", "2026-09-02", "2026-09-03"]
+    rows = joined(spawn("a1", "sonnet", "claude-opus-5-5", ["claude-opus-5-5"], version="2.1.288", day="2026-09-03"),
+                  spawn("a2", "sonnet", "claude-opus-5-5", ["claude-opus-5-5"], version="2.1.288", day="2026-09-01"),
+                  spawn("a3", "sonnet", "claude-opus-5-5", ["claude-opus-5-5"], version="2.1.288", day="2026-09-02"),
+                  spawn("a4", "sonnet", "claude-opus-5-5", ["claude-opus-5-5"], version="2.1.290", day="2026-09-03"),
+                  spawn("a5", "haiku", "claude-haiku-4-5", ["claude-opus-5"], version="2.1.288", day="2026-09-01"))
+    lines = spawn_lines(alias_history(rows, days))
+    assert lines[lines.index("Spawns that got another model: 5"):] == [
+        "Spawns that got another model: 5",
+        "  resolved to another model than asked: asked sonnet, resolved claude-opus-5-5, served claude-opus-5-5, "
+        "Claude Code 2.1.288: 3 spawns, 2026-09-01 to 2026-09-03",
+        "  served another model than resolved: asked haiku, resolved claude-haiku-4-5, served claude-opus-5, "
+        "Claude Code 2.1.288: 1 spawn, 2026-09-01",
+        "  resolved to another model than asked: asked sonnet, resolved claude-opus-5-5, served claude-opus-5-5, "
+        "Claude Code 2.1.290: 1 spawn, 2026-09-03"]
+
+
+def test_the_report_claims_every_answered_spawn_got_its_model_only_when_one_was_answered():
+    days = ["2026-09-01"]
+    silent = spawn_lines(alias_history(joined(spawn("a1", "haiku", "claude-haiku-4-5", [])), days))
+    assert silent[1].startswith("Subagent spawns over these days: 1, 0 answered.")
+    assert "Every answered spawn got the model it asked for." not in silent
+    assert silent[-1] == "No spawn in these days was answered, so none was judged."
+    answered = spawn_lines(alias_history(joined(spawn("a1", "haiku", "claude-haiku-4-5", ["claude-haiku-4-5"])), days))
+    assert answered[-1] == "Every answered spawn got the model it asked for."
 
 
 def test_with_no_spawn_getting_another_model_the_report_says_so_and_the_page_shows_it_too(tmp_path, capsys):
