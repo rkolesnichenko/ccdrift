@@ -1,8 +1,15 @@
-"""The Claude Code plugin's hook: when a session start begins a check, and the check it begins."""
+"""The Claude Code plugin's hook: what a session start shows, when it begins a check, and the
+check it begins."""
 
+import io
 import json
+import os
+import stat
+import subprocess
+import sys
 import threading
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -10,7 +17,7 @@ import ccdrift.check
 import ccdrift.hook
 from ccdrift.check import run_check
 from ccdrift.cli import main
-from ccdrift.hook import CHECK_INTERVAL, check_due, run_hook_check
+from ccdrift.hook import CHECK_INTERVAL, check_due, run_hook_check, run_session_start, start_check
 from ccdrift.logs import default_source
 from ccdrift.state import ccdrift_home, load_state, new_state, save_state
 
@@ -130,3 +137,146 @@ def test_ccdrift_hook_check_checks_the_state_in_ccdrift_home(monkeypatch):
     monkeypatch.setattr(ccdrift.hook, "run_hook_check", lambda path: seen.append(path) or 0)
     assert main(["hook", "check"]) == 0
     assert seen == [ccdrift_home() / "check-state.json"]
+
+
+# What Claude Code sends a SessionStart hook; the path, folder and id must go nowhere.
+PAYLOAD = {"session_id": "SESSION-ID-1", "hook_event_name": "SessionStart", "source": "startup",
+           "transcript_path": "/Users/someone/.claude/projects/-Users-someone-secret-project/abc.jsonl",
+           "cwd": "/Users/someone/secret-project", "model": "claude-opus-5-5", "permission_mode": "default"}
+LINE = "ccdrift: cache ratio down since 09-14"
+
+
+def stdin_of(payload):
+    data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+    return io.TextIOWrapper(io.BytesIO(data))
+
+
+def following(tmp_path, ago=timedelta(minutes=5)):
+    """A state whose last check began `ago` before NOW and follows an open incident."""
+    path = ran_before(tmp_path, ago)
+    state = load_state(path)
+    state["last_ok"] = state["last_run"]["started"]
+    state["incidents"] = [{"metric": "cache_ratio", "start": "2026-09-14", "end": None, "status": "open",
+                           "source": "check", "closed_by": None, "recovered_from": None, "opened_on": "2026-09-14",
+                           "closed_on": None, "versions": [], "cost": 0}]
+    save_state(path, state)
+    return path
+
+
+def starts(monkeypatch):
+    started = []
+    monkeypatch.setattr(ccdrift.hook, "start_check", lambda path: started.append(path))
+    return started
+
+
+@pytest.mark.parametrize("source", ["startup", "resume"])
+def test_a_startup_or_a_resume_shows_the_status_lines_verdict_as_the_only_output(tmp_path, monkeypatch, capsys,
+                                                                                source):
+    starts(monkeypatch)
+    assert run_session_start(following(tmp_path), stdin_of({**PAYLOAD, "source": source}), NOW) == 0
+    assert capsys.readouterr().out == json.dumps({"systemMessage": LINE}) + "\n"
+
+
+@pytest.mark.parametrize("source", ["clear", "compact", "fork"])
+def test_a_session_start_in_the_middle_of_work_shows_nothing(tmp_path, monkeypatch, capsys, source):
+    starts(monkeypatch)
+    assert run_session_start(following(tmp_path), stdin_of({**PAYLOAD, "source": source}), NOW) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_nothing_is_shown_when_nothing_needs_attention(tmp_path, monkeypatch, capsys):
+    starts(monkeypatch)
+    path = ran_before(tmp_path, timedelta(minutes=5))
+    state = load_state(path)
+    save_state(path, {**state, "last_ok": state["last_run"]["started"]})
+    assert run_session_start(path, stdin_of(PAYLOAD), NOW) == 0
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("data", [b"", b"{", b"\xff\xfe", b"[1, 2]", b'"startup"', b'{"source": 7}', b"{}",
+                                  b"x" * (70 * 1024)],
+                         ids=["empty", "cut-off", "not-utf8", "a-list", "a-string", "source-not-text", "no-source",
+                              "over-64k"])
+def test_a_payload_that_doesnt_say_where_the_session_came_from_counts_as_a_startup(tmp_path, monkeypatch, capsys,
+                                                                                    data):
+    starts(monkeypatch)
+    assert run_session_start(following(tmp_path), stdin_of(data), NOW) == 0
+    assert capsys.readouterr().out == json.dumps({"systemMessage": LINE}) + "\n"
+
+
+@pytest.mark.parametrize("source", ["startup", "resume", "clear", "compact", "fork"])
+@pytest.mark.parametrize("ago, begun", [(timedelta(minutes=59), False), (timedelta(minutes=61), True)],
+                         ids=["59min", "61min"])
+def test_every_session_start_begins_a_check_when_one_is_due_and_only_then(tmp_path, monkeypatch, source, ago, begun):
+    started = starts(monkeypatch)
+    path = following(tmp_path, ago)
+    run_session_start(path, stdin_of({**PAYLOAD, "source": source}), NOW)
+    assert started == ([path] if begun else [])
+
+
+def test_a_check_starts_detached_with_this_python_its_output_appended_to_a_private_log(tmp_path, monkeypatch):
+    seen = []
+
+    class Popen:
+        def __init__(self, argv, **options):
+            seen.append((argv, options, options["stdout"].name, options["stdout"].mode))
+
+    monkeypatch.setattr(subprocess, "Popen", Popen)
+    log = tmp_path / "check.log"
+    log.write_text("earlier run\n")
+    log.chmod(0o644)
+    start_check(tmp_path / "state.json")
+    [(argv, options, name, mode)] = seen
+    assert argv == [sys.executable, "-m", "ccdrift", "hook", "check"]
+    assert options["start_new_session"] is True and options["stdin"] == subprocess.DEVNULL
+    assert options["stderr"] is options["stdout"]
+    assert (name, mode) == (str(log), "a")
+    assert log.read_text() == "earlier run\n"
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+
+
+def test_a_hook_that_fails_says_so_in_one_line_logs_the_traceback_privately_and_still_exits_0(
+        tmp_path, monkeypatch, capsys):
+    def broken(path):
+        raise OSError("no room left")
+
+    monkeypatch.setattr(ccdrift.hook, "start_check", broken)
+    path = following(tmp_path, timedelta(hours=2))
+    assert run_session_start(path, stdin_of(PAYLOAD), NOW) == 0
+    out = capsys.readouterr().out
+    assert out.count("\n") == 1
+    assert json.loads(out) == {"systemMessage": "ccdrift: the session-start hook failed (OSError); "
+                                                "the traceback is in check.log"}
+    log = tmp_path / "check.log"
+    assert "OSError: no room left" in log.read_text()
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+    for private in ("SESSION-ID-1", "secret-project", "abc.jsonl"):
+        assert private not in out and private not in log.read_text()
+
+
+def test_hook_session_start_loads_neither_pandas_nor_numpy(tmp_path):
+    # Claude's first response waits for it, as a status line refresh waits for `status --short`.
+    root = Path(__file__).resolve().parents[1]
+    home = tmp_path / "home"
+    home.mkdir()
+    following(tmp_path, timedelta(minutes=5)).rename(home / "check-state.json")
+    code = ("import sys\n"
+            "from ccdrift.cli import main\n"
+            "main(['hook', 'session-start'])\n"
+            "print(sorted(m for m in sys.modules if m.split('.')[0] in ('pandas', 'numpy')))\n")
+    # The state's last check is minutes old, so no check starts; a transcript folder of its own
+    # keeps one that did from reading the real ones.
+    env = {**os.environ, "PYTHONPATH": str(root / "src"), "CCDRIFT_HOME": str(home),
+           "CLAUDE_CONFIG_DIR": str(tmp_path / "claude")}
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                            input=json.dumps(PAYLOAD), env=env)
+    [shown, modules] = result.stdout.splitlines()
+    assert json.loads(shown)["systemMessage"].startswith("ccdrift: ") and modules == "[]", result.stderr
+    assert not (home / "check.log").exists()
+
+
+def test_ccdrift_hook_session_start_reads_standard_input_and_the_state_in_ccdrift_home(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ccdrift.hook, "run_session_start", lambda path, stdin: seen.append((path, stdin)) or 0)
+    assert main(["hook", "session-start"]) == 0
+    assert seen == [(ccdrift_home() / "check-state.json", sys.stdin)]

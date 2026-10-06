@@ -55,14 +55,15 @@ def linked_tree(module: str) -> ast.AST:
 
 @pytest.mark.parametrize("module", ["cli.py", "status.py", "report.py", "spend.py", "compare.py", "exchange.py",
                                     "schedule.py", "draft.py", "incidents.py", "replay.py", "page.py", "state.py",
-                                    "notify.py", "check.py", "logs.py", "history.py"])
+                                    "notify.py", "check.py", "logs.py", "history.py", "hook.py"])
 def test_every_line_a_command_uses_exists_and_gets_exactly_its_slots(module):
     # A line is looked up by name and filled by keyword, so a misspelt name or slot would
     # fail only when that line is printed, which some error paths rarely are.
     tables = {name: getattr(texts, name)
               for name in ("STATUS_LINES", "COMMAND_LINES", "REPORT_LINES", "COST_LINES", "COMPARE_LINES",
                            "QUOTA_LINES", "SCHEDULE_LINES", "DRAFT_LINES", "INCIDENT_LINES", "REPLAY_LINES",
-                           "PAGE_LINES", "STATE_LINES", "NOTIFY_LINES", "CHECK_LINES", "LOG_LINES", "HISTORY_LINES")}
+                           "PAGE_LINES", "STATE_LINES", "NOTIFY_LINES", "CHECK_LINES", "LOG_LINES", "HISTORY_LINES",
+                           "HOOK_LINES")}
     used = 0
     for node in ast.walk(linked_tree(module)):
         if not (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id in tables):
