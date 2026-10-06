@@ -151,9 +151,9 @@ def stdin_of(payload):
     return io.TextIOWrapper(io.BytesIO(data))
 
 
-def following(tmp_path, ago=timedelta(minutes=5)):
-    """A state whose last check began `ago` before NOW and follows an open incident."""
-    path = ran_before(tmp_path, ago)
+def following(tmp_path, ago=timedelta(minutes=5), now=NOW):
+    """A state whose last check began `ago` before `now` and follows an open incident."""
+    path = ran_before(tmp_path, ago, now)
     state = load_state(path)
     state["last_ok"] = state["last_run"]["started"]
     state["incidents"] = [{"metric": "cache_ratio", "start": "2026-09-14", "end": None, "status": "open",
@@ -273,7 +273,8 @@ def test_hook_session_start_loads_neither_pandas_nor_numpy(tmp_path):
     root = Path(__file__).resolve().parents[1]
     home = tmp_path / "home"
     home.mkdir()
-    following(tmp_path, timedelta(minutes=5)).rename(home / "check-state.json")
+    # The subprocess runs on the real clock, so the state's last check is minutes before it.
+    following(tmp_path, timedelta(minutes=5), datetime.now().astimezone()).rename(home / "check-state.json")
     code = ("import sys\n"
             "from ccdrift.cli import main\n"
             "main(['hook', 'session-start'])\n"
