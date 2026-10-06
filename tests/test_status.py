@@ -336,6 +336,19 @@ def test_the_long_status_lists_each_rise_in_thinking_of_the_last_30_days(tmp_pat
     ]
 
 
+def test_the_long_status_lists_each_subagent_model_mismatch_of_the_last_30_days(tmp_path, capsys):
+    mismatch = {"kind": "served_differs", "requested": "none", "resolved": "claude-opus-5",
+                "served": "claude-haiku-4-5", "version": None, "first_day": "2026-09-12", "reported_on": "2026-09-12"}
+    old = {**mismatch, "first_day": "2026-08-01", "reported_on": "2026-08-01"}
+    path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00", model_mismatches=[old, mismatch])
+    run_status(path, now=NOW)
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[lines.index("Other changes in the last 30 days:"):] == [
+        "Other changes in the last 30 days:",
+        "  subagent asking for no model served claude-haiku-4-5 on an unknown version from 2026-09-12",
+    ]
+
+
 @pytest.mark.parametrize("flags", [[], ["--stdin"]])
 def test_status_short_loads_neither_pandas_nor_numpy(tmp_path, flags):
     # It runs on every status line refresh; importing pandas took ~0.3 s of it. With --stdin

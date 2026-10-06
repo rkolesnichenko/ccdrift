@@ -220,7 +220,7 @@ sends only on Pro and Max plans.
 
 `--exec` runs a command through the shell for each alert, with `CCDRIFT_ALERT` (`flag`,
 `recovered`, `persistent`, `history`, `early`, `loop`, `subagent_loop`, `setting`,
-`context`, `hooks`, `hook_coverage`, `failed_requests`, `cut_short`, `thinking`, `fields`, `blank_cache`,
+`context`, `hooks`, `hook_coverage`, `failed_requests`, `cut_short`, `thinking`, `spawn_model`, `fields`, `blank_cache`,
 `unreadable`, `no_responses`, `digest` or
 `failed`), `CCDRIFT_TITLE` and `CCDRIFT_MESSAGE` set. The `new_fields`, `new_attachments` and
 `context_dropped` alerts go to the log only and never run `--exec`. For example, to send

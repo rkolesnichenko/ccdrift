@@ -236,6 +236,16 @@ def thinking_line(rise: dict[str, Any]) -> str:
             f"{level:,.0f} tokens per response against {rise['median']:,.0f}")
 
 
+def _asked(requested: str) -> str:
+    return "no model" if requested == "none" else requested
+
+
+def spawn_model_line(mismatch: dict[str, Any]) -> str:
+    """A model mismatch as `status` lists it."""
+    return (f"subagent asking for {_asked(mismatch['requested'])} served {mismatch['served']} on "
+            f"{mismatch['version'] or 'an unknown version'} from {mismatch['first_day']}")
+
+
 def cut_short_line(episode: dict[str, Any]) -> str:
     worse = episode.get("worse_than")
     tail = f", {worse_text(worse)}" if worse else run_text(episode.get("run_days", 0))
@@ -355,6 +365,7 @@ ALERT_TITLES = {"flag": "ccdrift flag", "recovered": "ccdrift: back to normal",
                 "hooks": "ccdrift: hooks failing", "hook_coverage": "ccdrift: hooks changed",
                 "failed_requests": "ccdrift: requests failing",
                 "cut_short": "ccdrift: responses cut short", "thinking": "ccdrift: thinking rose",
+                "spawn_model": "ccdrift: a subagent got another model",
                 "fields": "ccdrift: Claude Code stopped logging a field",
                 "new_fields": "ccdrift: Claude Code logs a field ccdrift doesn't read",
                 "new_attachments": "ccdrift: Claude Code writes an attachment ccdrift doesn't read",
@@ -513,6 +524,22 @@ def requests_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
     return (f"{episode['requests']} requests failed on {episode['since']}"
             f"{f' ({named})' if named else ''}, {before}{_on_versions(versions)}. Claude Code retries these itself; a run "
             "of them points at the API or your connection, not your setup.")
+
+
+def spawn_model_message(mismatch: dict[str, Any]) -> str:
+    """The alert for a subagent spawn that didn't get the model it should have: Claude Code
+    resolved another model than the call asked for, or the responses came from another
+    model than the one resolved."""
+    asked, version = _asked(mismatch["requested"]), mismatch["version"] or "an unknown version"
+    if mismatch["kind"] == "not_honoured" and mismatch["resolved"] is None:
+        what = f"An Agent call asking for {asked} was served {mismatch['served']}, with no resolved model logged"
+    elif mismatch["kind"] == "not_honoured":
+        what = (f"An Agent call asking for {asked} was resolved to {mismatch['resolved']} and served "
+                f"{mismatch['served']}")
+    else:
+        what = (f"A subagent Claude Code resolved to {mismatch['resolved']} (asking for {asked}) was served "
+                f"{mismatch['served']}")
+    return f"{what}, on Claude Code {version}, first on {mismatch['first_day']}."
 
 
 def thinking_message(rise: dict[str, Any], versions: Sequence[str]) -> str:

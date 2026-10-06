@@ -10,6 +10,7 @@ from ccdrift.history import History
 from ccdrift.logs import parse_all
 from ccdrift.spawns import (JOINED_COLUMNS, alias_history, honours, judge, mismatches, model_mismatch_alerts, model_name,
                             spawn_models)
+from ccdrift.texts import spawn_model_message
 from tests.helpers import PRIVATE_TEXT, agent_call, agent_result, at, line, text, tool_use, write
 
 
@@ -214,3 +215,18 @@ def test_a_mismatch_older_than_the_alert_window_is_left_to_the_report():
     rows = joined(spawn("a1", "sonnet", "claude-opus-5", ["claude-opus-5"], day="2026-09-01"),
                   spawn("a2", "haiku", "claude-opus-5", ["claude-opus-5"], day="2026-09-02"))
     assert [m["requested"] for m in model_mismatch_alerts(rows, state, date(2026, 9, 8))] == ["haiku"]
+
+
+def test_the_alert_names_what_was_asked_resolved_and_served_in_each_way_a_spawn_goes_wrong():
+    base = {"requested": "sonnet", "resolved": "claude-opus-5", "served": "claude-opus-5", "version": "2.1.290",
+            "first_day": "2026-09-15"}
+    assert spawn_model_message({**base, "kind": "not_honoured"}) == (
+        "An Agent call asking for sonnet was resolved to claude-opus-5 and served claude-opus-5, on Claude Code "
+        "2.1.290, first on 2026-09-15.")
+    assert spawn_model_message({**base, "kind": "not_honoured", "resolved": None, "version": None}) == (
+        "An Agent call asking for sonnet was served claude-opus-5, with no resolved model logged, on Claude Code "
+        "an unknown version, first on 2026-09-15.")
+    assert spawn_model_message({**base, "kind": "served_differs", "requested": "none",
+                                "served": "claude-haiku-4-5"}) == (
+        "A subagent Claude Code resolved to claude-opus-5 (asking for no model) was served claude-haiku-4-5, on "
+        "Claude Code 2.1.290, first on 2026-09-15.")
