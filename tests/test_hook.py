@@ -15,11 +15,16 @@ import pytest
 
 import ccdrift.check
 import ccdrift.hook
+import ccdrift.schedule
 from ccdrift.check import run_check
 from ccdrift.cli import main
-from ccdrift.hook import CHECK_INTERVAL, check_due, run_hook_check, run_session_start, start_check
+from ccdrift.history import History
+from ccdrift.hook import (CHECK_INTERVAL, built_from_elsewhere, check_due, run_hook_check, run_session_start,
+                          schedule_installed, start_check)
 from ccdrift.logs import default_source
+from ccdrift.schedule import ScheduleError
 from ccdrift.state import ccdrift_home, load_state, new_state, save_state
+from tests.helpers import at, line, text, write
 
 NOW = datetime(2026, 10, 6, 18, 0, tzinfo=timezone.utc)
 
@@ -119,6 +124,7 @@ def test_the_plugins_check_runs_when_still_due_once_it_holds_the_state(tmp_path,
 def test_hook_check_runs_the_check_with_notifications_and_due_while_the_last_began_an_hour_ago(
         tmp_path, monkeypatch):
     seen = {}
+    monkeypatch.setattr(ccdrift.hook, "schedule_installed", lambda: False)
     monkeypatch.setattr(ccdrift.check, "run_check",
                         lambda source, state_path, **options: seen.update(source=source, state=state_path,
                                                                           **options) or 0)
@@ -130,6 +136,60 @@ def test_hook_check_runs_the_check_with_notifications_and_due_while_the_last_beg
     assert seen["due"]() is False
     ran_before(tmp_path, timedelta(minutes=61), now)
     assert seen["due"]() is True
+
+
+@pytest.mark.parametrize("scheduled, elsewhere, due", [(False, False, True), (True, False, False), (False, True, False)],
+                         ids=["neither", "scheduled", "store-of-another-folder"])
+def test_the_plugins_check_stands_aside_for_an_installed_schedule_and_for_a_store_of_another_folder(
+        tmp_path, monkeypatch, scheduled, elsewhere, due):
+    # A schedule runs every check with the options it was installed with (--exec, --no-notify,
+    # --no-digest, --source), and alert-once would let the plugin's check take its alerts.
+    seen = {}
+    monkeypatch.setattr(ccdrift.check, "run_check", lambda source, state_path, **options: seen.update(options) or 0)
+    monkeypatch.setattr(ccdrift.hook, "schedule_installed", lambda: scheduled)
+    monkeypatch.setattr(ccdrift.hook, "built_from_elsewhere", lambda state_path, source: elsewhere)
+    run_hook_check(ran_before(tmp_path, timedelta(minutes=61), datetime.now().astimezone()))
+    assert seen["due"]() is due
+
+
+class Job:
+    def __init__(self, holds):
+        self.answer = holds
+
+    def holds(self):
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+@pytest.mark.parametrize("answers, installed", [([False], False), ([False, True], True),
+                                                ([ScheduleError("crontab"), True], True),
+                                                ([ScheduleError("crontab")], False)],
+                         ids=["none", "another-scheduler", "past-one-that-cant-answer", "only-one-that-cant-answer"])
+def test_a_schedule_is_installed_when_any_scheduler_ccdrift_could_have_used_holds_its_job(
+        monkeypatch, answers, installed):
+    jobs = [Job(answer) for answer in answers]
+    monkeypatch.setattr(ccdrift.schedule, "choose_backend", lambda: jobs[0])
+    monkeypatch.setattr(ccdrift.schedule, "job_backends", lambda chosen: jobs if chosen is jobs[0] else [])
+    assert schedule_installed() is installed
+
+
+def test_no_schedule_is_installed_where_ccdrift_has_no_scheduler(monkeypatch):
+    monkeypatch.setattr(ccdrift.schedule, "choose_backend", lambda: None)
+    assert schedule_installed() is False
+
+
+def test_a_store_built_from_another_transcript_folder_is_told_apart_from_the_sessions_own(tmp_path):
+    # A session under a second CLAUDE_CONFIG_DIR: its check would read every transcript there
+    # on each run and judge them against incidents the state follows in the store's folder.
+    write(tmp_path / "work" / "p" / "s1.jsonl", [line("m1", text(40), ts=at(0))])
+    with History(tmp_path / "history.sqlite") as history:
+        history.update(tmp_path / "work")
+    state = tmp_path / "state.json"
+    assert built_from_elsewhere(state, tmp_path / "personal") is True
+    assert built_from_elsewhere(state, tmp_path / "work") is False
+    assert built_from_elsewhere(tmp_path / "fresh" / "state.json", tmp_path / "personal") is False
+    assert not (tmp_path / "fresh").exists()
 
 
 def test_ccdrift_hook_check_checks_the_state_in_ccdrift_home(monkeypatch):

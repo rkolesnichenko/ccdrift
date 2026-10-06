@@ -18,9 +18,9 @@ from ccdrift.state import LOG_FILE, load_state, make_private
 from ccdrift.status import short_status
 from ccdrift.texts import HOOK_LINES
 
-# The cadence of `schedule install` without --at, so an hourly schedule keeps the last check
-# fresh and the plugin starts one only when the schedule missed it. A warm check took 3.3-4.0 s
-# on a 31.9 MB store and a cold one 34.4 s (2026-10-06): too long to run before a first response.
+# The cadence of `schedule install` without --at, which the plugin stands in for. A warm check
+# took 3.3-4.0 s on a 31.9 MB store and a cold one 34.4 s (2026-10-06): too long to run before
+# a first response, so it runs detached.
 CHECK_INTERVAL = timedelta(minutes=60)
 # The session starts that show the verdict; clear, compact and fork come in the middle of work.
 SHOWN = ("startup", "resume")
@@ -90,11 +90,51 @@ def run_session_start(state_path: Path, stdin: TextIO, now: Optional[datetime] =
     return 0
 
 
+def schedule_installed() -> bool:
+    """Whether `ccdrift schedule install` set up a job here, under any scheduler it could have
+    used. That job runs every check with the options it was installed with (--exec,
+    --no-notify, --no-digest, --source), so the plugin's check stands aside rather than take
+    alerts it would send. A scheduler that can't be asked counts as holding none."""
+    from ccdrift.schedule import ScheduleError, choose_backend, job_backends
+    chosen = choose_backend()
+    if chosen is None:
+        return False
+    for backend in job_backends(chosen):
+        try:
+            if backend.holds():
+                return True
+        except ScheduleError:
+            continue
+    return False
+
+
+def built_from_elsewhere(state_path: Path, source: Path) -> bool:
+    """Whether ccdrift's store beside `state_path` holds another transcript folder than
+    `source`, as from a session under a second CLAUDE_CONFIG_DIR. A check there would read
+    every transcript on each run and judge them against incidents the state follows in the
+    store's folder. A store that can't be opened counts as none: the check reports it."""
+    from ccdrift.history import History, history_path
+    path = history_path(state_path)
+    if not path.exists():
+        return False
+    try:
+        with History(path) as history:
+            built_from = history.built_from()
+    except Exception:
+        return False
+    return built_from is not None and built_from != str(source.expanduser().resolve())
+
+
 def run_hook_check(state_path: Path) -> int:
     """`ccdrift hook check`: the check a session start began, with notifications. It gives
-    up while another command holds the state, and skips the run when a check has begun
-    since the session start found one due."""
+    up while another command holds the state, and once it holds it runs only if a check is
+    still due, no schedule is there to run it, and the store isn't another folder's."""
     from ccdrift.check import run_check
     from ccdrift.logs import default_source
-    return run_check(default_source(), state_path, notify_user=True,
-                     due=lambda: check_due(state_path, datetime.now().astimezone()))
+    source = default_source()
+
+    def due() -> bool:
+        return (check_due(state_path, datetime.now().astimezone()) and not schedule_installed()
+                and not built_from_elsewhere(state_path, source))
+
+    return run_check(source, state_path, notify_user=True, due=due)

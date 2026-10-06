@@ -101,7 +101,7 @@ set this in `~/.claude/settings.json`:
 
 ## Claude Code plugin
 
-Claude Code can run the check itself, in place of a schedule or beside one. Install
+Claude Code can run the check itself, in place of a schedule. Install
 ccdrift as above, then in Claude Code:
 
 ```text
@@ -115,10 +115,12 @@ When the last check began an hour or more ago, it also starts one in the backgro
 desktop notifications and its output appended to `~/.ccdrift/check.log`. The session
 doesn't wait for it, and sessions that start together run one check between them.
 
-With `ccdrift schedule install`'s hourly job, the last check is always recent, so the
-plugin only fills in for a run the schedule missed, such as while the computer slept; with
-a daily job, the plugin also checks hourly while you use Claude Code. Without a schedule,
-nothing checks while Claude Code is closed.
+When `ccdrift schedule install` has set up a job, the plugin's check stands aside and the
+job runs every check, with the options it was installed with (`--exec`, `--no-notify`,
+`--no-digest`, `--source`); the plugin still shows the line. Without a schedule, nothing
+checks while Claude Code is closed. A session under another `CLAUDE_CONFIG_DIR` than the
+one ccdrift's history was built from doesn't start a check either: the history follows one
+transcript folder.
 
 The plugin runs the `ccdrift` in `~/.local/bin`, where uv and pipx install it, and
 otherwise the one on PATH. It says so when there is none, or when it is older than 0.26.0,
