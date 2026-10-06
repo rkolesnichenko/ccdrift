@@ -12,12 +12,12 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from ccdrift.attachments import new_attachments
 from ccdrift.changelog import (TOPIC_OF, changelog_path, days_before, load_changelog, note_versions,
                                release_notes)
 from ccdrift.components import compare_components
 from ccdrift.detector import DetectorConfig
 from ccdrift.digest import digest_due, digest_week, weekly_digest
-from ccdrift.attachments import new_attachments
 from ccdrift.early import early_warning
 from ccdrift.failures import cut_short, failing_requests, failure_counts, judged_failures
 from ccdrift.fields import field_gaps, new_fields
@@ -31,8 +31,9 @@ from ccdrift.loops import STREAMS, loop_counts, loop_warning
 from ccdrift.notify import notify, run_exec
 from ccdrift.replay import REPLAY_SOURCE, first_run, replay_incidents
 from ccdrift.sessions import context_found, rejudged, session_starts
-from ccdrift.spend import withheld_total
 from ccdrift.settings import setting_changes
+from ccdrift.spawns import model_mismatch_alerts, spawn_models
+from ccdrift.spend import withheld_total
 from ccdrift.state import (CONTEXT_RULE, LOG_FILE, load_state, make_stream_private, record_run,
                            save_state, state_lock)
 from ccdrift.texts import (ALERT_TITLES, CHECK_LINES, blank_cache_message, change_message, component_lines,
@@ -41,7 +42,6 @@ from ccdrift.texts import (ALERT_TITLES, CHECK_LINES, blank_cache_message, chang
                            loop_message, new_attachments_message, new_fields_message, no_responses_message,
                            no_transcripts_message, note_lines, requests_message, spawn_model_message, state_unreadable,
                            thinking_message, unread_lines, unreadable_message)
-from ccdrift.spawns import model_mismatch_alerts, spawn_models
 from ccdrift.thinking import thinking_counts, thinking_rises
 from ccdrift.unread import unread_episode
 
@@ -256,7 +256,7 @@ def _alerts(source: Path, state_path: Path, state: dict[str, Any], cfg: Detector
         versions, notes = _change_notes(turns, changelog, rise, "thinking")
         alerts.append(("thinking", ALERT_TITLES["thinking"], thinking_message(rise, versions), notes))
     for mismatch in model_mismatch_alerts(spawn_models(tables.spawns, df), state, today):
-        notes = release_notes(changelog, [mismatch["version"]] if mismatch["version"] else [], ("subagents", "haiku"))
+        notes = release_notes(changelog, [mismatch["version"]] if mismatch["version"] else [], "spawns")
         alerts.append(("spawn_model", ALERT_TITLES["spawn_model"], spawn_model_message(mismatch), note_lines(notes)))
     for gap in field_gaps(turns, state, today):
         notes = release_notes(changelog, [] if gap["version"] == "unknown" else [gap["version"]], "fields")

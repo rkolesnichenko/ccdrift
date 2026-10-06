@@ -17,9 +17,10 @@ from ccdrift.texts import CONTROL_CHARS, version_key
 # Words per topic and their weight. A line is quoted once its words weigh QUOTE_WEIGHT,
 # heaviest first. Checked against Claude Code's own changelog: "model", "tool", "agent"
 # and "context" matched about half of each version's notes, and "mcp" mostly sign-in and
-# menu fixes, so they aren't used; "effort", "transcript" and "usage" alone matched
-# mostly display fixes, so they count only together with another word ("Now defaults
-# to high effort", "reporting as 0 in transcript and result usage").
+# menu fixes, so they aren't used alone ("model" counts only in spawns, beside a subagent
+# word); "effort", "transcript" and "usage" alone matched mostly display fixes, so they
+# count only together with another word ("Now defaults to high effort", "reporting as 0
+# in transcript and result usage").
 # Which release notes explain an alert or a draft about each metric or setting.
 TOPIC_OF = {"cache_ratio": "cache", "haiku_fraction": "haiku", "subagent_cache": "cache", "cache_tier": "cache",
             "effort": "effort", "subagent_model": "subagents"}
@@ -33,6 +34,14 @@ TOPICS: dict[str, dict[str, int]] = {
     "context": {"system prompt": 2, "tool definition": 2, "tool list": 2, "deferred": 2},
     "hooks": {"hook": 2, "stop hook": 1, "hook input": 1},
     "subagents": {"subagent model": 2, "subagent_model": 2},
+    # A subagent got another model than it asked for. Of Claude Code's 7,162 notes on
+    # 2026-10-06, these words matched 29, every one naming a subagent and "model" (two
+    # subagent words without "model" also weigh 2, and matched none), and 19 of the 25
+    # picked by hand as about the model a subagent gets; "subagents" with "haiku", used
+    # before, matched 60 and 10, mostly fallback and Haiku request fixes. Adding
+    # "teammate" and "agent tool" matched 52 and 22, the extra lines about teammates and
+    # the Agent tool. "subagent model" weighs 2 only to rank its 3 lines first.
+    "spawns": {"subagent model": 2, "subagent": 1, "sub-agent": 1, "explore agent": 1, "model": 1},
     "fields": {"session transcript": 2, "transcript file": 2, "transcript writes": 2, "saved transcript": 2,
                "session file": 2, "transcript": 1, "usage": 1},
     "errors": {"api error": 2, "rate limit": 2, "overloaded": 2, "retry": 2, "retries": 2, "max tokens": 2,

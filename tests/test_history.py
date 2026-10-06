@@ -649,3 +649,22 @@ def test_a_store_from_before_agent_ids_gives_a_deleted_subagent_transcripts_rows
         responses = history.responses()
     assert sorted(zip(responses["source_file"], responses["agent_id"].fillna("-"))) == [
         ("p/a-old/subagents/agent-a1.jsonl", "a1"), ("p/b-new/subagents/agent-a2.jsonl", "-")]
+
+
+def test_a_deleted_subagent_transcript_whose_name_carries_no_id_backfills_none(tmp_path):
+    old = tmp_path / "logs" / "p" / "a-old" / "subagents" / "agent-.jsonl"
+    write(old, [line("x1", text(20), ts=at(0.5), sid="s1", sidechain=True, model="claude-sonnet-5")])
+    path = tmp_path / "history.sqlite"
+    with History(path) as history:
+        history.update(tmp_path / "logs")
+    db = sqlite3.connect(path)
+    db.execute("UPDATE meta SET value = '9' WHERE key = 'schema_version'")
+    db.execute("UPDATE meta SET value = '12' WHERE key = 'parser_version'")
+    db.commit()
+    db.close()
+    old.unlink()
+    with History(path) as history:
+        history.update(tmp_path / "logs")
+        responses = history.responses()
+    assert responses["source_file"].tolist() == ["p/a-old/subagents/agent-.jsonl"]
+    assert responses["agent_id"].isna().tolist() == [True]

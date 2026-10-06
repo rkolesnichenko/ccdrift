@@ -198,6 +198,21 @@ def test_the_history_shows_each_alias_moving_to_a_new_model_with_its_days_versio
         "spawns": 4, "judged": 3, "no_response": 1, "mismatches": []}
 
 
+def test_the_history_of_no_spawns_is_empty_whether_or_not_the_frame_has_columns():
+    empty = {"aliases": [], "spawns": 0, "judged": 0, "no_response": 0, "mismatches": []}
+    assert alias_history(pd.DataFrame(), ["2026-09-01"]) == empty
+    assert alias_history(joined(), ["2026-09-01"]) == empty
+    assert alias_history(joined(spawn("a1", "opus", "claude-opus-5", ["claude-opus-5"])), ["2026-09-02"]) == empty
+
+
+def test_the_history_leaves_a_spawn_with_no_version_logged_out_of_its_models_versions():
+    rows = joined(spawn("a1", "opus", "claude-opus-5", ["claude-opus-5"], version=float("nan")),
+                  spawn("a2", "opus", "claude-opus-5", ["claude-opus-5"], version="2.1.280"))
+    assert alias_history(rows, ["2026-09-01"])["aliases"] == [
+        {"alias": "opus", "models": [{"model": "claude-opus-5", "first": "2026-09-01", "last": "2026-09-01",
+                                      "versions": ["2.1.280"], "spawns": 2}]}]
+
+
 def test_a_mismatch_alerts_once_per_kind_and_models_not_again_on_a_new_version_but_when_the_models_move():
     state = {"model_mismatches": []}
     first = joined(spawn("a1", "sonnet", "claude-opus-5", ["claude-opus-5"], day="2026-09-07"),
@@ -321,3 +336,17 @@ def test_with_no_spawn_getting_another_model_the_report_says_so_and_the_page_sho
     page = tmp_path / "report.html"
     assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 3), html_path=page) == 0
     assert "Every answered spawn got the model it asked for." in page.read_text()
+
+
+def test_the_page_escapes_a_model_the_spawn_section_names(tmp_path):
+    main_thread_days(tmp_path / "logs", [{}] * 2)
+    write(tmp_path / "logs" / "p" / "sp.jsonl", [
+        line("q1", agent_call("t1", model="<b>opus"), ts=at(60), sid="sp", version="2.1.288", entrypoint="cli"),
+        agent_result(at(61), "t1", "b1", resolved="claude-opus-5", sid="sp", version="2.1.288")])
+    write(tmp_path / "logs" / "p" / "sp" / "subagents" / "agent-b1.jsonl", [
+        line("r1", text(20), ts=at(60.5), sid="sp", sidechain=True, model="claude-opus-5", agent_id="b1")])
+    page = tmp_path / "report.html"
+    assert run_report(tmp_path / "logs", tmp_path / "state.json", today=date(2026, 9, 3), html_path=page) == 0
+    html = page.read_text()
+    assert "&lt;b&gt;opus: claude-opus-5 2026-09-01" in html and "asked &lt;b&gt;opus, resolved claude-opus-5" in html
+    assert "<b>opus" not in html

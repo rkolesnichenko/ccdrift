@@ -109,8 +109,8 @@ def alias_history(joined: pd.DataFrame, days: Sequence[str]) -> dict[str, Any]:
             models = []
             for model, spawned in group.groupby("model", sort=True):
                 versions = sorted({str(v) for v in spawned["version"].dropna()}, key=version_key)
-                models.append({"model": str(model), "first": str(spawned["day"].min()), "last": str(spawned["day"].max()),
-                               "versions": versions, "spawns": len(spawned)})
+                models.append({"model": str(model), "first": str(spawned["day"].min()),
+                               "last": str(spawned["day"].max()), "versions": versions, "spawns": len(spawned)})
             aliases.append({"alias": str(alias), "models": sorted(models, key=lambda m: (m["first"], m["model"]))})
     found = mismatches(window)
     answered = int((window["responses"] > 0).sum()) if not window.empty else 0
