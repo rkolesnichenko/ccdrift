@@ -99,6 +99,31 @@ set this in `~/.claude/settings.json`:
 { "cleanupPeriodDays": 365 }
 ```
 
+## Claude Code plugin
+
+Claude Code can run the check itself, in place of a schedule or beside one. Install
+ccdrift as above, then in Claude Code:
+
+```text
+/plugin marketplace add rkolesnichenko/ccdrift
+/plugin install ccdrift@ccdrift
+```
+
+At each session start or resume, the plugin shows the [status line](#status-line)'s one
+line when something needs attention, and nothing otherwise; you see it, Claude doesn't.
+When the last check began an hour or more ago, it also starts one in the background, with
+desktop notifications and its output appended to `~/.ccdrift/check.log`. The session
+doesn't wait for it, and sessions that start together run one check between them.
+
+With `ccdrift schedule install`'s hourly job, the last check is always recent, so the
+plugin only fills in for a run the schedule missed, such as while the computer slept; with
+a daily job, the plugin also checks hourly while you use Claude Code. Without a schedule,
+nothing checks while Claude Code is closed.
+
+The plugin runs the `ccdrift` in `~/.local/bin`, where uv and pipx install it, and
+otherwise the one on PATH. It says so when there is none, or when it is older than 0.26.0,
+the first to have `ccdrift hook`. It needs a POSIX shell, so not Windows.
+
 ## When an alert arrives
 
 | Alert | What it means | What to do |
@@ -255,6 +280,8 @@ ccdrift peek [--source DIR]                                            the field
 ccdrift schedule install [--at HH:MM] [--no-notify] [--exec CMD] [--no-digest] [--source DIR]
 ccdrift schedule remove
 ccdrift schedule status
+ccdrift hook session-start                                             what the plugin runs
+ccdrift hook check                                                     the check it starts
 ccdrift --version
 ```
 
@@ -474,6 +501,8 @@ ccdrift schedule remove
 uv tool uninstall ccdrift        # or: pipx uninstall ccdrift
 rm -rf ~/.ccdrift                # state, history and log
 ```
+
+With the plugin, also run `/plugin uninstall ccdrift@ccdrift` in Claude Code.
 
 ## Development
 

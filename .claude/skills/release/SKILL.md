@@ -29,7 +29,7 @@ If no version was given in the argument, ask for it. Do not infer one.
 
 ## 2. Bump the version
 
-Set `__version__` in src/ccdrift/__init__.py to the target, with no leading `v`. The workflow installs the wheel and the sdist in isolation and fails unless each reports `ccdrift <tag>` exactly, so a mismatch burns the tag.
+Set `__version__` in src/ccdrift/__init__.py to the target, with no leading `v`, and `version` in plugin/.claude-plugin/plugin.json to the same; tests/test_plugin.py fails until they match, and plugin users get the plugin only when that version changes. The workflow installs the wheel and the sdist in isolation and fails unless each reports `ccdrift <tag>` exactly, so a mismatch burns the tag.
 
 ## 3. Docs that ship with the version
 
