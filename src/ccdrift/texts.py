@@ -236,6 +236,24 @@ def thinking_line(rise: dict[str, Any]) -> str:
             f"{level:,.0f} tokens per response against {rise['median']:,.0f}")
 
 
+def _asked(requested: str) -> str:
+    return "no model" if requested == "none" else requested
+
+
+def spawn_model_line(mismatch: dict[str, Any]) -> str:
+    """A model mismatch as `status` lists it."""
+    asked, resolved, served = _asked(mismatch["requested"]), mismatch["resolved"], mismatch["served"]
+    version = mismatch["version"] or "an unknown version"
+    if mismatch["kind"] == "served_differs":
+        return (f"subagent asking for {asked} resolved to {resolved} but served {served} on {version} "
+                f"from {mismatch['first_day']}")
+    if resolved is None:
+        return (f"subagent asking for {asked} was served {served}, with no resolved model logged, on {version} "
+                f"from {mismatch['first_day']}")
+    return (f"subagent asking for {asked} was resolved to {resolved} and served {served} on {version} "
+            f"from {mismatch['first_day']}")
+
+
 def cut_short_line(episode: dict[str, Any]) -> str:
     worse = episode.get("worse_than")
     tail = f", {worse_text(worse)}" if worse else run_text(episode.get("run_days", 0))
@@ -355,6 +373,7 @@ ALERT_TITLES = {"flag": "ccdrift flag", "recovered": "ccdrift: back to normal",
                 "hooks": "ccdrift: hooks failing", "hook_coverage": "ccdrift: hooks changed",
                 "failed_requests": "ccdrift: requests failing",
                 "cut_short": "ccdrift: responses cut short", "thinking": "ccdrift: thinking rose",
+                "spawn_model": "ccdrift: a subagent got another model",
                 "fields": "ccdrift: Claude Code stopped logging a field",
                 "new_fields": "ccdrift: Claude Code logs a field ccdrift doesn't read",
                 "new_attachments": "ccdrift: Claude Code writes an attachment ccdrift doesn't read",
@@ -513,6 +532,22 @@ def requests_message(episode: dict[str, Any], versions: Sequence[str]) -> str:
     return (f"{episode['requests']} requests failed on {episode['since']}"
             f"{f' ({named})' if named else ''}, {before}{_on_versions(versions)}. Claude Code retries these itself; a run "
             "of them points at the API or your connection, not your setup.")
+
+
+def spawn_model_message(mismatch: dict[str, Any]) -> str:
+    """The alert for a subagent spawn that didn't get the model it should have: Claude Code
+    resolved another model than the call asked for, or the responses came from another
+    model than the one resolved."""
+    asked, version = _asked(mismatch["requested"]), mismatch["version"] or "an unknown version"
+    if mismatch["kind"] == "not_honoured" and mismatch["resolved"] is None:
+        what = f"An Agent call asking for {asked} was served {mismatch['served']}, with no resolved model logged"
+    elif mismatch["kind"] == "not_honoured":
+        what = (f"An Agent call asking for {asked} was resolved to {mismatch['resolved']} and served "
+                f"{mismatch['served']}")
+    else:
+        what = (f"A subagent Claude Code resolved to {mismatch['resolved']} (asking for {asked}) was served "
+                f"{mismatch['served']}")
+    return f"{what}, on Claude Code {version}, first on {mismatch['first_day']}."
 
 
 def thinking_message(rise: dict[str, Any], versions: Sequence[str]) -> str:
@@ -1139,6 +1174,49 @@ def subagent_lines(summary: list[dict[str, Any]]) -> list[str]:
     for agent in summary:
         label = agent["agent_type"] + (" (model picked by the caller)" if agent["agent_type"] == CALLER_PICKED else "")
         lines.append(f"  {label}: " + ", ".join(f"{model} {share:.0%}" for model, share in agent["models"].items()))
+    return lines
+
+
+MISMATCH_NAMES = {"not_honoured": "resolved to another model than asked",
+                  "served_differs": "served another model than resolved"}
+
+
+def _span(first: str, last: str) -> str:
+    return first if first == last else f"{first} to {last}"
+
+
+def _resolution(model: dict[str, Any]) -> str:
+    """"claude-opus-5 2026-09-01 to 2026-09-02 (Claude Code 2.1.99 to 2.1.280, 2 spawns)"."""
+    versions = _span(model["versions"][0], model["versions"][-1]) if model["versions"] else "unknown"
+    return (f"{model['model']} {_span(model['first'], model['last'])} (Claude Code {versions}, "
+            f"{model['spawns']:,} spawn{'' if model['spawns'] == 1 else 's'})")
+
+
+def spawn_lines(history: dict[str, Any]) -> list[str]:
+    """The report's spawn section, starting with a blank line: for each model a request asked
+    for, what Claude Code resolved it to, when and on which versions; then every spawn that
+    got another model, or that none did. Empty without spawns."""
+    if not history["spawns"]:
+        return []
+    lines = ["", f"Subagent spawns over these days: {history['spawns']:,}, {history['judged']:,} answered. "
+                 "What each request was resolved to:"]
+    for alias in history["aliases"]:
+        label = "no model asked" if alias["alias"] == "none" else alias["alias"]
+        lines.append(f"  {label}: " + "; ".join(_resolution(model) for model in alias["models"]))
+    if not history["mismatches"]:
+        lines.append("Every answered spawn got the model it asked for." if history["judged"]
+                     else "No spawn in these days was answered, so none was judged.")
+        return lines
+    lines.append(f"Spawns that got another model: {len(history['mismatches']):,}")
+    groups: dict[tuple[str, str, str, str, str], list[str]] = {}
+    for m in history["mismatches"]:
+        key = (m["kind"], m["requested"], m["resolved"] or "", m["served"], m["version"] or "")
+        groups.setdefault(key, []).append(str(m["day"]))
+    for key, days in sorted(groups.items(), key=lambda item: (min(item[1]), item[0])):
+        kind, requested, resolved, served, version = key
+        lines.append(f"  {MISMATCH_NAMES[kind]}: asked {_asked(requested)}, resolved {resolved or 'nothing logged'}, "
+                     f"served {served}, Claude Code {version or 'unknown'}: {len(days):,} spawn"
+                     f"{'' if len(days) == 1 else 's'}, {_span(min(days), max(days))}")
     return lines
 
 

@@ -13,8 +13,8 @@ from ccdrift.logs import judged_turns
 from ccdrift.report import _incident_days, daily_rows, run_report, version_key
 from ccdrift.state import new_state, save_state
 from ccdrift.texts import miss_reason_line
-from tests.helpers import (DAY, HAIKU, PRIVATE_PATH, PRIVATE_TEXT, QUIET, api_error, at, busy_days,
-                           compact_boundary, daily_turns, damage_responses_table, hook_record, line,
+from tests.helpers import (DAY, HAIKU, PRIVATE_PATH, PRIVATE_TEXT, QUIET, agent_call, agent_result, api_error, at,
+                           busy_days, compact_boundary, daily_turns, damage_responses_table, hook_record, line,
                            main_thread_days, prompt, stop_hook_summary, text, tool_loop_days, tool_result,
                            tool_use, write)
 
@@ -222,7 +222,7 @@ def test_report_json_holds_aggregates_without_paths_or_session_ids(tmp_path, cap
     out = capsys.readouterr().out
     payload = json.loads(out)
     assert list(payload) == ["view", "days", "incidents", "reported_before_incidents", "settings", "hooks",
-                             "subagents", "failures", "miss_reasons", "cutoffs", "flag_rule"]
+                             "subagents", "spawns", "failures", "miss_reasons", "cutoffs", "flag_rule"]
     assert payload["days"][0] == {"day": "2026-09-01", "responses": 60, "cache_ratio": pytest.approx(0.9),
                                   "cache_z": None, "haiku_share": 0.0, "haiku_z": None, "loop_turns": 0,
                                   "loop_misses": 0, "subagent_loop_turns": 0, "subagent_loop_misses": 0,
@@ -246,7 +246,14 @@ def private_corpus(root):
         hook_record(at(DAY + 31), "PreToolUse", "toolu_secret", "Bash", sid="s-secret"),
         hook_record(at(DAY + 32), "PostToolUse", "toolu_secret", "Bash", sid="s-secret"),
         stop_hook_summary(at(DAY + 35), 1, errors=("exit 1",), durations=(400,), sid="s-secret", uuid="hook-1"),
-        api_error(at(DAY + 40), sid="s-secret")])
+        api_error(at(DAY + 40), sid="s-secret"),
+        line("h2", agent_call("toolu_spawn", model="haiku", agent_type="secret-agent-type"), ts=at(DAY + 45),
+             sid="s-secret", cache_read=900, cache_creation=100, version="2.1.261", entrypoint="cli"),
+        agent_result(at(DAY + 46), "toolu_spawn", "agent-secret-id", resolved="claude-opus-5", sid="s-secret",
+                     version="2.1.261")])
+    write(root / "hooked" / "subagents" / "agent-agent-secret-id.jsonl", [
+        line("h3", text(40), ts=at(DAY + 45.5), sid="s-secret", sidechain=True, model="claude-haiku-4-5",
+             agent_id="agent-secret-id", version="2.1.261", entrypoint="cli")])
 
 
 @pytest.mark.parametrize("by", ["day", "version"])
@@ -264,8 +271,9 @@ def test_report_json_names_no_folder_session_branch_hook_command_or_tool_id(tmp_
     payload = json.loads(out)
     if by == "day":  # the fixture reached every part of the view that could leak it
         assert payload["incidents"] and payload["hooks"] and payload["subagents"] and payload["failures"]
+        assert payload["spawns"]["spawns"] == 1 and payload["spawns"]["mismatches"]
     for private in (str(tmp_path), "secretproject", "secret-branch", PRIVATE_PATH, PRIVATE_TEXT, "toolu_secret",
-                    "s-secret", "secret-hook", '"s0"', ".jsonl"):
+                    "s-secret", "secret-hook", '"s0"', ".jsonl", "agent-secret-id", "toolu_spawn", "secret-agent-type"):
         assert private not in out
 
 

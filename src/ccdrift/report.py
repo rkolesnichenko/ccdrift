@@ -23,11 +23,12 @@ from ccdrift.logs import judged_subagent_loops, judged_subagent_turns, judged_tu
 from ccdrift.loops import COUNT_COLUMNS, loop_counts
 from ccdrift.sessions import MIN_SESSIONS, project_summary, session_starts
 from ccdrift.settings import settings_summary, subagent_summary
+from ccdrift.spawns import alias_history, spawn_models
 from ccdrift.state import load_state, open_private
 from ccdrift.texts import (COMMAND_LINES, DAY_TABLE, INCIDENT_METRICS, REPORT_LINES, SHORT_NAMES, VERSION_TABLE,
                            failure_lines, hooks_lines, incident_line, miss_reason_line, misses as _misses,
                            no_transcripts_message, number as _number, project_lines, settings_lines, size_text,
-                           subagent_lines, table_header, table_row, version_key)
+                           spawn_lines, subagent_lines, table_header, table_row, version_key)
 
 COLUMNS = ["day", "responses", "cache_ratio", "cache_z", "haiku_share", "haiku_z", *COUNT_COLUMNS,
            "subagent_readback", "subagent_z", "flagged"]
@@ -328,12 +329,14 @@ def run_report(source: Path, state_path: Path, days: Optional[int] = None, by: s
         fails = failure_summary(failure_counts(judged_failures(tables.failures, today), turns), window)
         projects = project_summary(starts, window)
         reasons = reason_summary(turns, window)
-        extra_lines = (hooks_lines(hooks) + subagent_lines(subagents) + failure_lines(fails)
+        spawned = alias_history(spawn_models(tables.spawns, df), window)
+        extra_lines = (hooks_lines(hooks) + subagent_lines(subagents) + spawn_lines(spawned) + failure_lines(fails)
                       + reason_lines(reasons) + project_lines(projects))
         # The day view names the project folders; --json keeps its promise of holding no
         # paths, so the projects stay out of it. The five reason values name none of
         # those, so unlike the projects, they stay in.
-        extra_json = {"hooks": hooks, "subagents": subagents, "failures": fails, "miss_reasons": reasons or {}}
+        extra_json = {"hooks": hooks, "subagents": subagents, "spawns": spawned, "failures": fails,
+                      "miss_reasons": reasons or {}}
     summary = settings_summary(turns, window)
     if html_path is not None:
         from ccdrift import __version__

@@ -18,16 +18,16 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from ccdrift.logs import (ATTRIBUTION_FIELDS, COMPONENT_SETS, COMPONENT_SIZES, MAX_TIME, MIN_TIME, SDK_ENTRYPOINT_PREFIX,
-                          SETTING_FIELDS, TOKEN_FIELDS, USAGE_COUNTS, ParsedFile, Tables, attachment_frame,
-                          attachment_rows, census_frame, compaction_frame, components_frame, coverage_frame,
-                          coverage_rows, duration_frame, failure_frame, frame, hook_frame, holds_no_response,
-                          jsonl_files, parse_all, parse_file, usage_frame)
+from ccdrift.logs import (ATTRIBUTION_FIELDS, COMPONENT_SETS, COMPONENT_SIZES, LINK_FIELDS, MAX_TIME, MIN_TIME,
+                          SDK_ENTRYPOINT_PREFIX, SETTING_FIELDS, TOKEN_FIELDS, USAGE_COUNTS, ParsedFile, Tables,
+                          attachment_frame, attachment_rows, census_frame, compaction_frame, components_frame,
+                          coverage_frame, coverage_rows, duration_frame, failure_frame, frame, hook_frame,
+                          holds_no_response, jsonl_files, parse_all, parse_file, spawn_frame, usage_frame)
 from ccdrift.state import make_private
 from ccdrift.texts import HISTORY_LINES
 
 HISTORY_FILE = "history.sqlite"
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 # Bump whenever parse_file's output changes, so every transcript still on disk is
 # read again. Rows of transcripts Claude Code already deleted keep their values.
 # 3: counts, times and ids out of range or of the wrong type read as missing.
@@ -46,9 +46,11 @@ SCHEMA_VERSION = 9
 # 11: hook coverage: for each tool call, whether a PreToolUse and a PostToolUse hook ran on it.
 # 12: the attachment census: each attachment type a transcript holds, by day, version,
 #     entrypoint and thread.
-PARSER_VERSION = 12
+# 13: the subagents each transcript spawned, with the model each Agent call asked for and
+#     the one Claude Code resolved, and the agent id of each response.
+PARSER_VERSION = 13
 
-TEXT_COLUMNS = ("model", "stop_reason", "miss_reason") + ATTRIBUTION_FIELDS + SETTING_FIELDS
+TEXT_COLUMNS = ("model", "stop_reason", "miss_reason") + ATTRIBUTION_FIELDS + SETTING_FIELDS + LINK_FIELDS
 FLAG_COLUMNS = ("is_sidechain", "new_prompt", "after_compaction", "opens_transcript")
 COUNT_COLUMNS = TOKEN_FIELDS + ("thinking_logged", "signature_chars", "visible_chars", "n_mcp_calls")
 RESPONSE_COLUMNS = TEXT_COLUMNS + FLAG_COLUMNS + COUNT_COLUMNS
@@ -56,6 +58,7 @@ DURATION_COLUMNS = ("version", "entrypoint", "is_sidechain", "duration_ms", "mes
 HOOK_COLUMNS = ("version", "entrypoint", "is_sidechain", "hook_count", "error_count", "duration_ms", "prevented")
 COMPACTION_COLUMNS = ("version", "entrypoint", "is_sidechain", "trigger", "pre_tokens")
 FAILURE_COLUMNS = ("version", "entrypoint", "is_sidechain", "kind", "status")
+SPAWN_COLUMNS = ("version", "entrypoint", "is_sidechain", "agent_id", "requested", "resolved")
 USAGE_COLUMNS = ("model",) + USAGE_COUNTS + ("cost_usd",)
 
 # Integer keys, microsecond timestamps and file ids keep the store small: on 2026-09-28 it
@@ -78,7 +81,7 @@ CREATE TABLE IF NOT EXISTS responses (
     input_tokens INTEGER, output_tokens INTEGER, cache_creation INTEGER, cache_read INTEGER,
     cache_1h INTEGER, cache_5m INTEGER, thinking_logged INTEGER,
     signature_chars INTEGER, visible_chars INTEGER, n_mcp_calls INTEGER,
-    opens_transcript INTEGER NOT NULL DEFAULT 0);
+    opens_transcript INTEGER NOT NULL DEFAULT 0, agent_id TEXT);
 CREATE INDEX IF NOT EXISTS responses_file ON responses (file_id);
 CREATE TABLE IF NOT EXISTS durations (
     key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
@@ -120,6 +123,10 @@ CREATE TABLE IF NOT EXISTS attachment_census (
     file_id INTEGER NOT NULL, day TEXT NOT NULL, version TEXT, entrypoint TEXT, is_sidechain INTEGER NOT NULL,
     type TEXT NOT NULL, records INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS attachment_census_file ON attachment_census (file_id);
+CREATE TABLE IF NOT EXISTS spawns (
+    key INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, ts INTEGER,
+    version TEXT, entrypoint TEXT, is_sidechain INTEGER, agent_id TEXT, requested TEXT, resolved TEXT);
+CREATE INDEX IF NOT EXISTS spawns_file ON spawns (file_id);
 """
 
 
@@ -275,6 +282,24 @@ class History:
             if from_version < 6 and columns and column not in columns:
                 with self.db:
                     self.db.execute(f"ALTER TABLE responses ADD COLUMN {column} TEXT")
+        # Filled when the parser bump that came with it reads each transcript again; the
+        # rows of transcripts Claude Code already deleted keep none, except those of subagent
+        # transcripts, which the block below fills from their name.
+        if from_version < 10 and columns and "agent_id" not in columns:
+            with self.db:
+                self.db.execute("ALTER TABLE responses ADD COLUMN agent_id TEXT")
+        # A subagent transcript Claude Code has deleted can't be read again for the agent id
+        # its lines carry, but its name carries it: all 1,552 on the owner's disk on
+        # 2026-10-06 were named agent-<agentId>.jsonl. A copy of it read again later loses to
+        # it, since a row stays with the path that sorts first, and 79 spawns there would
+        # otherwise show no response.
+        if from_version < 10 and columns:
+            named = [(name[len("agent-"):-len(".jsonl")], file_id)
+                     for file_id, path in self.db.execute("SELECT id, path FROM files").fetchall()
+                     for name in [Path(path).name]
+                     if Path(path).parent.name == "subagents" and name.startswith("agent-") and name.endswith(".jsonl")]
+            with self.db:
+                self.db.executemany("UPDATE responses SET agent_id = ? WHERE file_id = ? AND agent_id IS NULL", named)
         file_columns = {row[1] for row in self.db.execute("PRAGMA table_info(files)")}
         if from_version < 3 and file_columns and "last_ts" not in file_columns:
             with self.db:
@@ -380,6 +405,7 @@ class History:
             self.db.execute("DELETE FROM components WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM hook_coverage WHERE file_id = ?", (file_id,))
             self.db.execute("DELETE FROM attachment_census WHERE file_id = ?", (file_id,))
+            self.db.execute("DELETE FROM spawns WHERE file_id = ?", (file_id,))
             self.db.executemany(_upsert("responses", RESPONSE_COLUMNS), [
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]),
                  *(row[c] for c in TEXT_COLUMNS), *(int(row[c]) for c in FLAG_COLUMNS),
@@ -398,6 +424,10 @@ class History:
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]), row["version"], row["entrypoint"],
                  int(row["is_sidechain"]), row["trigger"], _count(row["pre_tokens"]))
                 for row in parsed.compactions.values()])
+            self.db.executemany(_upsert("spawns", SPAWN_COLUMNS), [
+                (row_key(row["key"]), file_id, _micros(row["timestamp"]), row["version"], row["entrypoint"],
+                 int(row["is_sidechain"]), row["agent_id"], row["requested"], row["resolved"])
+                for row in parsed.spawns.values()])
             self.db.executemany(_upsert("failures", FAILURE_COLUMNS), [
                 (row_key(row["key"]), file_id, _micros(row["timestamp"]), row["version"], row["entrypoint"],
                  int(row["is_sidechain"]), row["kind"], _count(row["status"]))
@@ -501,6 +531,10 @@ class History:
         """Every stored compaction, or those from `since`, as parse_all's `compactions` table."""
         return compaction_frame(_decode(self._records("compactions", COMPACTION_COLUMNS, since), ("is_sidechain",)))
 
+    def spawns(self, since: Optional[str] = None) -> pd.DataFrame:
+        """Every stored subagent spawn, or those from `since`, as parse_all's `spawns` table."""
+        return spawn_frame(_decode(self._records("spawns", SPAWN_COLUMNS, since), ("is_sidechain",)))
+
     def failures(self, since: Optional[str] = None) -> pd.DataFrame:
         """Every stored failed request, or those from `since`, as parse_all's `failures` table."""
         return failure_frame(_decode(self._records("failures", FAILURE_COLUMNS, since), ("is_sidechain",)))
@@ -594,7 +628,8 @@ def load_history(source: Path, state_path: Path, claim: bool, since: Optional[st
             return Tables(history.responses(since), history.durations(since), history.hook_runs(since),
                           history.compactions(since), history.failures(since), history.field_census(since),
                           history.model_usage(since), history.components(since), history.hook_coverage(since),
-                          history.attachment_census(since), history.skipped, history.no_responses)
+                          history.attachment_census(since), history.skipped, history.no_responses,
+                          history.spawns(since))
     except sqlite3.Error as exc:
         raise _unusable(path, exc) from exc
     except pd.errors.DatabaseError as exc:

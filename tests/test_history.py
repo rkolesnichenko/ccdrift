@@ -443,7 +443,7 @@ def test_a_store_from_ccdrift_0_2_is_upgraded_in_place_and_keeps_its_rows(tmp_pa
     db.executescript(V1_SCHEMA)
     db.close()
     with History(tmp_path / "history.sqlite") as history:
-        assert history.meta["schema_version"] == "9"
+        assert history.meta["schema_version"] == "10"
         columns = {row[1] for row in history.db.execute("PRAGMA table_info(responses)")}
         tables = {row[0] for row in history.db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert "agent_type" in columns
@@ -623,3 +623,29 @@ def test_a_folder_in_the_stores_place_says_to_move_it_aside(tmp_path):
     (tmp_path / "history.sqlite").mkdir()
     with pytest.raises(HistoryError, match="is a folder. Move it aside"):
         History(tmp_path / "history.sqlite")
+
+
+def test_a_store_from_before_agent_ids_gives_a_deleted_subagent_transcripts_rows_the_id_its_name_carries(tmp_path):
+    # Claude Code deleted the first copy of agent a1's transcript after the store read it; the
+    # copy read again now sorts after it, so the store keeps the first copy's row.
+    old = tmp_path / "logs" / "p" / "a-old" / "subagents" / "agent-a1.jsonl"
+    write(old, [line("x1", text(20), ts=at(0.5), sid="s1", sidechain=True, model="claude-sonnet-5", agent_id="a1")])
+    path = tmp_path / "history.sqlite"
+    with History(path) as history:
+        history.update(tmp_path / "logs")
+    db = sqlite3.connect(path)
+    db.execute("UPDATE responses SET agent_id = NULL")
+    db.execute("UPDATE meta SET value = '9' WHERE key = 'schema_version'")
+    db.execute("UPDATE meta SET value = '12' WHERE key = 'parser_version'")
+    db.commit()
+    db.close()
+    old.unlink()
+    write(tmp_path / "logs" / "p" / "b-new" / "subagents" / "agent-a1.jsonl", [
+        line("x1", text(20), ts=at(0.5), sid="s1", sidechain=True, model="claude-sonnet-5", agent_id="a1")])
+    write(tmp_path / "logs" / "p" / "b-new" / "subagents" / "agent-a2.jsonl", [
+        line("x2", text(20), ts=at(0.6), sid="s1", sidechain=True, model="claude-sonnet-5")])
+    with History(path) as history:
+        history.update(tmp_path / "logs")
+        responses = history.responses()
+    assert sorted(zip(responses["source_file"], responses["agent_id"].fillna("-"))) == [
+        ("p/a-old/subagents/agent-a1.jsonl", "a1"), ("p/b-new/subagents/agent-a2.jsonl", "-")]

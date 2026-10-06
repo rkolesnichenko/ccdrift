@@ -21,9 +21,9 @@ from ccdrift.loops import LoopSetting
 from ccdrift.sessions import context_found, session_starts
 from ccdrift.state import load_state, new_state, save_state
 from ccdrift.status import short_status, status_report
-from tests.helpers import (DAY, agent_listing, at, attachment, busy_days, damage_responses_table, deferred_tools,
-                           hook_days_logs, hook_record, line, main_thread_days, nth_day, prompt, skill_listing,
-                           subagent_history, text, tool_loop_days, tool_use, write)
+from tests.helpers import (DAY, agent_call, agent_listing, agent_result, at, attachment, busy_days,
+                           damage_responses_table, deferred_tools, hook_days_logs, hook_record, line, main_thread_days,
+                           nth_day, prompt, skill_listing, subagent_history, text, tool_loop_days, tool_use, write)
 
 
 @pytest.fixture
@@ -479,6 +479,24 @@ def test_check_alerts_once_when_a_model_starts_thinking_twice_as_much(tmp_path, 
             "tokens than usual that day. Thinking is billed as output.") in out
     assert "    release notes 2.1.267: Extended thinking now runs on every turn" in out
     assert "prompt cache misses" not in out
+    sent.clear()
+    check_logs(tmp_path, today=date(2026, 9, 17))
+    assert sent == []
+
+
+def test_check_alerts_once_when_a_subagent_is_resolved_to_another_model_than_it_asked_for(tmp_path, sent, capsys):
+    main_thread_days(tmp_path / "logs", [{}] * 15)
+    ts = 14 * DAY + 3600
+    write(tmp_path / "logs" / "p" / "spawner.jsonl", [
+        line("q1", agent_call("t1", model="sonnet"), ts=at(ts), sid="sp", version="2.1.290", entrypoint="cli"),
+        agent_result(at(ts + 60), "t1", "a7", resolved="claude-opus-5", sid="sp", version="2.1.290")])
+    write(tmp_path / "logs" / "p" / "spawner" / "subagents" / "agent-a7.jsonl", [
+        line("q2", text(20), ts=at(ts + 30), sid="sp", sidechain=True, model="claude-opus-5", agent_id="a7")])
+    kinds = tmp_path / "kinds.txt"
+    check_logs(tmp_path, today=date(2026, 9, 16), exec_command=f'echo "$CCDRIFT_ALERT" >> "{kinds}"')
+    assert sent == ["ccdrift: a subagent got another model"] and kinds.read_text() == "spawn_model\n"
+    assert ("ccdrift: a subagent got another model: An Agent call asking for sonnet was resolved to claude-opus-5 "
+            "and served claude-opus-5, on Claude Code 2.1.290, first on 2026-09-15.") in capsys.readouterr().out
     sent.clear()
     check_logs(tmp_path, today=date(2026, 9, 17))
     assert sent == []

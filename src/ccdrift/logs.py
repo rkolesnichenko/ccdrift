@@ -46,6 +46,9 @@ CANDIDATES: dict[str, list[str]] = {
     "service_tier":      ["message.usage.service_tier", "usage.service_tier"],
     "effort":            ["effort"],
     "agent_type":        ["attributionAgent"],
+    "agent_id":          ["agentId"],
+    "spawn_agent":       ["toolUseResult.agentId"],
+    "resolved_model":    ["toolUseResult.resolvedModel"],
     "version":           ["version"],
     "entrypoint":        ["entrypoint"],
     "timestamp":         ["timestamp", "message.timestamp", "createdAt"],
@@ -240,6 +243,9 @@ SETTING_FIELDS = ("version", "entrypoint", "effort", "speed", "service_tier", "a
 # SETTING_FIELDS, which means a setting Claude Code chose for the request; a branch
 # name is not one, and history.TEXT_COLUMNS is built from both.
 ATTRIBUTION_FIELDS = ("attribution_skill", "attribution_plugin", "attribution_mcp", "git_branch")
+# Which subagent a response belongs to: the id its transcript's lines carry, which an
+# Agent call's result names too, so a spawn joins to the responses it was served.
+LINK_FIELDS = ("agent_id",)
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_creation", "cache_read", "cache_1h", "cache_5m")
 
 # What one model's slice of a cost-state record counts. `web_searches` is fitted as its
@@ -359,6 +365,26 @@ def tool_uses(content: Any) -> list[tuple[str, str]]:
             and isinstance(block.get("id"), str) and isinstance(block.get("name"), str)]
 
 
+def agent_calls(content: Any) -> list[tuple[str, Optional[str]]]:
+    """The id of each Agent tool call in one line's content, with the model it asked for
+    (None when it named none). Nothing else of the call is kept: its prompt and
+    description are the user's own words."""
+    if not isinstance(content, list):
+        return []
+    return [(block["id"], _text(block["input"].get("model")) if isinstance(block.get("input"), dict) else None)
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "Agent"
+            and isinstance(block.get("id"), str)]
+
+
+def tool_result_ids(content: Any) -> list[str]:
+    """The tool call id each tool result in one line's content answers."""
+    if not isinstance(content, list):
+        return []
+    return [block["tool_use_id"] for block in content
+            if isinstance(block, dict) and block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str)]
+
+
 def hook_tool(name: str) -> Optional[str]:
     """A tool as hook coverage counts it: a built-in tool by its name, an MCP tool by its
     server, as mcp__<server>, since a hook matches a server's tools alike."""
@@ -390,7 +416,9 @@ class ParsedFile:
     started with (components, one row), hook coverage (hook_coverage: for each day,
     version, entrypoint, thread, hook event and tool, [tool calls, calls a hook ran on]), and
     the attachment census (attachment_census: for each day, version, entrypoint, thread and
-    attachment type, how many records of it)."""
+    attachment type, how many records of it), and the subagents it spawned (spawns: by the
+    agent id the Agent call's result names, the model the call asked for and the one
+    Claude Code resolved)."""
     responses: dict[str, dict] = field(default_factory=dict)
     durations: dict[str, dict] = field(default_factory=dict)
     hook_runs: dict[str, dict] = field(default_factory=dict)
@@ -402,6 +430,7 @@ class ParsedFile:
     components: dict = field(default_factory=dict)
     hook_coverage: dict[tuple, list[int]] = field(default_factory=dict)
     attachment_census: dict[tuple, int] = field(default_factory=dict)
+    spawns: dict[str, dict] = field(default_factory=dict)
     session_id: Optional[str] = None
     lines: int = 0
     bad_json: int = 0
@@ -496,6 +525,8 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
     # matched once the whole transcript is read: a hook's record follows its call.
     tool_calls: dict[str, tuple[str, str]] = {}
     hooked: dict[str, set[str]] = {event: set() for event in HOOK_EVENTS}
+    # Each Agent call's id and the model it asked for, matched to its result below.
+    spawn_calls: dict[str, Optional[str]] = {}
     with fp.open("r", encoding="utf-8", errors="replace") as fh:
         for line_no, line in enumerate(fh):
             line = line.strip()
@@ -522,6 +553,13 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                 content = field_get(obj, "content")
                 if not field_get(obj, "is_meta") and not has_tool_result(content):
                     prompt_pending = True
+                agent = _text(field_get(obj, "spawn_agent"))
+                calls = [call for call in tool_result_ids(content) if call in spawn_calls]
+                if agent is not None and calls:
+                    parsed.spawns.setdefault(agent, {
+                        **_record(obj, agent, rel), "agent_id": agent, "requested": spawn_calls[calls[0]],
+                        "resolved": _text(field_get(obj, "resolved_model")),
+                    })
                 # Everything the user sent before the first response went with it.
                 if not main_thread_seen and not field_get(obj, "is_sidechain", default=False):
                     parsed.components["message_chars"] += content_chars(content)[1]
@@ -620,6 +658,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                     "miss_reason":      None,
                     **{name: None for name in ATTRIBUTION_FIELDS},
                     **{name: None for name in SETTING_FIELDS},
+                    **{name: None for name in LINK_FIELDS},
                     **{name: 0.0 for name in TOKEN_FIELDS},
                     "thinking_logged":  None,
                     "signature_chars":  0,
@@ -639,7 +678,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
                 }
                 main_thread_seen = main_thread_seen or not is_sidechain
             prompt_pending = compact_pending = False
-            for name in ("stop_reason", "miss_reason", *ATTRIBUTION_FIELDS, *SETTING_FIELDS):
+            for name in ("stop_reason", "miss_reason", *ATTRIBUTION_FIELDS, *SETTING_FIELDS, *LINK_FIELDS):
                 if row[name] is None:
                     row[name] = _text(field_get(obj, name))
             # output_tokens grows while streaming, so the largest is the
@@ -653,6 +692,8 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
             content = field_get(obj, "content")
             for tool_id, name in tool_uses(content):
                 tool_calls.setdefault(tool_id, (key, name))
+            for tool_id, requested in agent_calls(content):
+                spawn_calls.setdefault(tool_id, requested)
             signature, visible = content_chars(content)
             row["signature_chars"] += signature
             row["visible_chars"] += visible
@@ -694,7 +735,7 @@ def parse_file(fp: Path, rel: str) -> ParsedFile:
     session = parsed.session_id or fp.stem
     for row in (*parsed.responses.values(), *parsed.durations.values(), *parsed.hook_runs.values(),
                 *parsed.compactions.values(), *parsed.failures.values(), *parsed.model_usage.values(),
-                parsed.components):
+                *parsed.spawns.values(), parsed.components):
         row["session_id"] = session
     return parsed
 
@@ -805,6 +846,11 @@ def compaction_frame(rows) -> pd.DataFrame:
     return _record_frame(rows, ("pre_tokens",), ("is_sidechain",))
 
 
+def spawn_frame(rows) -> pd.DataFrame:
+    """Subagent spawns, from raw rows, with their UTC day."""
+    return _record_frame(rows, (), ("is_sidechain",))
+
+
 def failure_frame(rows) -> pd.DataFrame:
     """Failed requests, from raw rows, with their UTC day."""
     return _record_frame(rows, ("status",), ("is_sidechain",))
@@ -897,8 +943,8 @@ def components_frame(rows) -> pd.DataFrame:
 class Tables:
     """Everything ccdrift reads from transcripts, one table per record kind, plus the
     key census (field_census), per-model usage and cost (model_usage) and what each
-    session started with (components), hook coverage (hook_coverage) and the attachment
-    census (attachment_census)."""
+    session started with (components), hook coverage (hook_coverage), the attachment
+    census (attachment_census) and the subagents spawned (spawns)."""
     responses: pd.DataFrame
     durations: pd.DataFrame
     hook_runs: pd.DataFrame
@@ -913,6 +959,7 @@ class Tables:
     # and those that hold no response (see holds_no_response), with their line count.
     skipped: list[tuple[str, str]] = field(default_factory=list)
     no_responses: list[tuple[str, int]] = field(default_factory=list)
+    spawns: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 # A transcript this long holds a response. Of 2,389 transcripts on 2026-09-25, 8 held
@@ -931,7 +978,8 @@ def holds_no_response(parsed: ParsedFile) -> bool:
 def parse_all(source: Path) -> Tables:
     """Every transcript under `source`, read once. A record copied into a second
     transcript counts from the one whose path sorts first."""
-    kinds = {"responses": {}, "durations": {}, "hook_runs": {}, "compactions": {}, "failures": {}, "model_usage": {}}
+    kinds = {"responses": {}, "durations": {}, "hook_runs": {}, "compactions": {}, "failures": {}, "model_usage": {},
+             "spawns": {}}
     census: dict[tuple[str, str, str], int] = {}
     days: dict[tuple[str, str], int] = {}
     components, coverage, attachments = [], [], []
@@ -962,7 +1010,8 @@ def parse_all(source: Path) -> Tables:
                   failure_frame(list(kinds["failures"].values())),
                   census_frame(census, days),
                   usage_frame(list(kinds["model_usage"].values())), components_frame(components),
-                  coverage_frame(coverage), attachment_frame(attachments), no_responses=no_responses)
+                  coverage_frame(coverage), attachment_frame(attachments), no_responses=no_responses,
+                  spawns=spawn_frame(list(kinds["spawns"].values())))
 
 
 def parse_durations(source: Path) -> pd.DataFrame:
