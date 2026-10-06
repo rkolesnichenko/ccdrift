@@ -27,7 +27,7 @@ def line(mid, block, *, ts, sid="s1", out=100, cache_read=0, cache_creation=0,
          model="claude-opus-5", sidechain=False, version=None, entrypoint=None, effort=None,
          cache_1h=None, cache_5m=None, thinking_logged=None, speed=None, service_tier=None,
          agent_type=None, stop_reason=None, miss_reason=None,
-         skill=None, plugin=None, mcp_server=None, branch=None, extra=None):
+         skill=None, plugin=None, mcp_server=None, branch=None, agent_id=None, extra=None):
     """One JSONL line as Claude Code writes it: a single content block, with the
     response's message.id, usage and diagnostics repeated on every line of that response.
     Fields left as None are left out, as older Claude Code versions do."""
@@ -52,7 +52,7 @@ def line(mid, block, *, ts, sid="s1", out=100, cache_read=0, cache_creation=0,
     for name, value in (("version", version), ("entrypoint", entrypoint), ("effort", effort),
                        ("attributionAgent", agent_type), ("attributionSkill", skill),
                        ("attributionPlugin", plugin), ("attributionMcpServer", mcp_server),
-                       ("gitBranch", branch)):
+                       ("gitBranch", branch), ("agentId", agent_id)):
         if value is not None:
             rec[name] = value
     if mid is not None:
@@ -262,6 +262,28 @@ def prompt_snapshot(*chars, tools=None):
         rec["tools"] = [{"name": name, "description": _sized(n), "schema": {"type": "object", "properties": {}}}
                         for name, n in tools.items()]
     return rec
+
+
+def agent_call(tool_id, model=None, agent_type="general-purpose"):
+    """An Agent tool call as one content block of a response, asking for `model` when given.
+    Its description and prompt are the user's own words."""
+    request = {"description": PRIVATE_TEXT, "prompt": PRIVATE_TEXT, "subagent_type": agent_type}
+    if model is not None:
+        request["model"] = model
+    return {"type": "tool_use", "id": tool_id, "name": "Agent", "input": request}
+
+
+def agent_result(ts, tool_id, agent_id, resolved=None, sid="s1", sidechain=False, version="2.1.289"):
+    """The tool result Claude Code logs when an Agent call has spawned its subagent: the
+    agent's id and, when given, the model it resolved the call's request to."""
+    outcome = {"isAsync": False, "status": "completed", "agentId": agent_id, "description": PRIVATE_TEXT,
+               "prompt": PRIVATE_TEXT, "outputFile": f"{PRIVATE_PATH}/out.txt", "canReadOutputFile": True}
+    if resolved is not None:
+        outcome["resolvedModel"] = resolved
+    return {"type": "user", "timestamp": ts, "sessionId": sid, "isSidechain": sidechain, "version": version,
+            "entrypoint": "cli", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": tool_id, "content": PRIVATE_TEXT}]},
+            "toolUseResult": outcome}
 
 
 def tool_use(tool_id, name):

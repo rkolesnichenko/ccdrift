@@ -91,7 +91,7 @@ def test_a_store_from_before_the_census_gains_the_table_and_reads_every_transcri
     db.commit()
     db.close()
     with History(path) as history:
-        assert history.meta["schema_version"] == str(ccdrift.history.SCHEMA_VERSION) == "9"
+        assert history.meta["schema_version"] == str(ccdrift.history.SCHEMA_VERSION) == "10"
         assert history.update(tmp_path / "logs") == 1
         assert history.attachment_census()["type"].tolist() == ["date"]
 

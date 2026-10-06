@@ -10,15 +10,15 @@ from datetime import date, datetime
 
 from ccdrift.history import PARSER_VERSION
 from ccdrift.logs import parse_file
-from tests.helpers import (DAY, agent_listing, api_error, at, attachment, compact_boundary, cost_state,
-                           deferred_tools, hook_record, instructions, line, mcp_instructions, no_response_stub,
-                           prompt, prompt_snapshot, retry_record, skill_listing, stop_hook_summary, text, thinking,
-                           tool_result, tool_use, turn_duration, write)
+from tests.helpers import (DAY, agent_call, agent_listing, agent_result, api_error, at, attachment, compact_boundary,
+                           cost_state, deferred_tools, hook_record, instructions, line, mcp_instructions,
+                           no_response_stub, prompt, prompt_snapshot, retry_record, skill_listing, stop_hook_summary,
+                           text, thinking, tool_result, tool_use, turn_duration, write)
 
 # The version, and a digest of parse_file on the transcripts below at that version. When a
 # parser change moves the digest, bump PARSER_VERSION and extend its numbered comment
 # (history.py), then put both new values here.
-PINNED = (12, "aa6fc59e0e25c703137503aa974b0b0b6d226a8fe87b9984752eaacffd47f07a")
+PINNED = (13, "12f349467785863930d27e2f96cd6be3f7d7308fb5bc025b04369914eb9656c2")
 
 
 def plain(value):
@@ -66,6 +66,9 @@ def transcripts(root):
             attachment(at(4), prompt_snapshot(900, 100, tools={"Bash": 500, "Read": 300}), version="2.1.281"),
             line("m2", text(80), ts=at(5), cache_read=1000, cache_creation=0, version="2.1.281", entrypoint="cli",
                  stop_reason="end_turn"),
+            line("m2", agent_call("t9", model="haiku"), ts=at(5), cache_read=1000, cache_creation=0,
+                 version="2.1.281", entrypoint="cli"),
+            agent_result(at(5.5), "t9", "a1", resolved="claude-haiku-4-5", version="2.1.281"),
             stop_hook_summary(at(6), 2, errors=("exit 1",), durations=(40,), uuid="stop-1"),
             turn_duration(at(7), 5000, 4, uuid="dur-1"),
             api_error(at(8), version="2.1.281"), api_error(at(9), kind="slept", version="2.1.281"),
@@ -83,7 +86,7 @@ def transcripts(root):
     sub = [prompt(at(DAY), sidechain=True),
            line("a1", tool_use("t2", "Read"), ts=at(DAY + 1), sidechain=True, model="claude-haiku-4-5",
                 cache_read=500, cache_creation=50, cache_5m=50, version="2.1.281", entrypoint="cli",
-                agent_type="Explore"),
+                agent_type="Explore", agent_id="a1"),
            hook_record(at(DAY + 2), "PreToolUse", "t2", "Read", version="2.1.281", sidechain=True)]
     write(root / "p" / "s1.jsonl", main)
     write(root / "p" / "s1" / "subagents" / "agent-a1.jsonl", sub)
