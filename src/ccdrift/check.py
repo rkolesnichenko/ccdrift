@@ -8,7 +8,7 @@ import sys
 import traceback
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import pandas as pd
 
@@ -317,13 +317,15 @@ FAILURE_NOTICE_HOURS = 20
 def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = None,
               notify_user: bool = False, today: Optional[date] = None,
               exec_command: Optional[str] = None, now: Optional[datetime] = None,
-              digest: bool = True) -> int:
+              digest: bool = True, due: Optional[Callable[[], bool]] = None) -> int:
     """Run the daily check and print a line per alert; with notify_user, also show a
     notification for each; with exec_command, also run it for each (see
     notify.run_exec). The state file is read once and written once, with how the
     run went, so `ccdrift status` can tell a broken check from a quiet week, and
     stays locked in between (see state.state_lock). A state file that can't be read
-    is left as it is. Without `digest`, no weekly summary."""
+    is left as it is. Without `digest`, no weekly summary. With `due`, the check the
+    plugin's hook began: it gives up at once, printing nothing, while another command
+    holds the state, and once it has the state runs only if `due()` still holds."""
     make_stream_private(sys.stdout, only=state_path.with_name(LOG_FILE))
     started = now or datetime.now().astimezone()
     notice = state_path.with_name(state_path.name + ".last-failure-notice")
@@ -365,7 +367,9 @@ def run_check(source: Path, state_path: Path, cfg: Optional[DetectorConfig] = No
         return True
 
     try:
-        with state_lock(state_path):
+        with state_lock(state_path, wait=due is None) as held:
+            if not held or (due is not None and not due()):
+                return 0
             alerts, failure = _run_on_state(source, state_path, cfg or DetectorConfig(),
                                             today or datetime.now(timezone.utc).date(), started, digest)
     except OSError as exc:

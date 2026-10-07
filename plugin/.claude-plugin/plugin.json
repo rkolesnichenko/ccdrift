@@ -1,0 +1,11 @@
+{
+  "name": "ccdrift",
+  "version": "0.26.0",
+  "description": "Shows ccdrift's verdict at each session start and runs its check in the background once an hour. Needs ccdrift itself: uv tool install ccdrift",
+  "author": {
+    "name": "Roman Kolesnichenko"
+  },
+  "homepage": "https://github.com/rkolesnichenko/ccdrift",
+  "repository": "https://github.com/rkolesnichenko/ccdrift",
+  "license": "MIT"
+}

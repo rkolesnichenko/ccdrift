@@ -138,20 +138,25 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
 
 
 @contextmanager
-def state_lock(path: Path) -> Iterator[None]:
+def state_lock(path: Path, wait: bool = True) -> Iterator[bool]:
     """Hold the lock on the state file `path` from reading it to saving it, so the
     check and `ccdrift incident` never save over each other's changes, and two checks
     don't send the same alerts. Waits, saying so on stderr, while another command
-    holds it. Raises OSError when the lock file next to the state file can't be opened."""
+    holds it, and yields True once it has it; without `wait`, yields False at once
+    instead, holding nothing. Raises OSError when the lock file next to the state file
+    can't be opened."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path.with_name(path.name + ".lock"), "a") as handle:
         if fcntl is not None:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
+                if not wait:
+                    yield False
+                    return
                 print(STATE_LINES["waiting"].format(path=path), file=sys.stderr, flush=True)
                 fcntl.flock(handle, fcntl.LOCK_EX)
-        yield
+        yield True
 
 
 RUN_DAYS = 14
