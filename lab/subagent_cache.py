@@ -41,6 +41,8 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
+from ccdrift.calibrate import (AFTER, BEFORE, SEEDS, STARTS, plant_starts, prefix_reads, plant_subagent as plant,
+                               subagent_openings as openings)
 from ccdrift.detector import MIN_BIN_TURNS, SUBAGENT_METRICS, DetectorConfig, bin_metrics, detect, flag_onsets
 from ccdrift.incidents import RECENT_DAYS
 from ccdrift.logs import add_ratios, default_source, judged_subagent_loops, parse_all
@@ -52,10 +54,6 @@ PLANT_GRID = (SMALL, BAR)
 MIN_TURNS_GRID = (0, 100, 200, 300, 500)
 SHIFT_SHARE = 0.5      # one more ordinary miss may move a judged day at most this share of the way to the cutoff
 CAUGHT_SHARE = 0.9
-STARTS = 10
-SEEDS = 5
-BEFORE = 7             # judged days before a start: the detector needs 5 to judge a day
-AFTER = 3              # judged days after it: a flag needs 3 deviant days of 4
 METRIC = "subagent_cache"
 COLUMN = SUBAGENT_METRICS[METRIC][0]
 # Each measured the same way: a per-turn value in [0, 1] whose drop is the harm.
@@ -68,41 +66,12 @@ VARIANTS = {
 CANDIDATE = "readback"
 
 
-def openings(responses: pd.DataFrame) -> pd.Series:
-    """What each subagent transcript's first response read from the cache, by source file."""
-    sub = responses[responses["is_sidechain"].astype(bool)].sort_values("timestamp", kind="stable")
-    return sub.groupby("source_file", sort=True)["cache_read"].first()
-
-
-def plant(loops: pd.DataFrame, opening: pd.Series, days: list[str], share: float, seed: int) -> pd.DataFrame:
-    """`loops` with an extra `share` of each of `days`' turns that read back at least half
-    reading only what their transcript's opening turn read, at most what was cached, and
-    writing the rest again, the per-turn columns recomputed by add_ratios."""
-    planted = loops.copy()
-    rng = np.random.default_rng(seed)
-    for day in days:
-        hits = planted.index[(planted["day"].astype(str) == day) & ~planted["is_loop_miss"].astype(bool)]
-        count = int(round(share * int((planted["day"].astype(str) == day).sum())))
-        _prefix_reads(planted, opening, rng.choice(hits.to_numpy(), size=min(count, len(hits)), replace=False))
-    return add_ratios(planted)
-
-
-def _prefix_reads(planted: pd.DataFrame, opening: pd.Series, chosen: np.ndarray) -> None:
-    """The `chosen` turns of `planted` read only what their transcript's opening turn read,
-    at most what was cached, and write the rest again."""
-    before = planted.loc[chosen, "cache_read"]
-    read = np.minimum(planted.loc[chosen, "source_file"].map(opening).fillna(0.0).to_numpy(),
-                      planted.loc[chosen, "prev_cached"].to_numpy())
-    planted.loc[chosen, "cache_read"] = read
-    planted.loc[chosen, "cache_creation"] = planted.loc[chosen, "cache_creation"] + before - read
-
-
 def one_miss(loops: pd.DataFrame, opening: pd.Series, day: str) -> pd.DataFrame:
     """`loops` with one more ordinary miss on `day`: the middle one of its turns that read
     back at least half reads only what its transcript's opening turn read."""
     missed = loops.copy()
     hits = missed.index[(missed["day"].astype(str) == day) & ~missed["is_loop_miss"].astype(bool)]
-    _prefix_reads(missed, opening, hits.to_numpy()[len(hits) // 2:len(hits) // 2 + 1])
+    prefix_reads(missed, opening, hits.to_numpy()[len(hits) // 2:len(hits) // 2 + 1])
     return add_ratios(missed)
 
 
@@ -117,14 +86,6 @@ def flagged(loops: pd.DataFrame, variant: str, z: float,
                       DetectorConfig(metric_z_thresholds={METRIC: z}), only=[METRIC])
     bins = detected["bin"].astype(str)
     return (bins[detected[f"{METRIC}__flag"]].tolist(), bins[detected[f"{METRIC}__z"] <= -z].tolist(), detected)
-
-
-def plant_starts(days: list[str], starts: int = STARTS) -> list[str]:
-    """Up to `starts` days, evenly spread, with BEFORE judged days before and AFTER after."""
-    eligible = days[BEFORE:len(days) - AFTER]
-    if len(eligible) <= starts:
-        return eligible
-    return [eligible[int(i)] for i in np.linspace(0, len(eligible) - 1, starts).round()]
 
 
 def rows(loops: pd.DataFrame, opening: pd.Series, z_grid=Z_GRID, plants=PLANT_GRID, seeds: int = SEEDS,

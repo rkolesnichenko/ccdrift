@@ -123,6 +123,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_source(rate)
     _add_state(rate)
 
+    calibrate = commands.add_parser("calibrate", help="whether the daily verdict's settings catch on your history what "
+                                    "they caught on the logs they were tuned on")
+    calibrate.add_argument("--json", action="store_true", help="print the calibration as JSON")
+    _add_source(calibrate)
+    _add_state(calibrate)
+
     status = commands.add_parser("status", help="how the last check went and what ccdrift is following")
     status.add_argument("--short", action="store_true",
                         help="one line when something needs attention, nothing otherwise (for a status line)")
@@ -321,6 +327,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.command == "quota":
         from ccdrift.exchange import run_quota
         return run_quota(_source(args), _state(args), days=args.days, as_json=args.json)
+    if args.command == "calibrate":
+        from ccdrift.calibrate import run_calibrate
+        return run_calibrate(_source(args), _state(args), as_json=args.json)
     if args.command == "status":
         from ccdrift.status import run_status
         if args.stdin and not args.short:

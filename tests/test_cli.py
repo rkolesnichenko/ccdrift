@@ -110,8 +110,10 @@ def test_help_says_what_the_check_does(capsys, monkeypatch):
     monkeypatch.setenv("COLUMNS", "200")
     with pytest.raises(SystemExit):
         main(["--help"])
-    assert "    check     follow incidents and changes, and alert on each " \
-           "(what the schedule runs)" in capsys.readouterr().out.splitlines()
+    # The padding is argparse's: from Python 3.13 it widens the column to the longest command
+    # name, before that it wraps a name too long for it.
+    lines = [" ".join(line.split()) for line in capsys.readouterr().out.splitlines()]
+    assert "check follow incidents and changes, and alert on each (what the schedule runs)" in lines
 
 
 def test_version_prints_the_package_version(capsys):
