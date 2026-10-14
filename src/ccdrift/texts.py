@@ -1304,11 +1304,53 @@ CALIBRATE_LINES = {"measuring": "Planting changes in your history and replaying 
                    "settled": "  Kept in as the new normal, as the check keeps them: {spans}.",
                    "span": "{start} to {end}",
                    "span_open": "{start} on, still open",
-                   "not_judged": "Not judged yet: session start, the cache-miss and tool-loop warnings, failed "
-                                 "requests, cut-short responses, hooks, thinking and spawn models.",
+                   "not_judged": "Not judged yet: session start, failed requests, cut-short responses, hooks, thinking "
+                                 "and spawn models.",
                    "bar": "PASS means the shipped setting clears the bar it cleared on the logs it was tuned on: a "
                           "planted {bar} caught from every start ({needed:.0%} of runs for subagent read-back), and "
                           "no flag outside the incidents ccdrift follows."}
+# The early warnings `ccdrift calibrate` judges, by warning or tool-loop stream, and what each
+# watches.
+WARNING_NAMES = {"cache_miss": "Cache-miss warning", "main": "Tool-loop warning",
+                 "subagent": "Subagent tool-loop warning"}
+WARNING_WATCHES = {"cache_miss": "new prompts", "main": "main-thread tool loops", "subagent": "subagents"}
+WARNING_LINES = {"head": "Early warnings, turn by turn:",
+                 "pass": "{name}: PASS",
+                 "fail": "{name}: FAIL, {why}",
+                 "and": ", and ",
+                 "none_ships": "{name}: no setting ships, so {watches} get no early warning.",
+                 "cache_not_enough_data": "{name}: NOT ENOUGH DATA, no week has {turns:,} new-prompt turns in the "
+                                          "{days} days before it",
+                 "loop_not_enough_data": "{name}: NOT ENOUGH DATA, no week has {turns:,} tool-loop turns in the "
+                                         "{days} days before it",
+                 "cache_why_quiet": "it would warn falsely {rate:.2f} times a week at your volume",
+                 "cache_why_reach": "a planted {plant} miss rate isn't caught within a median of {turns} turns",
+                 "loop_why_quiet": "it alarms outside the incidents ccdrift follows",
+                 "loop_why_reach": "a planted {plant} miss rate isn't caught in {share:.0%} of runs within a median "
+                                   "of {turns} turns",
+                 "cache_quiet": "  False warnings: {rate:.2f} a week expected at your usual miss rate ({usual:.2%} "
+                                "median) and {turns:,} new-prompt turns a week, over {weeks:.1f} weeks judged, "
+                                "against a bar of 1 every {every:g} weeks ({bar:.2f}).",
+                 "cache_alarmed": "  Your history alarmed on {days} outside the incidents ccdrift follows.",
+                 "cache_alarmed_none": "  Your history raised none.",
+                 "cache_reach": "  A planted {plant} miss rate is caught in a median {median:g} turns, {caught} of "
+                                "{runs} runs from {starts}, {span}, against a bar of {bar} turns.",
+                 "cache_reach_never": "  A planted {plant} miss rate is not caught in a median: {caught} of {runs} "
+                                      "runs from {starts}, {span}, against a bar of {bar} turns.",
+                 "loop_quiet": "  No alarm on {days:,} days judged at the most sensitive usual rate, {floor:.1%}.",
+                 "loop_alarms": "  It alarms on {days} with no incident recorded, at the most sensitive usual rate, "
+                                "{floor:.1%}.",
+                 "loop_dismissed": "  It alarms on {days}, which you dismissed as a false alarm; dismissed alarms "
+                                   "count against it.",
+                 "loop_reach": "  A planted {plant} miss rate is caught in {caught} of {runs} runs ({share:.0%}), in a "
+                               "median {median:g} turns, against {bar_share:.0%} within a median of {bar}.",
+                 "loop_reach_never": "  A planted {plant} miss rate is caught in {caught} of {runs} runs ({share:.0%}), "
+                                     "not in a median, against {bar_share:.0%} within a median of {bar}.",
+                 "bar": "For the warnings, the bars their gates in lab/ set: false cache-miss warnings no more than once "
+                        "in {every:g} weeks at your volume and a planted {prompt_plant} miss rate caught within a "
+                        "median of {prompt_turns} new-prompt turns; no tool-loop alarm at the most sensitive usual "
+                        "rate and a planted {loop_plant} miss rate caught in {share:.0%} of runs within a "
+                        "median of {loop_turns}."}
 
 
 def planted_text(size: float) -> str:
