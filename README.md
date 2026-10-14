@@ -398,31 +398,34 @@ and points only.
 
 `ccdrift calibrate` says whether the daily verdict works on your history as it did on the
 logs it was tuned on. For the cache ratio, Haiku share and subagent read-back it runs the
-shipped detector over the days the check judges, with the days of open and recovered
-incidents left out, as the check leaves them out of its baselines. A persistent incident
-stays in as the new normal, as the check keeps it, and its own step isn't held against the
-metric; a dismissed one stays in as the false alarm you marked it, and anything else that
-flags counts against the metric. Then it plants a regression from up to 10
-starting days, each with 7 judged days before it and 3 after: on the main thread a cache
-drop or a Haiku rise of 5% to 70% from the start on, in subagents an extra 2% or 5% of loop
-turns reading only what their transcript opened with, over the start and the 3 days after,
-5 times each. A metric passes when nothing flags and a planted 5% is caught from every start
-(in 90% of runs for subagent read-back), the bar the shipped settings cleared on the logs
-they were tuned on:
+shipped detector over the days the check reads, as the check runs it: the days of open and
+recovered incidents stay out of the baselines, and a flag that meets an incident ccdrift
+follows isn't held against the metric. A flag over an incident you dismissed is, as the
+false alarm you marked it; so is any other. Then it plants a regression from up to 10
+starting days that meet no incident, each with 7 judged days before it and 3 after: on the
+main thread a cache drop or a Haiku rise of 5% to 70% from the start on, in subagents an
+extra 2% or 5% of loop turns reading only what their transcript opened with, over the start
+and the 3 days after, 5 times each. A plant is caught when the check would have reported it
+by the third day after its start, judging the history up to then; one whose flag meets an
+incident isn't, since the check reports no such flag. A metric passes when nothing flags and
+a planted 5% is caught from every start (in 90% of runs for subagent read-back), the bar the
+shipped settings cleared on the logs they were tuned on:
 
 ```
 Calibration on your history, 2026-08-06 to 2026-10-13: 51 days judged on the main thread, 47 with subagent loops.
 
 Cache ratio: PASS
-  A planted 5% drop is caught from 10 of 10 starts, 2026-09-06 to 2026-10-06.
+  A planted 5% drop is caught from 10 of 10 starts, 2026-09-04 to 2026-10-06.
   Smallest drop caught: 5% from every start.
   Nothing flags.
   Left out as incidents ccdrift follows: 2026-08-18 to 2026-09-03.
 ```
 
-A failure says which half failed and the smallest change caught from each start, and a
-metric with fewer than 11 judged days has not enough data. It replays the detector a few
-hundred times, 14 seconds on those 51 days, changes no state and sends no alert. The other
+A failure says which half failed and the smallest change caught from each start. A metric
+has not enough data with fewer than 11 judged days, or when no start's days fall within 14
+days of each other clear of incidents, since the check reports only flags begun in the last
+14 days. It replays the detector a few
+hundred times, 12 seconds on those 51 days, changes no state and sends no alert. The other
 alerts aren't judged yet. `calibrate --json` holds days, counts and sizes, with no paths,
 session ids or project names.
 
