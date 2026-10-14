@@ -1262,6 +1262,80 @@ def failure_lines(summary: Optional[dict[str, Any]]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# ccdrift calibrate
+# ---------------------------------------------------------------------------
+
+CALIBRATE_NAMES = {"cache_ratio": "Cache ratio", "haiku_fraction": "Haiku share",
+                   "subagent_cache": "Subagent read-back"}
+# What a planted change does to each metric, by the direction MOVES gives it.
+CALIBRATE_MOVES = {"down": "drop", "up": "rise"}
+CALIBRATE_LINES = {"measuring": "Planting changes in your history and replaying the detector over each; this can take "
+                                "a minute.",
+                   "head": "Calibration on your history, {first} to {last}: {main:,} days judged on the main thread, "
+                           "{subagent:,} with subagent loops.",
+                   "head_empty": "Calibration on your history: no complete UTC day judged yet.",
+                   "pass": "{name}: PASS",
+                   "fail": "{name}: FAIL, {why}",
+                   "not_enough_data": "{name}: NOT ENOUGH DATA, {days:,} days judged where a planted change needs "
+                                      "{need}: {before} before its start and {after} after it",
+                   "why_quiet": "it flags days with no incident recorded",
+                   "why_reach": "a planted {bar} {move} is missed",
+                   "why_both": "it flags days with no incident recorded, and a planted {bar} {move} is missed",
+                   "reach": "  A planted {bar} {move} is caught from {caught} of {runs} starts, {first} to {last}.",
+                   "reach_one": "  A planted {bar} {move} is caught from {caught} of 1 start, {first}.",
+                   "reach_subagent": "  A planted {bar} drop is caught in {caught} of {runs} runs ({share:.0%}), "
+                                     "against a bar of {needed:.0%}. A planted {small}: {small_caught} of {runs}.",
+                   "floors": "  Smallest {move} caught: {floors}.",
+                   "floor_all": "{size} from every start",
+                   "floor_some": "{size} from {count}",
+                   "floor_none": "none up to {largest} from {count}",
+                   "starts_one": "1 start",
+                   "starts_many": "{count} starts",
+                   "quiet": "  Nothing flags.",
+                   "flagged": "  It flags from {days} with no incident recorded. `ccdrift incident dismiss` marks "
+                              "a false alarm, `ccdrift incident add` records a real one.",
+                   "left_out": "  Left out as incidents ccdrift follows: {spans}.",
+                   "span": "{start} to {end}",
+                   "span_open": "{start} on, still open",
+                   "not_judged": "Not judged yet: session start, the cache-miss and tool-loop warnings, failed "
+                                 "requests, cut-short responses, hooks, thinking and spawn models.",
+                   "bar": "PASS means the shipped setting clears the bar it cleared on the logs it was tuned on: a "
+                          "planted {bar} caught from every start ({needed:.0%} of runs for subagent read-back), and "
+                          "no flag outside the incidents ccdrift follows."}
+
+
+def planted_text(size: float) -> str:
+    """A planted size as a whole percentage, "5%"."""
+    return f"{size:.0%}"
+
+
+def floors_text(floors: Mapping[str, Optional[float]], largest: float) -> str:
+    """The smallest planted size caught from each start, together: "5% from every start", or
+    each size with how many starts it was the smallest at, smallest first, then the starts
+    that caught none up to `largest`."""
+    sizes = sorted({size for size in floors.values() if size is not None})
+    if len(sizes) == 1 and None not in floors.values():
+        return CALIBRATE_LINES["floor_all"].format(size=planted_text(sizes[0]))
+
+    def starts(count: int) -> str:
+        return CALIBRATE_LINES["starts_one" if count == 1 else "starts_many"].format(count=count)
+
+    parts = [CALIBRATE_LINES["floor_some"].format(size=planted_text(size),
+                                                  count=starts(sum(1 for s in floors.values() if s == size)))
+             for size in sizes]
+    missed = sum(1 for s in floors.values() if s is None)
+    if missed:
+        parts.append(CALIBRATE_LINES["floor_none"].format(largest=planted_text(largest), count=starts(missed)))
+    return ", ".join(parts)
+
+
+def spans_text(spans: Sequence[tuple[str, Optional[str]]]) -> str:
+    """Incident spans, "2026-08-18 to 2026-09-03", or "2026-10-01 on, still open"."""
+    return ", ".join(CALIBRATE_LINES["span"].format(start=start, end=end) if end
+                     else CALIBRATE_LINES["span_open"].format(start=start) for start, end in spans)
+
+
+# ---------------------------------------------------------------------------
 # ccdrift schedule
 # ---------------------------------------------------------------------------
 

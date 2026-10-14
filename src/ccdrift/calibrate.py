@@ -17,16 +17,23 @@ different things under one name."""
 
 from __future__ import annotations
 
+import json
 import random
-from datetime import date
+import sys
+from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 
 from ccdrift.detector import SUBAGENT_METRICS, DetectorConfig, bin_metrics, detect
+from ccdrift.history import HistoryError, load_history
 from ccdrift.incidents import OPEN_END
 from ccdrift.logs import add_ratios, judged_subagent_loops, judged_turns
+from ccdrift.state import load_state
+from ccdrift.texts import (CALIBRATE_LINES, CALIBRATE_MOVES, CALIBRATE_NAMES, MOVES, floors_text,
+                           no_transcripts_message, planted_text, spans_text)
 
 # Starting days for a plant, and the judged days each needs around it: the detector needs
 # min_baseline (5) days to judge one, and a flag needs deviant_bins (3) deviant days of
@@ -50,6 +57,9 @@ SUBAGENT_SIZES = (0.02, BAR)
 HAIKU_SEED = 7
 # The plant behind each main-thread metric.
 KINDS = {"cache_ratio": "cache", "haiku_fraction": "haiku"}
+# The alerts with a measured setting this doesn't judge yet, by their keys in the state.
+NOT_JUDGED = ("context_changes", "early_warnings", "loop_warnings", "failed_requests", "cut_short", "hook_changes",
+              "thinking_rises", "model_mismatches")
 
 
 def plant(df: pd.DataFrame, kind: str, magnitude: float, seed: int = 0, start: Optional[int] = None) -> pd.DataFrame:
@@ -221,3 +231,80 @@ def calibration(responses: pd.DataFrame, incidents: Sequence[dict], today: date)
     return {"first": days[0] if days else None, "last": days[-1] if days else None,
             "main_days": int(turns["day"].nunique()), "subagent_days": int(loops["day"].nunique()),
             "metrics": results}
+
+
+def metric_lines(result: dict[str, Any]) -> list[str]:
+    """One metric's verdict and what it rests on, as the terminal shows them."""
+    metric = result["metric"]
+    name, move = CALIBRATE_NAMES[metric], CALIBRATE_MOVES[MOVES[metric]]
+    bar = planted_text(BAR)
+    if result["verdict"] == "not_enough_data":
+        lines = [CALIBRATE_LINES["not_enough_data"].format(name=name, days=result["days"], need=BEFORE + AFTER + 1,
+                                                           before=BEFORE, after=AFTER)]
+    elif result["verdict"] == "pass":
+        lines = [CALIBRATE_LINES["pass"].format(name=name)]
+    else:
+        why = {("quiet",): "why_quiet", ("reach",): "why_reach"}.get(tuple(result["failed"]), "why_both")
+        lines = [CALIBRATE_LINES["fail"].format(name=name, why=CALIBRATE_LINES[why].format(bar=bar, move=move))]
+    if result["runs"] and metric == "subagent_cache":
+        lines.append(CALIBRATE_LINES["reach_subagent"].format(
+            bar=bar, caught=result["caught"][BAR], runs=result["runs"], share=result["caught"][BAR] / result["runs"],
+            needed=SUBAGENT_SHARE, small=planted_text(SUBAGENT_SIZES[0]), small_caught=result["caught"][SUBAGENT_SIZES[0]]))
+    elif result["runs"]:
+        starts = result["starts"]
+        lines.append(CALIBRATE_LINES["reach" if len(starts) > 1 else "reach_one"].format(
+            bar=bar, move=move, caught=result["caught"][BAR], runs=result["runs"], first=starts[0], last=starts[-1]))
+        lines.append(CALIBRATE_LINES["floors"].format(move=move, floors=floors_text(result["floors"], SIZES[-1])))
+    lines.append(CALIBRATE_LINES["flagged"].format(days=", ".join(result["flagged"])) if result["flagged"]
+                 else CALIBRATE_LINES["quiet"])
+    if result["left_out"]:
+        lines.append(CALIBRATE_LINES["left_out"].format(spans=spans_text(result["left_out"])))
+    return lines
+
+
+def calibrate_lines(result: dict[str, Any]) -> list[str]:
+    """The calibration as the terminal shows it: what was judged, each metric's verdict, what
+    isn't judged yet and what PASS means."""
+    head = (CALIBRATE_LINES["head"].format(first=result["first"], last=result["last"], main=result["main_days"],
+                                           subagent=result["subagent_days"]) if result["first"]
+            else CALIBRATE_LINES["head_empty"])
+    lines = [head, ""]
+    for metric in result["metrics"]:
+        lines += metric_lines(metric)
+    return lines + ["", CALIBRATE_LINES["not_judged"],
+                    CALIBRATE_LINES["bar"].format(bar=planted_text(BAR), needed=SUBAGENT_SHARE)]
+
+
+def calibrate_json(result: dict[str, Any]) -> str:
+    """The calibration as JSON: days, counts and sizes, the bar it was judged against and the
+    alerts not judged yet. No path, session or project."""
+    metrics = [{**metric, "caught": {str(size): count for size, count in metric["caught"].items()},
+                "left_out": [list(span) for span in metric["left_out"]]} for metric in result["metrics"]]
+    shared = {**result, "metrics": metrics, "bar": BAR, "subagent_share": SUBAGENT_SHARE,
+              "not_judged": list(NOT_JUDGED)}
+    return json.dumps(shared, indent=1) + "\n"
+
+
+def run_calibrate(source: Path, state_path: Path, as_json: bool = False, today: Optional[date] = None) -> int:
+    """Print whether the daily detector's shipped settings work on the history under `source`,
+    with the incidents in the state at `state_path` left out. Changes no state and sends no
+    alert; like `cost`, it brings a store a check has claimed up to date first."""
+    today = today or datetime.now(timezone.utc).date()
+    try:
+        incidents = load_state(state_path)["incidents"]
+    except (OSError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    try:
+        tables = load_history(source, state_path, claim=False)
+    except HistoryError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if tables.responses.empty:
+        print(no_transcripts_message(source), file=sys.stderr)
+        return 2
+    # 13.9 s on the owner's store of 51 days (2026-10-14), so it says so first.
+    print(CALIBRATE_LINES["measuring"], file=sys.stderr, flush=True)
+    result = calibration(tables.responses, incidents, today)
+    print(calibrate_json(result) if as_json else "\n".join(calibrate_lines(result)) + "\n", end="")
+    return 0

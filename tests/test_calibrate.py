@@ -1,11 +1,17 @@
 """`ccdrift calibrate`: the plants, the measurement on a history and what it prints."""
 
+import json
 from datetime import date
 
 import pytest
 
-from ccdrift.calibrate import calibration, plant, plant_starts, plant_subagent, subagent_openings
+import ccdrift.calibrate
+from ccdrift.calibrate import (calibrate_lines, calibration, metric_lines, plant, plant_starts, plant_subagent,
+                               run_calibrate, subagent_openings)
+from ccdrift.cli import main
 from ccdrift.logs import parse_all
+from ccdrift.state import STATE_VERSION
+from ccdrift.texts import floors_text
 from tests.helpers import main_thread_days, nth_day, tool_loop_days
 
 
@@ -178,3 +184,147 @@ def test_subagent_days_with_too_few_loop_turns_are_neither_judged_nor_starts(tmp
     assert (subagent["verdict"], subagent["days"], subagent["starts"], subagent["runs"]) == (
         "not_enough_data", 0, [], 0)
     assert result["subagent_days"] == 12
+
+
+def run(tmp_path, capsys, days, state=None, **options):
+    """`ccdrift calibrate` on a history like `calibrated`'s in a project folder named
+    secret-client, judged the day after its last, with what it printed."""
+    logs = tmp_path / "logs"
+    main_thread_days(logs / "secret-client", days, per_day=150)
+    tool_loop_days(logs / "secret-client", len(days), per_day=301, subagent=True)
+    code = run_calibrate(logs, state or tmp_path / "home" / "state.json", today=date.fromisoformat(nth_day(len(days))),
+                         **options)
+    out = capsys.readouterr()
+    return code, out.out, out.err
+
+
+def test_calibrate_prints_what_it_judged_each_verdict_with_what_it_rests_on_and_what_pass_means(tmp_path, capsys):
+    code, out, err = run(tmp_path, capsys, [{}] * 12)
+    assert code == 0
+    assert err == "Planting changes in your history and replaying the detector over each; this can take a minute.\n"
+    assert out.splitlines() == [
+        "Calibration on your history, 2026-09-01 to 2026-09-12: 12 days judged on the main thread, 12 with "
+        "subagent loops.",
+        "",
+        "Cache ratio: PASS",
+        "  A planted 5% drop is caught from 2 of 2 starts, 2026-09-08 to 2026-09-09.",
+        "  Smallest drop caught: 5% from every start.",
+        "  Nothing flags.",
+        "Haiku share: PASS",
+        "  A planted 5% rise is caught from 2 of 2 starts, 2026-09-08 to 2026-09-09.",
+        "  Smallest rise caught: 5% from every start.",
+        "  Nothing flags.",
+        "Subagent read-back: PASS",
+        "  A planted 5% drop is caught in 10 of 10 runs (100%), against a bar of 90%. A planted 2%: 10 of 10.",
+        "  Nothing flags.",
+        "",
+        "Not judged yet: session start, the cache-miss and tool-loop warnings, failed requests, cut-short "
+        "responses, hooks, thinking and spawn models.",
+        "PASS means the shipped setting clears the bar it cleared on the logs it was tuned on: a planted 5% caught "
+        "from every start (90% of runs for subagent read-back), and no flag outside the incidents ccdrift follows."]
+
+
+def result_of(metric="cache_ratio", verdict="fail", failed=("quiet", "reach"), **fields):
+    defaults = {"days": 20, "starts": [nth_day(7), nth_day(8), nth_day(9)], "runs": 3,
+                "caught": {0.05: 1, 0.02: 0}, "floors": {nth_day(7): 0.05, nth_day(8): 0.2, nth_day(9): None},
+                "flagged": [nth_day(12)], "left_out": [(nth_day(2), nth_day(4)), (nth_day(15), None)]}
+    return {"metric": metric, "verdict": verdict, "failed": list(failed), **defaults, **fields}
+
+
+def test_a_failed_metric_says_which_half_failed_what_it_still_catches_and_how_to_label_a_flag():
+    assert metric_lines(result_of()) == [
+        "Cache ratio: FAIL, it flags days with no incident recorded, and a planted 5% drop is missed",
+        "  A planted 5% drop is caught from 1 of 3 starts, 2026-09-08 to 2026-09-10.",
+        "  Smallest drop caught: 5% from 1 start, 20% from 1 start, none up to 70% from 1 start.",
+        "  It flags from 2026-09-13 with no incident recorded. `ccdrift incident dismiss` marks a false alarm, "
+        "`ccdrift incident add` records a real one.",
+        "  Left out as incidents ccdrift follows: 2026-09-03 to 2026-09-05, 2026-09-16 on, still open."]
+    assert metric_lines(result_of(failed=["quiet"]))[0] == "Cache ratio: FAIL, it flags days with no incident recorded"
+    assert metric_lines(result_of("haiku_fraction", failed=["reach"]))[0] == (
+        "Haiku share: FAIL, a planted 5% rise is missed")
+
+
+def test_a_metric_with_one_start_or_none_says_so():
+    one = metric_lines(result_of(verdict="pass", failed=(), starts=[nth_day(7)], runs=1, caught={0.05: 1},
+                                 floors={nth_day(7): 0.05}, flagged=[], left_out=[]))
+    assert one == ["Cache ratio: PASS", "  A planted 5% drop is caught from 1 of 1 start, 2026-09-08.",
+                   "  Smallest drop caught: 5% from every start.", "  Nothing flags."]
+    none = metric_lines(result_of("subagent_cache", verdict="not_enough_data", failed=(), days=4, starts=[], runs=0,
+                                  caught={0.02: 0, 0.05: 0}, floors={}, flagged=[], left_out=[]))
+    assert none == ["Subagent read-back: NOT ENOUGH DATA, 4 days judged where a planted change needs 11: 7 before "
+                    "its start and 3 after it", "  Nothing flags."]
+
+
+def test_subagent_read_back_reports_runs_rather_than_starts():
+    lines = metric_lines(result_of("subagent_cache", failed=["reach"], runs=50, caught={0.02: 30, 0.05: 41},
+                                   flagged=[], left_out=[]))
+    assert lines == ["Subagent read-back: FAIL, a planted 5% drop is missed",
+                     "  A planted 5% drop is caught in 41 of 50 runs (82%), against a bar of 90%. A planted 2%: 30 "
+                     "of 50.", "  Nothing flags."]
+
+
+@pytest.mark.parametrize("floors, text", [({"a": 0.05, "b": 0.05}, "5% from every start"),
+                                          ({"a": 0.15, "b": 0.05, "c": 0.15}, "5% from 1 start, 15% from 2 starts"),
+                                          ({"a": None, "b": None}, "none up to 70% from 2 starts"),
+                                          ({"a": 0.05, "b": None}, "5% from 1 start, none up to 70% from 1 start")],
+                         ids=["every", "two-sizes", "none", "one-and-none"])
+def test_the_smallest_sizes_caught_are_told_smallest_first_with_how_many_starts_each(floors, text):
+    assert floors_text(floors, 0.7) == text
+
+
+def test_a_history_with_no_complete_day_yet_says_so():
+    lines = calibrate_lines({"first": None, "last": None, "main_days": 0, "subagent_days": 0, "metrics": []})
+    assert lines[0] == "Calibration on your history: no complete UTC day judged yet."
+
+
+def test_the_json_holds_days_counts_and_the_bar_and_names_no_path_session_or_project(tmp_path, capsys):
+    code, out, _ = run(tmp_path, capsys, [{}] * 12, as_json=True)
+    payload = json.loads(out)
+    assert code == 0
+    assert set(payload) == {"first", "last", "main_days", "subagent_days", "metrics", "bar", "subagent_share",
+                            "not_judged"}
+    assert (payload["bar"], payload["subagent_share"]) == (0.05, 0.9)
+    assert payload["not_judged"] == ["context_changes", "early_warnings", "loop_warnings", "failed_requests",
+                                     "cut_short", "hook_changes", "thinking_rises", "model_mismatches"]
+    cache = payload["metrics"][0]
+    assert cache["caught"]["0.05"] == 2 and cache["left_out"] == []
+    assert "secret-client" not in out and str(tmp_path) not in out
+    assert not any(f'"s{d}"' in out for d in range(12))
+
+
+def test_with_no_state_it_creates_nothing_in_ccdrifts_home(tmp_path, capsys):
+    home = tmp_path / "home"
+    assert run(tmp_path, capsys, [{}] * 12)[0] == 0
+    assert not home.exists()
+
+
+def test_a_state_it_cant_read_exits_1_and_is_left_as_it_was(tmp_path, capsys):
+    state = tmp_path / "home" / "state.json"
+    state.parent.mkdir()
+    state.write_text(json.dumps({"version": STATE_VERSION + 1}))
+    before = state.read_bytes()
+    code, out, err = run(tmp_path, capsys, [{}] * 12, state=state)
+    assert (code, out) == (1, "")
+    assert "newer ccdrift" in err
+    assert state.read_bytes() == before
+
+
+def test_an_unusable_store_exits_1_and_a_source_with_no_transcripts_exits_2(tmp_path, capsys):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "history.sqlite").write_text("not a database")
+    code, _, err = run(tmp_path, capsys, [{}] * 12, state=home / "state.json")
+    assert code == 1 and "Move it aside" in err
+    (tmp_path / "empty").mkdir()
+    assert run_calibrate(tmp_path / "empty", tmp_path / "other" / "state.json") == 2
+    assert "No Claude Code transcripts found" in capsys.readouterr().err
+
+
+def test_the_command_line_passes_its_source_state_and_json_through(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(ccdrift.calibrate, "run_calibrate", lambda *args, **kwargs: calls.append((args, kwargs)) or 0)
+    paths = ["--source", str(tmp_path / "logs"), "--state", str(tmp_path / "state.json")]
+    assert main(["calibrate", "--json", *paths]) == 0
+    assert main(["calibrate", *paths]) == 0
+    assert calls == [((tmp_path / "logs", tmp_path / "state.json"), {"as_json": True}),
+                     ((tmp_path / "logs", tmp_path / "state.json"), {"as_json": False})]
