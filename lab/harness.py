@@ -58,6 +58,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from ccdrift.calibrate import plant
 from ccdrift.detector import (METRICS, DetectorConfig, bin_metrics, detect, first_flag_bin,
                               flag_onsets)
 from ccdrift.logs import (CACHE_TTL_SECONDS, SUBAGENT_CACHE_TTL_SECONDS, TOKENS_PER_SIGNATURE_CHAR,
@@ -72,33 +73,14 @@ def inject(df: pd.DataFrame, kind: str, magnitude: float, seed: int = 0,
            start: Optional[int] = None) -> pd.DataFrame:
     """Return a copy of the turn-level df with a regime change applied from turn
     `start` (by global time order; default: the midpoint turn) to the end.
-    magnitude in [0,1]."""
-    rng = random.Random(seed)
+    magnitude in [0,1]. Cache and Haiku are ccdrift.calibrate's plants, which
+    `ccdrift calibrate` runs too; effort is planted here only."""
+    if kind != "effort":
+        return plant(df, kind, magnitude, seed=seed, start=start)
     d = df.sort_values("timestamp", kind="stable").reset_index(drop=True).copy()
     cut = len(d) // 2 if start is None else start
-    post = d.index >= cut
-
-    if kind == "effort":
-        # Reduce thinking by `magnitude` fraction after the cut.
-        d.loc[post, "thinking_tokens"] = d.loc[post, "thinking_tokens"] * (1 - magnitude)
-
-    elif kind == "haiku":
-        # Flip `magnitude` fraction of post-cut turns to a haiku model.
-        post_idx = list(d.index[post])
-        k = int(round(len(post_idx) * magnitude))
-        d.loc[rng.sample(post_idx, k), "model"] = "claude-haiku-4-5"
-
-    elif kind == "cache":
-        # Depress cache-read ratio on post-cut new-prompt turns by moving mass
-        # from cache_read into cache_creation.
-        mask = post & d["prompt_within_ttl"]
-        moved = d.loc[mask, "cache_read"] * magnitude
-        d.loc[mask, "cache_read"] = d.loc[mask, "cache_read"] - moved
-        d.loc[mask, "cache_creation"] = d.loc[mask, "cache_creation"] + moved
-
-    else:
-        raise ValueError(f"unknown injection kind: {kind}")
-
+    # Reduce thinking by `magnitude` fraction after the cut.
+    d.loc[d.index >= cut, "thinking_tokens"] = d.loc[d.index >= cut, "thinking_tokens"] * (1 - magnitude)
     return add_ratios(d)
 
 
