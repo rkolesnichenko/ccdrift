@@ -1278,9 +1278,10 @@ CALIBRATE_LINES = {"measuring": "Planting changes in your history and replaying 
                    "fail": "{name}: FAIL, {why}",
                    "not_enough_data": "{name}: NOT ENOUGH DATA, {days:,} days judged where a planted change needs "
                                       "{need}: {before} before its start and {after} after it",
-                   "why_quiet": "it flags days with no incident recorded",
+                   "why_quiet": "it flags days outside the incidents ccdrift follows",
                    "why_reach": "a planted {bar} {move} is missed",
-                   "why_both": "it flags days with no incident recorded, and a planted {bar} {move} is missed",
+                   "why_both": "it flags days outside the incidents ccdrift follows, and a planted {bar} {move} is "
+                               "missed",
                    "reach": "  A planted {bar} {move} is caught from {caught} of {runs} starts, {first} to {last}.",
                    "reach_one": "  A planted {bar} {move} is caught from {caught} of 1 start, {first}.",
                    "reach_subagent": "  A planted {bar} drop is caught in {caught} of {runs} runs ({share:.0%}), "
@@ -1294,7 +1295,10 @@ CALIBRATE_LINES = {"measuring": "Planting changes in your history and replaying 
                    "quiet": "  Nothing flags.",
                    "flagged": "  It flags from {days} with no incident recorded. `ccdrift incident dismiss` marks "
                               "a false alarm, `ccdrift incident add` records a real one.",
+                   "dismissed": "  It flags from {days}, which you dismissed as a false alarm; dismissed flags count "
+                                "against it.",
                    "left_out": "  Left out as incidents ccdrift follows: {spans}.",
+                   "settled": "  Kept in as the new normal, as the check keeps them: {spans}.",
                    "span": "{start} to {end}",
                    "span_open": "{start} on, still open",
                    "not_judged": "Not judged yet: session start, the cache-miss and tool-loop warnings, failed "

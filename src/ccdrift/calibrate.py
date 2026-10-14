@@ -4,12 +4,14 @@ measurement behind three of them on anyone's: the daily detector's cache ratio, 
 Haiku share and subagent read-back, judged on the turns the check judges with the shipped
 DetectorConfig.
 
-For each metric the days of incidents ccdrift follows (every status but dismissed) are left
-out, as lab's --incident leaves out a known one: a plant on top of a real regression isn't a
-plant on a clean history. Then the quiet half: whatever the detector flags on the rest is a
-false alarm, dismissed incidents included, since dismissing one is the user saying so. And the
-reach half: a regression is planted from up to STARTS days and counts as caught only by a flag
-the unplanted history doesn't raise. Nothing is saved.
+For each metric the days of open and recovered incidents are left out, as the check leaves them
+out of its baselines and lab's --incident leaves out a known one: a plant on top of a real
+regression isn't a plant on a clean history. A persistent incident's days stay in, since the
+check takes its level as the new normal, and no plant starts where it would meet them. Then the
+quiet half: whatever the detector flags is a false alarm unless it meets a persistent incident,
+the step the check followed; a flag the user dismissed counts, since dismissing one is the user
+saying so. And the reach half: a regression is planted from up to STARTS days and counts as
+caught only by a flag the unplanted history doesn't raise. Nothing is saved.
 
 The plants are the ones the lab gates measured those settings with. lab/harness.py and
 lab/subagent_cache.py import them from here, so a gate and this command can't plant two
@@ -29,7 +31,7 @@ import pandas as pd
 
 from ccdrift.detector import SUBAGENT_METRICS, DetectorConfig, bin_metrics, detect
 from ccdrift.history import HistoryError, load_history
-from ccdrift.incidents import OPEN_END
+from ccdrift.incidents import EXCLUDING, OPEN_END
 from ccdrift.logs import add_ratios, judged_subagent_loops, judged_turns
 from ccdrift.state import load_state
 from ccdrift.texts import (CALIBRATE_LINES, CALIBRATE_MOVES, CALIBRATE_NAMES, MOVES, floors_text,
@@ -116,18 +118,32 @@ def prefix_reads(planted: pd.DataFrame, opening: pd.Series, chosen: np.ndarray) 
     planted.loc[chosen, "cache_creation"] = planted.loc[chosen, "cache_creation"] + before - read
 
 
-def plant_starts(days: list[str], starts: int = STARTS) -> list[str]:
-    """Up to `starts` days, evenly spread, with BEFORE judged days before and AFTER after."""
-    eligible = days[BEFORE:len(days) - AFTER]
+def plant_starts(days: list[str], starts: int = STARTS,
+                 avoid: Sequence[tuple[str, Optional[str]]] = ()) -> list[str]:
+    """Up to `starts` days, evenly spread, with BEFORE judged days before and AFTER after,
+    and none whose AFTER days after it meet a span of `avoid`."""
+    eligible = [day for i, day in enumerate(days)
+                if BEFORE <= i < len(days) - AFTER and not meets(day, days[i + AFTER], avoid)]
     if len(eligible) <= starts:
         return eligible
     return [eligible[int(i)] for i in np.linspace(0, len(eligible) - 1, starts).round()]
 
 
+def spans_of(incidents: Sequence[dict], metric: str, statuses: Sequence[str]) -> list[tuple[str, Optional[str]]]:
+    """The spans of `metric`'s incidents with one of `statuses`, in order: (start, end), with
+    no end while one is open."""
+    return sorted((i["start"], i["end"]) for i in incidents if i["metric"] == metric and i["status"] in statuses)
+
+
 def left_out(incidents: Sequence[dict], metric: str) -> list[tuple[str, Optional[str]]]:
-    """The spans of `metric`'s incidents not dismissed, in order: (start, end), with no end
-    while one is open."""
-    return sorted((i["start"], i["end"]) for i in incidents if i["metric"] == metric and i["status"] != "dismissed")
+    """The spans whose days are left out: `metric`'s open and recovered incidents, the ones
+    the check leaves out of its baselines."""
+    return spans_of(incidents, metric, EXCLUDING)
+
+
+def meets(first: str, last: str, spans: Sequence[tuple[str, Optional[str]]]) -> bool:
+    """Whether the days `first` to `last` meet a span of `spans`."""
+    return any(start <= last and first <= (end or OPEN_END) for start, end in spans)
 
 
 def _outside(frame: pd.DataFrame, spans: Sequence[tuple[str, Optional[str]]]) -> pd.DataFrame:
@@ -148,17 +164,25 @@ def _judged(frame: pd.DataFrame, metric: str) -> tuple[list[str], np.ndarray]:
     return detected["bin"].astype(str).tolist(), detected[f"{metric}__flag"].to_numpy(dtype=bool)
 
 
-def _onsets(days: list[str], flags: np.ndarray) -> list[str]:
-    """The first day of each run of flagged days."""
-    return [days[i] for i in range(len(flags)) if flags[i] and (i == 0 or not flags[i - 1])]
+def _runs(days: list[str], flags: np.ndarray) -> list[tuple[str, str]]:
+    """The first and last day of each run of flagged days."""
+    runs = []
+    for i in range(len(flags)):
+        if flags[i] and (i == 0 or not flags[i - 1]):
+            end = i
+            while end + 1 < len(flags) and flags[end + 1]:
+                end += 1
+            runs.append((days[i], days[end]))
+    return runs
 
 
-def reach_main(frame: pd.DataFrame, metric: str, days: list[str], clean: np.ndarray) -> dict[str, Any]:
+def reach_main(frame: pd.DataFrame, metric: str, days: list[str], clean: np.ndarray,
+               avoid: Sequence[tuple[str, Optional[str]]] = ()) -> dict[str, Any]:
     """Plant KINDS[metric] at each of SIZES from each start's first turn to the end, as the
     harness sweep does: caught counts by size and the floor per start."""
     base = frame.sort_values("timestamp", kind="stable").reset_index(drop=True)
     first_turn = base.reset_index().groupby(base["day"].astype(str))["index"].min()
-    starts = plant_starts(days)
+    starts = plant_starts(days, avoid=avoid)
     caught = {size: 0 for size in SIZES}
     floors: dict[str, Optional[float]] = {}
     for start in starts:
@@ -173,12 +197,13 @@ def reach_main(frame: pd.DataFrame, metric: str, days: list[str], clean: np.ndar
     return {"starts": starts, "runs": len(starts), "caught": caught, "floors": floors}
 
 
-def reach_subagent(frame: pd.DataFrame, opening: pd.Series, days: list[str], clean: np.ndarray) -> dict[str, Any]:
+def reach_subagent(frame: pd.DataFrame, opening: pd.Series, days: list[str], clean: np.ndarray,
+                   avoid: Sequence[tuple[str, Optional[str]]] = ()) -> dict[str, Any]:
     """Plant G17's prefix reads at each of SUBAGENT_SIZES over each start and the AFTER days
     after it, with SEEDS seeds, as G17 does: caught counts by size over every run, and the
     floor per start, the smallest size every seed caught there."""
     flagged = {day for day, flag in zip(days, clean) if flag}
-    starts = plant_starts(days)
+    starts = plant_starts(days, avoid=avoid)
     caught = {size: 0 for size in SUBAGENT_SIZES}
     floors: dict[str, Optional[float]] = {start: None for start in starts}
     for start in starts:
@@ -200,23 +225,28 @@ def reach_subagent(frame: pd.DataFrame, opening: pd.Series, days: list[str], cle
 def measure(frame: pd.DataFrame, metric: str, incidents: Sequence[dict],
             opening: Optional[pd.Series] = None) -> dict[str, Any]:
     """One metric's calibration on `frame`, the turns the check judges it on: the days judged
-    once its incidents are left out, the flags on them, the reach, and the verdict ("pass",
-    "fail" or "not_enough_data" when no start fits) with the halves that failed."""
+    once its open and recovered incidents are left out, the first day of each false alarm and
+    of those the user dismissed, the reach, and the verdict ("pass", "fail" or
+    "not_enough_data" when no start fits) with the halves that failed."""
     spans = left_out(incidents, metric)
+    settled = spans_of(incidents, metric, ("persistent",))
     kept = _outside(frame, spans)
     days, clean = _judged(kept, metric)
-    flagged = _onsets(days, clean)
+    alarms = [(first, last) for first, last in _runs(days, clean) if not meets(first, last, settled)]
+    flagged = [first for first, _ in alarms]
+    dismissed = [first for first, last in alarms if meets(first, last, spans_of(incidents, metric, ("dismissed",)))]
     if metric in SUBAGENT_METRICS:
-        reach = reach_subagent(kept, opening if opening is not None else pd.Series(dtype=float), days, clean)
+        opening = opening if opening is not None else pd.Series(dtype=float)
+        reach = reach_subagent(kept, opening, days, clean, settled)
         reached = reach["caught"][BAR] >= SUBAGENT_SHARE * reach["runs"]
     else:
-        reach = reach_main(kept, metric, days, clean)
+        reach = reach_main(kept, metric, days, clean, settled)
         reached = reach["caught"][BAR] == reach["runs"]
     failed = (["quiet"] if flagged else []) + (["reach"] if reach["runs"] and not reached else [])
     verdict = "not_enough_data" if not reach["runs"] else "fail" if failed else "pass"
     return {"metric": metric, "verdict": verdict, "failed": failed, "days": len(days),
             "first": days[0] if days else None, "last": days[-1] if days else None,
-            "left_out": spans, "flagged": flagged, **reach}
+            "left_out": spans, "settled": settled, "flagged": flagged, "dismissed": dismissed, **reach}
 
 
 def calibration(responses: pd.DataFrame, incidents: Sequence[dict], today: date) -> dict[str, Any]:
@@ -255,10 +285,17 @@ def metric_lines(result: dict[str, Any]) -> list[str]:
         lines.append(CALIBRATE_LINES["reach" if len(starts) > 1 else "reach_one"].format(
             bar=bar, move=move, caught=result["caught"][BAR], runs=result["runs"], first=starts[0], last=starts[-1]))
         lines.append(CALIBRATE_LINES["floors"].format(move=move, floors=floors_text(result["floors"], SIZES[-1])))
-    lines.append(CALIBRATE_LINES["flagged"].format(days=", ".join(result["flagged"])) if result["flagged"]
-                 else CALIBRATE_LINES["quiet"])
+    unlabelled = [day for day in result["flagged"] if day not in result["dismissed"]]
+    if unlabelled:
+        lines.append(CALIBRATE_LINES["flagged"].format(days=", ".join(unlabelled)))
+    if result["dismissed"]:
+        lines.append(CALIBRATE_LINES["dismissed"].format(days=", ".join(result["dismissed"])))
+    if not result["flagged"]:
+        lines.append(CALIBRATE_LINES["quiet"])
     if result["left_out"]:
         lines.append(CALIBRATE_LINES["left_out"].format(spans=spans_text(result["left_out"])))
+    if result["settled"]:
+        lines.append(CALIBRATE_LINES["settled"].format(spans=spans_text(result["settled"])))
     return lines
 
 

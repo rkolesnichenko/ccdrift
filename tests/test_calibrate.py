@@ -153,8 +153,7 @@ def test_subagent_read_back_needs_a_planted_five_percent_caught_in_nine_runs_of_
     assert subagent["verdict"] == verdict
 
 
-@pytest.mark.parametrize("status, end", [("open", None), ("recovered", nth_day(19)), ("persistent", nth_day(19))],
-                         ids=["open", "recovered", "persistent"])
+@pytest.mark.parametrize("status, end", [("open", None), ("recovered", nth_day(19))], ids=["open", "recovered"])
 def test_a_step_ccdrift_follows_as_an_incident_is_left_out_and_the_days_before_it_pass(tmp_path, status, end):
     incident = {"metric": "cache_ratio", "start": nth_day(12), "end": end, "status": status}
     _, metrics = calibrated(tmp_path, STEP, [incident])
@@ -163,11 +162,25 @@ def test_a_step_ccdrift_follows_as_an_incident_is_left_out_and_the_days_before_i
         "pass", [], [(nth_day(12), end)], 12)
 
 
+def test_a_persistent_incidents_days_stay_in_as_the_new_normal_the_check_takes_them_for(tmp_path):
+    # The check keeps them in the baseline once the level persists, so the days after one are
+    # judged against the new level, and the step itself is the incident, not a false alarm.
+    incident = {"metric": "cache_ratio", "start": nth_day(10), "end": nth_day(29), "status": "persistent"}
+    _, metrics = calibrated(tmp_path, [{"misses": 30 if i >= 10 else 0} for i in range(40)], [incident])
+    cache = metrics["cache_ratio"]
+    assert (cache["flagged"], cache["days"], cache["left_out"], cache["settled"]) == (
+        [], 40, [], [(nth_day(10), nth_day(29))])
+    assert "quiet" not in cache["failed"]
+    # No plant starts where its days would meet the step's.
+    assert cache["starts"] == [nth_day(d) for d in range(30, 37)]
+
+
 def test_a_dismissed_incidents_days_stay_in_and_its_flag_counts_as_a_false_alarm(tmp_path):
     incident = {"metric": "cache_ratio", "start": nth_day(12), "end": nth_day(19), "status": "dismissed"}
     _, metrics = calibrated(tmp_path, STEP, [incident])
     cache = metrics["cache_ratio"]
-    assert (cache["flagged"], cache["left_out"], cache["days"]) == ([nth_day(12)], [], 20)
+    assert (cache["flagged"], cache["dismissed"], cache["left_out"], cache["days"]) == (
+        [nth_day(12)], [nth_day(12)], [], 20)
     assert "quiet" in cache["failed"]
 
 
@@ -227,21 +240,33 @@ def test_calibrate_prints_what_it_judged_each_verdict_with_what_it_rests_on_and_
 def result_of(metric="cache_ratio", verdict="fail", failed=("quiet", "reach"), **fields):
     defaults = {"days": 20, "starts": [nth_day(7), nth_day(8), nth_day(9)], "runs": 3,
                 "caught": {0.05: 1, 0.02: 0}, "floors": {nth_day(7): 0.05, nth_day(8): 0.2, nth_day(9): None},
-                "flagged": [nth_day(12)], "left_out": [(nth_day(2), nth_day(4)), (nth_day(15), None)]}
+                "flagged": [nth_day(12)], "dismissed": [], "left_out": [(nth_day(2), nth_day(4)), (nth_day(15), None)],
+                "settled": []}
     return {"metric": metric, "verdict": verdict, "failed": list(failed), **defaults, **fields}
 
 
 def test_a_failed_metric_says_which_half_failed_what_it_still_catches_and_how_to_label_a_flag():
     assert metric_lines(result_of()) == [
-        "Cache ratio: FAIL, it flags days with no incident recorded, and a planted 5% drop is missed",
+        "Cache ratio: FAIL, it flags days outside the incidents ccdrift follows, and a planted 5% drop is missed",
         "  A planted 5% drop is caught from 1 of 3 starts, 2026-09-08 to 2026-09-10.",
         "  Smallest drop caught: 5% from 1 start, 20% from 1 start, none up to 70% from 1 start.",
         "  It flags from 2026-09-13 with no incident recorded. `ccdrift incident dismiss` marks a false alarm, "
         "`ccdrift incident add` records a real one.",
         "  Left out as incidents ccdrift follows: 2026-09-03 to 2026-09-05, 2026-09-16 on, still open."]
-    assert metric_lines(result_of(failed=["quiet"]))[0] == "Cache ratio: FAIL, it flags days with no incident recorded"
+    assert metric_lines(result_of(failed=["quiet"]))[0] == (
+        "Cache ratio: FAIL, it flags days outside the incidents ccdrift follows")
     assert metric_lines(result_of("haiku_fraction", failed=["reach"]))[0] == (
         "Haiku share: FAIL, a planted 5% rise is missed")
+
+
+def test_a_flag_the_user_dismissed_is_told_as_theirs_and_a_settled_level_as_the_new_normal():
+    lines = metric_lines(result_of(failed=["quiet"], flagged=[nth_day(3), nth_day(12)], dismissed=[nth_day(12)],
+                                   left_out=[], settled=[(nth_day(15), nth_day(20))]))
+    assert lines[3:] == [
+        "  It flags from 2026-09-04 with no incident recorded. `ccdrift incident dismiss` marks a false alarm, "
+        "`ccdrift incident add` records a real one.",
+        "  It flags from 2026-09-13, which you dismissed as a false alarm; dismissed flags count against it.",
+        "  Kept in as the new normal, as the check keeps them: 2026-09-16 to 2026-09-21."]
 
 
 def test_a_metric_with_one_start_or_none_says_so():
