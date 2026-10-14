@@ -508,7 +508,7 @@ def run_calibrate(source: Path, state_path: Path, as_json: bool = False, today: 
     if tables.responses.empty:
         print(no_transcripts_message(source), file=sys.stderr)
         return 2
-    # 11.7 s on the owner's store of 51 days (2026-10-14), so it says so first.
+    # 12.7 s on the owner's store of 51 days (2026-10-14), so it says so first.
     print(CALIBRATE_LINES["measuring"], file=sys.stderr, flush=True)
     result = calibration(tables.responses, incidents, today)
     print(calibrate_json(result) if as_json else "\n".join(calibrate_lines(result)) + "\n", end="")

@@ -424,10 +424,34 @@ Cache ratio: PASS
 A failure says which half failed and the smallest change caught from each start. A metric
 has not enough data with fewer than 11 judged days, or when no start's days fall within 14
 days of each other clear of incidents, since the check reports only flags begun in the last
-14 days. It replays the detector a few
-hundred times, 12 seconds on those 51 days, changes no state and sends no alert. The other
-alerts aren't judged yet. `calibrate --json` holds days, counts and sizes, with no paths,
-session ids or project names.
+14 days.
+
+It judges the two early warnings below the same way, by the bars their gates in lab/ set, on
+the complete days the check reads. For the cache-miss warning it works out how often to
+expect a false warning: the alarms a simulated history at each day's usual miss rate raises
+with nothing planted, per turn, times your new-prompt turns, so the same setting warns more
+often on a busier history. Once in 6 weeks or less passes; the days your own history alarmed
+on are listed beside it and decide nothing. A 5% miss rate planted from up to 10 starts, 5
+times each, must then be caught within a median of 150 new-prompt turns. The tool-loop
+warning passes with no alarm on any day judged at the most sensitive usual rate, 0.2%,
+outside the cache incidents ccdrift follows, and a planted 2% caught in 90% of runs within a
+median of 300 turns. Subagents' tool loops ship no setting, and it says so. On the same logs:
+
+```
+Early warnings, turn by turn:
+Cache-miss warning: PASS
+  False warnings: 0.16 a week expected at your usual miss rate (0.43% median) and 463 new-prompt turns a week, over 4.1 weeks judged, against a bar of 1 every 6 weeks (0.17).
+  Your history alarmed on 2026-09-17 outside the incidents ccdrift follows.
+  A planted 5% miss rate is caught in a median 26 turns, 50 of 50 runs from 10 starts, 2026-09-09 to 2026-10-13, against a bar of 150 turns.
+Tool-loop warning: PASS
+  No alarm on 32 days judged at the most sensitive usual rate, 0.2%.
+  A planted 2% miss rate is caught in 50 of 50 runs (100%), in a median 118.5 turns, against 90% within a median of 300.
+Subagent tool-loop warning: no setting ships, so subagents get no early warning.
+```
+
+It replays the detector a few hundred times, 13 seconds on those 51 days, changes no state and
+sends no alert. Session start and the other alerts aren't judged yet. `calibrate --json`
+holds days, counts, rates and sizes, with no paths, session ids or project names.
 
 Transcripts are read from `$CLAUDE_CONFIG_DIR/projects` when that variable is set,
 otherwise from `~/.claude/projects`. With `--source` pointed at one project's own
