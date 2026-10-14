@@ -9,6 +9,7 @@ import ccdrift.calibrate
 from ccdrift.calibrate import (calibrate_lines, calibration, metric_lines, plant, plant_starts, plant_subagent,
                                run_calibrate, subagent_openings)
 from ccdrift.cli import main
+from ccdrift.history import History
 from ccdrift.logs import parse_all
 from ccdrift.state import STATE_VERSION
 from ccdrift.texts import floors_text
@@ -159,7 +160,7 @@ def test_a_step_ccdrift_follows_as_an_incident_is_left_out_and_the_days_before_i
     _, metrics = calibrated(tmp_path, STEP, [incident])
     cache = metrics["cache_ratio"]
     assert (cache["verdict"], cache["flagged"], cache["left_out"], cache["days"]) == (
-        "pass", [], [(nth_day(12), end)], 12)
+        "pass", [], [(nth_day(12), end)], 20)
 
 
 def test_a_persistent_incidents_days_stay_in_as_the_new_normal_the_check_takes_them_for(tmp_path):
@@ -175,6 +176,40 @@ def test_a_persistent_incidents_days_stay_in_as_the_new_normal_the_check_takes_t
     assert cache["starts"] == [nth_day(d) for d in range(30, 37)]
 
 
+def test_a_plant_whose_flag_would_join_an_incidents_last_days_is_missed_as_the_check_misses_it(tmp_path):
+    # The check reports no flag run that meets a recorded incident, so a drop starting the day
+    # after one whose last days are still deviant merges into it and is never reported.
+    incident = {"metric": "cache_ratio", "start": nth_day(8), "end": nth_day(10), "status": "recovered"}
+    _, metrics = calibrated(tmp_path, [{"misses": 30 if 8 <= i <= 10 else 0} for i in range(20)], [incident])
+    cache = metrics["cache_ratio"]
+    # No start's days meet the incident, and the two right after it catch nothing.
+    assert cache["starts"] == [nth_day(d) for d in range(11, 17)]
+    assert (cache["failed"], cache["flagged"], cache["caught"][0.05], cache["runs"]) == (["reach"], [], 4, 6)
+    assert [cache["floors"][nth_day(d)] for d in range(11, 17)] == [None, None, 0.05, 0.05, 0.05, 0.05]
+
+
+def test_the_days_after_an_incident_are_judged_against_the_days_before_it_as_the_check_judges_them(tmp_path):
+    # Ten days of misses stay out of the baselines, so a plant after them is measured against
+    # the clean days before; in the baselines they would hide every planted 5%.
+    incident = {"metric": "cache_ratio", "start": nth_day(8), "end": nth_day(17), "status": "recovered"}
+    _, metrics = calibrated(tmp_path, [{"misses": 30 if 8 <= i <= 17 else 0} for i in range(30)], [incident])
+    cache = metrics["cache_ratio"]
+    assert (cache["starts"][0], cache["starts"][-1], cache["caught"][0.05], cache["runs"]) == (
+        nth_day(18), nth_day(26), 7, 9)
+    # The two starts right after it join its last days, as test_a_plant_whose_flag... shows.
+    assert [cache["floors"][day] for day in cache["starts"]] == [None, None] + [0.05] * 7
+
+
+def test_a_subagent_plant_starts_off_incidents_and_is_judged_on_the_history_up_to_its_fourth_day(tmp_path):
+    # Judged on the whole history, a plant just before the incident would join its flag run.
+    main_thread_days(tmp_path, [{}] * 24, per_day=150)
+    tool_loop_days(tmp_path, 24, per_day=301, subagent=True, misses=20, miss_days=range(15, 18))
+    incident = {"metric": "subagent_cache", "start": nth_day(15), "end": nth_day(17), "status": "recovered"}
+    subagent = calibration(parse_all(tmp_path).responses, [incident], date.fromisoformat(nth_day(24)))["metrics"][2]
+    assert subagent["starts"] == [nth_day(d) for d in (7, 8, 9, 10, 11, 18, 19, 20)]
+    assert (subagent["caught"][0.05], subagent["runs"]) == (30, 40)
+
+
 def test_a_dismissed_incidents_days_stay_in_and_its_flag_counts_as_a_false_alarm(tmp_path):
     incident = {"metric": "cache_ratio", "start": nth_day(12), "end": nth_day(19), "status": "dismissed"}
     _, metrics = calibrated(tmp_path, STEP, [incident])
@@ -188,7 +223,7 @@ def test_an_incident_of_another_metric_leaves_this_ones_days_alone(tmp_path):
     incident = {"metric": "haiku_fraction", "start": nth_day(12), "end": None, "status": "open"}
     _, metrics = calibrated(tmp_path, STEP, [incident])
     assert (metrics["cache_ratio"]["flagged"], metrics["cache_ratio"]["days"]) == ([nth_day(12)], 20)
-    assert (metrics["haiku_fraction"]["left_out"], metrics["haiku_fraction"]["days"]) == ([(nth_day(12), None)], 12)
+    assert (metrics["haiku_fraction"]["left_out"], metrics["haiku_fraction"]["days"]) == ([(nth_day(12), None)], 20)
 
 
 def test_subagent_days_with_too_few_loop_turns_are_neither_judged_nor_starts(tmp_path):
@@ -332,6 +367,18 @@ def test_a_state_it_cant_read_exits_1_and_is_left_as_it_was(tmp_path, capsys):
     assert (code, out) == (1, "")
     assert "newer ccdrift" in err
     assert state.read_bytes() == before
+
+
+def test_it_judges_the_days_the_check_reads_not_the_whole_store(tmp_path, capsys):
+    # The check reads the last 90 days of a store, so a long one doesn't slow it down.
+    logs, home = tmp_path / "logs", tmp_path / "home"
+    main_thread_days(logs / "p", [{}] * 120, per_day=20)
+    home.mkdir()
+    with History(home / "history.sqlite") as history:
+        history.update(logs)
+    assert run_calibrate(logs, home / "state.json", as_json=True, today=date.fromisoformat(nth_day(120))) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert (payload["first"], payload["last"], payload["main_days"]) == (nth_day(30), nth_day(119), 90)
 
 
 def test_an_unusable_store_exits_1_and_a_source_with_no_transcripts_exits_2(tmp_path, capsys):
