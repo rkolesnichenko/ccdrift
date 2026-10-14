@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-- Tests: `uv run --group dev --group lab pytest` (1201 tests, ~80s). `testpaths = ["tests", "lab"]`, so a bare `pytest` runs both suites.
+- Tests: `uv run --group dev --group lab pytest` (1407 tests, ~90s). `testpaths = ["tests", "lab"]`, so a bare `pytest` runs both suites.
 - Single test: `uv run --group dev --group lab pytest tests/test_check.py::test_name`, or `-k <substring>`. No install step is needed; `pythonpath = [".", "src"]` is set in pyproject.toml.
 - The `lab` group is required even when running only `tests/`: lab collection imports matplotlib.
 - Build: `uv build`. There is no lint, format or type-check step, by design (see Style).
@@ -37,7 +37,7 @@ Each of these fails silently when ignored.
 
 ## Testing
 
-- tests/conftest.py has one autouse fixture pointing `CCDRIFT_HOME` at a tmp dir, so no test touches the real `~/.ccdrift`.
+- tests/conftest.py has one autouse fixture pointing `CCDRIFT_HOME` and `CLAUDE_CONFIG_DIR` at tmp dirs, so no test touches the real `~/.ccdrift` or reads the real transcripts; tests/test_isolation.py fails if it stops. A test that needs either unset removes it with `monkeypatch.delenv`.
 - Build log fixtures through `tests.helpers.line()`, which writes JSONL exactly as Claude Code does: one content block per line, usage repeated per line, fields omitted when None to mimic older versions. Both suites import from `tests.helpers`. Do not hand-roll transcript JSON.
 - Tests pin behavior at frozen dates (`helpers.T0`).
 - Mutation-check every new or changed test: delete the rule it pins, then force it always-on, and confirm the test fails both ways. A mutation expected to survive is named in advance, with the reason.

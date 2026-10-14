@@ -25,9 +25,13 @@ if [ -z "$bin" ]; then
     echo '{"systemMessage": "ccdrift: not installed. Run: uv tool install ccdrift"}'
     exit 0
 fi
-"$bin" hook session-start 2>/dev/null
+# Claude Code reads the output as one JSON object, so ccdrift's line goes out only when it
+# finished; a failure after printing it would otherwise add a second.
+shown=$("$bin" hook session-start 2>/dev/null)
 status=$?
-if [ "$status" -eq 2 ]; then
+if [ "$status" -eq 0 ]; then
+    if [ -n "$shown" ]; then printf '%s\n' "$shown"; fi
+elif [ "$status" -eq 2 ]; then
     # argparse's exit for a command it doesn't know: a ccdrift older than the hook
     echo '{"systemMessage": "ccdrift: the plugin needs ccdrift 0.26.0 or later. Run: uv tool upgrade ccdrift"}'
 elif [ "$status" -ne 0 ]; then

@@ -6,6 +6,7 @@ for it, so like `status --short` it imports neither pandas nor numpy."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import traceback
@@ -28,11 +29,11 @@ SHOWN = ("startup", "resume")
 
 def check_due(state_path: Path, now: datetime) -> bool:
     """Whether a session start should begin a check: none has run, the last began
-    CHECK_INTERVAL or more before `now`, or the state can't be read, which the check
-    itself then reports."""
+    CHECK_INTERVAL or more before `now` or after it, as once the clock is set back, or the
+    state can't be read, which the check itself then reports."""
     try:
         started = datetime.fromisoformat(load_state(state_path)["last_run"]["started"])
-        return now - started >= CHECK_INTERVAL
+        return not timedelta(0) <= now - started < CHECK_INTERVAL
     except (OSError, ValueError, KeyError, TypeError):
         return True
 
@@ -58,19 +59,25 @@ def private_log(state_path: Path) -> Path:
 def start_check(state_path: Path) -> None:
     """Start `ccdrift hook check` with this Python, so the same install, and return at once.
     It runs in a session of its own, so a `claude -p` that ends doesn't take it down, with
-    its output appended to the check's log. It finds the state where this command did, in
-    ccdrift's home, and starts there: Claude Code runs the hook in the project's folder, where
-    `python -m` would import a ccdrift/ or a json.py the project holds before ccdrift's own."""
+    its output appended to the check's log. It starts in ccdrift's home: Claude Code runs the
+    hook in the project's folder, where `python -m` would import a ccdrift/ or a json.py the
+    project holds before ccdrift's own. So that it finds the state this command did, and the
+    same transcripts, it is handed both folders as absolute paths."""
+    home = state_path.parent.absolute()
+    env = {**os.environ, "CCDRIFT_HOME": str(home)}
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        env["CLAUDE_CONFIG_DIR"] = str(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser().absolute())
     with open(private_log(state_path), "a") as out:
         subprocess.Popen([sys.executable, "-m", "ccdrift", "hook", "check"], stdin=subprocess.DEVNULL,
-                         stdout=out, stderr=out, cwd=state_path.parent, start_new_session=True)
+                         stdout=out, stderr=out, cwd=home, env=env, start_new_session=True)
 
 
 def run_session_start(state_path: Path, stdin: TextIO, now: Optional[datetime] = None) -> int:
     """`ccdrift hook session-start`: on a startup or a resume, print the status line's
     verdict as the hook's systemMessage, which the user sees and Claude doesn't, then start
     a check when one is due. Of the payload only its `source` is read. Always 0: a failure
-    shows as a line of its own, with its traceback appended to the check's log."""
+    shows as a line of its own, with its traceback appended to the check's log, or a line
+    saying it couldn't be when the log won't open."""
     now = now or datetime.now().astimezone()
     message = ""
     try:
@@ -79,12 +86,12 @@ def run_session_start(state_path: Path, stdin: TextIO, now: Optional[datetime] =
         if check_due(state_path, now):
             start_check(state_path)
     except Exception as exc:
-        message = HOOK_LINES["failed"].format(error=type(exc).__name__)
         try:
             with open(private_log(state_path), "a") as log:
                 traceback.print_exc(file=log)
+            message = HOOK_LINES["failed"].format(error=type(exc).__name__)
         except OSError:
-            pass
+            message = HOOK_LINES["failed_unlogged"].format(error=type(exc).__name__)
     if message:
         print(json.dumps({"systemMessage": message}))
     return 0

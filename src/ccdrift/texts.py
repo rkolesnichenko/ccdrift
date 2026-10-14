@@ -907,7 +907,9 @@ STATUS_LINES = {"no_check": "ccdrift: no check yet",
                 "samples": "Quota samples: {count} since {first}, the last at {last}"}
 
 # hook.run_session_start shows this in place of the status line's verdict when it fails.
-HOOK_LINES = {"failed": "ccdrift: the session-start hook failed ({error}); the traceback is in check.log"}
+HOOK_LINES = {"failed": "ccdrift: the session-start hook failed ({error}); the traceback is in check.log",
+              "failed_unlogged": "ccdrift: the session-start hook failed ({error}), and check.log couldn't be opened "
+                                 "for its traceback"}
 
 
 # ---------------------------------------------------------------------------
