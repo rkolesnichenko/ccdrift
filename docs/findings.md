@@ -221,6 +221,12 @@ Users report a subagent's `model` parameter ignored, frontmatter model overrides
 - **An alias moves.** `opus` resolved to Claude Opus 5 earlier and Opus 5.5 later; `report` shows each alias's resolutions with days and versions, and no alert fires on a move.
 - **G18 passes.** No cutoff exists to sweep, so the gate judges the shipped rule both ways: 0 false alarms over the 1,560 spawns, and 22 of 22 plants judged as expected (for each alias: served another model, served two of which one is wrong, resolved to another family, nothing resolved and served another family, a full id resolved to a longer one where one exists, and a "[1m]" control that must not alarm).
 
+## The daily verdict calibrated on its own turns, 2026-10-14
+
+- **`ccdrift calibrate` plants into the turns the check judges.** The harness sweep behind the cache and Haiku entries above planted into every parsed turn; the check judges main-thread turns of complete UTC days outside Agent SDK sessions (`judged_turns`) and subagent loop turns (`judged_subagent_loops`). On a copy of the owner's store on 2026-10-14, with nothing left out, the sweep on `judged_turns` caught a planted 5% cache drop from only 6 of 10 starts and flagged the August regression unplanted; with the recorded incident (cache ratio, 2026-08-18..09-03) left out, every size from 5% to 70% was caught from 10 of 10. Leaving recorded incidents out is what makes the verdict mean anything, so `calibrate` leaves out the days of every incident not dismissed.
+- **Its first run passes all three on the owner's logs.** Through the shipped path on the same copy, 2026-08-06..10-13, 51 days judged on the main thread and 47 with subagent loops: cache ratio PASS (5% caught from 10 of 10 starts, 2026-09-06..10-06, nothing flags), Haiku share PASS (10 of 10, 2026-08-20..10-06, nothing flags), subagent read-back PASS (a planted 5% caught in 50 of 50 runs, 2% in 50 of 50, nothing flags). It took 13.9 s.
+- **The bar depends on volume.** On a synthetic steady history of 60 main-thread responses a day, a planted 5% Haiku rise is caught from 1 of 10 starts: after the first planted day the planted days' own variance raises the noise floor and later days score z 2.4 to 2.7 against 3.5. At 150 a day it is caught from every start. That is the kind of answer `calibrate` exists to give a user whose logs aren't the owner's.
+
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
 
 Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).

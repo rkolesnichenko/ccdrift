@@ -3,7 +3,9 @@
 The research harness behind [the findings](../docs/findings.md). It plants controlled
 changes in real or synthetic Claude Code logs to measure how small a change the daily
 detector catches, and how fast a turn-by-turn CUSUM catches one against its false
-alarms. It isn't installed with the package; run it from a clone.
+alarms. It isn't installed with the package; run it from a clone. `ccdrift calibrate`, which
+is, plants the cache, Haiku and subagent read-back changes on the settings ccdrift ships:
+the plants live in `ccdrift.calibrate`, and the harness and `lab.subagent_cache` import them.
 
 ```sh
 # Smoke-test on synthetic logs
