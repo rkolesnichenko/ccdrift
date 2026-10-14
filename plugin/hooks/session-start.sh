@@ -34,7 +34,7 @@ if [ "$status" -eq 0 ]; then
 elif [ "$status" -eq 2 ]; then
     # argparse's exit for a command it doesn't know: a ccdrift older than the hook
     echo '{"systemMessage": "ccdrift: the plugin needs ccdrift 0.26.0 or later. Run: uv tool upgrade ccdrift"}'
-elif [ "$status" -ne 0 ]; then
+else
     echo '{"systemMessage": "ccdrift: the session-start hook failed. Run: ccdrift hook session-start"}'
 fi
 exit 0

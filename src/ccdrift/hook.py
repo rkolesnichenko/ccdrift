@@ -1,7 +1,7 @@
 """The Claude Code plugin's hook. At each session start it shows the status line's verdict
-and, when the last check began CHECK_INTERVAL or more ago, starts one in the background, so
-Claude Code itself stands in for `ccdrift schedule install`. Claude's first response waits
-for it, so like `status --short` it imports neither pandas nor numpy."""
+and, when a check is due (check_due), starts one in the background, so Claude Code itself
+stands in for `ccdrift schedule install`. Claude's first response waits for it, so like
+`status --short` it imports neither pandas nor numpy."""
 
 from __future__ import annotations
 
