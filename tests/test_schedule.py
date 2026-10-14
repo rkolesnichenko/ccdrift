@@ -643,6 +643,7 @@ def test_launchd_status_says_when_the_agent_is_installed_but_not_loaded(tmp_path
 
 def test_schedule_install_with_cron_says_what_cron_cant_do_and_starts_a_first_run(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CCDRIFT_HOME", str(tmp_path / "data"))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
     table, started = FakeCrontab(None), []
     backend = Cron(run=table, spawn=lambda argv, log: started.append((argv, log)))
     monkeypatch.setattr("ccdrift.cli.choose_backend", lambda: backend)

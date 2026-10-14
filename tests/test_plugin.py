@@ -94,9 +94,14 @@ def test_the_hook_hands_ccdrift_the_payload_and_passes_on_what_it_prints(tmp_pat
     shown = '{"systemMessage": "ccdrift: no check yet"}'
     bin_dir = fake(tmp_path / "bin", shown)
     result = hook(tmp_path, bin_dir)
-    assert (result.returncode, result.stdout, result.stderr) == (0, shown, "")
+    assert (result.returncode, result.stdout, result.stderr) == (0, shown + "\n", "")
     assert (bin_dir / "args").read_text() == "hook session-start\n"
     assert (bin_dir / "stdin").read_text() == PAYLOAD
+
+
+def test_the_hook_prints_nothing_when_ccdrift_has_nothing_to_show(tmp_path):
+    result = hook(tmp_path, fake(tmp_path / "bin"))
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
 def test_the_hook_prefers_the_ccdrift_in_local_bin_to_one_earlier_on_path(tmp_path):
@@ -113,9 +118,12 @@ def test_the_hook_says_to_upgrade_a_ccdrift_too_old_to_know_the_hook(tmp_path):
         "systemMessage": "ccdrift: the plugin needs ccdrift 0.26.0 or later. Run: uv tool upgrade ccdrift"}
 
 
+@pytest.mark.parametrize("output", ["", '{"systemMessage": "ccdrift: no check yet"}'], ids=["silent", "after-its-line"])
 @pytest.mark.parametrize("code", [1, 127])
-def test_the_hook_says_ccdrift_failed_when_it_dies_before_its_own_handler_can(tmp_path, code):
-    result = hook(tmp_path, fake(tmp_path / "bin", code=code))
+def test_the_hook_says_ccdrift_failed_in_its_only_line_when_it_dies_before_its_own_handler_can(tmp_path, code,
+                                                                                              output):
+    # Claude Code reads the hook's output as one JSON object, which a second line would break.
+    result = hook(tmp_path, fake(tmp_path / "bin", output, code))
     assert (result.returncode, result.stderr) == (0, "")
     assert json.loads(result.stdout) == {
         "systemMessage": "ccdrift: the session-start hook failed. Run: ccdrift hook session-start"}

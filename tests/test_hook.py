@@ -46,6 +46,12 @@ def test_a_check_is_due_once_the_last_began_an_hour_ago_or_more(tmp_path, ago, d
     assert check_due(ran_before(tmp_path, ago), NOW) is due
 
 
+@pytest.mark.parametrize("ahead", [timedelta(minutes=5), timedelta(days=1)], ids=["5min", "1day"])
+def test_a_check_is_due_when_the_last_began_after_now_as_once_the_clock_is_set_back(tmp_path, ahead):
+    # Otherwise no session start would begin one until the clock caught up.
+    assert check_due(ran_before(tmp_path, -ahead), NOW) is True
+
+
 def test_a_check_is_due_when_none_has_run(tmp_path):
     assert check_due(tmp_path / "state.json", NOW) is True
     save_state(tmp_path / "state.json", new_state())
@@ -80,7 +86,8 @@ def test_the_plugins_check_gives_up_at_once_saying_nothing_while_another_command
         tmp_path, monkeypatch, capsys):
     fcntl = pytest.importorskip("fcntl")
     calls = runs(monkeypatch)
-    path = tmp_path / "state.json"
+    path = ran_before(tmp_path, timedelta(hours=2), datetime.now().astimezone())
+    before = path.read_bytes()
     held = open(tmp_path / "state.json.lock", "a")
     fcntl.flock(held, fcntl.LOCK_EX)
     try:
@@ -88,7 +95,7 @@ def test_the_plugins_check_gives_up_at_once_saying_nothing_while_another_command
     finally:
         held.close()
     assert out == [0]
-    assert calls == [] and not path.exists()
+    assert calls == [] and path.read_bytes() == before
     assert capsys.readouterr().out == ""
 
 
@@ -309,6 +316,36 @@ def test_a_check_starts_in_ccdrifts_home_so_the_projects_own_modules_cant_stand_
     assert options["cwd"] == tmp_path / "home"
 
 
+@pytest.mark.parametrize("config, where", [("claude", "project/claude"), ("~/claude", "user/claude")],
+                         ids=["relative", "under-home"])
+def test_a_check_starts_with_ccdrifts_home_and_claude_codes_folder_made_absolute_so_it_finds_the_same_ones(
+        tmp_path, monkeypatch, config, where):
+    # It starts in ccdrift's home, where a relative CCDRIFT_HOME or CLAUDE_CONFIG_DIR would name
+    # another folder than it did in the project's.
+    seen = []
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **options: seen.append(options))
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    monkeypatch.setenv("CCDRIFT_HOME", "home")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", config)
+    start_check(ccdrift_home() / "check-state.json")
+    [options] = seen
+    assert options["env"] == {**os.environ, "CCDRIFT_HOME": str(project / "home"),
+                              "CLAUDE_CONFIG_DIR": str(tmp_path / where)}
+    assert options["cwd"] == project / "home"
+
+
+def test_a_check_starts_without_a_claude_code_folder_when_none_is_set(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **options: seen.append(options))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    start_check(tmp_path / "home" / "check-state.json")
+    [options] = seen
+    assert options["env"] == {**os.environ, "CCDRIFT_HOME": str(tmp_path / "home")}
+
+
 def test_a_hook_that_fails_says_so_in_one_line_logs_the_traceback_privately_and_still_exits_0(
         tmp_path, monkeypatch, capsys):
     def broken(path):
@@ -326,6 +363,20 @@ def test_a_hook_that_fails_says_so_in_one_line_logs_the_traceback_privately_and_
     assert stat.S_IMODE(log.stat().st_mode) == 0o600
     for private in ("SESSION-ID-1", "secret-project", "abc.jsonl"):
         assert private not in out and private not in log.read_text()
+
+
+def test_a_hook_that_fails_where_it_cant_open_the_log_doesnt_send_anyone_there(tmp_path, monkeypatch, capsys):
+    def broken(path):
+        raise OSError("no room left")
+
+    monkeypatch.setattr(ccdrift.hook, "start_check", broken)
+    path = following(tmp_path, timedelta(hours=2))
+    (tmp_path / "check.log").mkdir()
+    assert run_session_start(path, stdin_of(PAYLOAD), NOW) == 0
+    out = capsys.readouterr().out
+    assert out.count("\n") == 1
+    assert json.loads(out) == {"systemMessage": "ccdrift: the session-start hook failed (OSError), and check.log "
+                                                "couldn't be opened for its traceback"}
 
 
 def test_hook_session_start_loads_neither_pandas_nor_numpy(tmp_path):
