@@ -421,8 +421,10 @@ Cache ratio: PASS
   Left out as incidents ccdrift follows: 2026-08-18 to 2026-09-03.
 ```
 
-A failure says which half failed and the smallest change caught from each start, and a
-metric with fewer than 11 judged days has not enough data. It replays the detector a few
+A failure says which half failed and the smallest change caught from each start. A metric
+has not enough data with fewer than 11 judged days, or when no start's days fall within 14
+days of each other clear of incidents, since the check reports only flags begun in the last
+14 days. It replays the detector a few
 hundred times, 12 seconds on those 51 days, changes no state and sends no alert. The other
 alerts aren't judged yet. `calibrate --json` holds days, counts and sizes, with no paths,
 session ids or project names.

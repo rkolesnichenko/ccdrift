@@ -210,6 +210,47 @@ def test_a_subagent_plant_starts_off_incidents_and_is_judged_on_the_history_up_t
     assert (subagent["caught"][0.05], subagent["runs"]) == (30, 40)
 
 
+def test_no_plant_starts_on_or_joins_a_dismissed_incident_whose_flags_the_check_never_reports(tmp_path):
+    incident = {"metric": "cache_ratio", "start": nth_day(8), "end": nth_day(10), "status": "dismissed"}
+    _, metrics = calibrated(tmp_path, [{"misses": 30 if 8 <= i <= 10 else 0} for i in range(20)], [incident])
+    cache = metrics["cache_ratio"]
+    assert cache["starts"] == [nth_day(d) for d in range(11, 17)]
+    assert [cache["floors"][nth_day(d)] for d in range(11, 13)] == [None, None]
+
+
+def test_incidents_that_leave_no_start_clear_of_them_are_not_enough_data_on_a_long_history(tmp_path):
+    incident = {"metric": "cache_ratio", "start": nth_day(10), "end": None, "status": "open"}
+    _, metrics = calibrated(tmp_path, [{}] * 20, [incident])
+    cache = metrics["cache_ratio"]
+    assert (cache["verdict"], cache["days"], cache["starts"]) == ("not_enough_data", 20, [])
+    assert metric_lines(cache)[0] == (
+        "Cache ratio: NOT ENOUGH DATA, 20 days judged, but none can start a planted change: it needs 7 judged "
+        "days before it and 3 after it, all within 14 days and meeting no incident ccdrift follows")
+
+
+def test_no_plant_starts_across_a_break_longer_than_the_days_the_check_reports_a_flag_from(tmp_path):
+    # The check reports only flags begun in the last 14 days, so a plant whose days straddle a
+    # long break could be caught by no check at all.
+    main_thread_days(tmp_path, [{}] * 10, per_day=150)
+    main_thread_days(tmp_path, [{}] * 6, per_day=150, first_day=30)
+    cache = calibration(parse_all(tmp_path).responses, [], date.fromisoformat(nth_day(36)))["metrics"][0]
+    assert cache["starts"] == [nth_day(30), nth_day(31), nth_day(32)]
+
+
+def test_every_metric_starts_its_plants_off_every_incident_and_within_the_days_the_check_reports_from(
+        tmp_path, monkeypatch):
+    asked = []
+    real = ccdrift.calibrate.plant_starts
+    monkeypatch.setattr("ccdrift.calibrate.plant_starts",
+                        lambda days, **options: asked.append(options) or real(days, **options))
+    incidents = [{"metric": metric, "start": nth_day(3), "end": nth_day(4), "status": "dismissed"}
+                 for metric in ("cache_ratio", "haiku_fraction", "subagent_cache")]
+    main_thread_days(tmp_path, [{}] * 12, per_day=150)
+    tool_loop_days(tmp_path, 12, per_day=301, subagent=True)
+    calibration(parse_all(tmp_path).responses, incidents, date.fromisoformat(nth_day(12)))
+    assert asked == [{"avoid": [(nth_day(3), nth_day(4))], "within": 14}] * 3
+
+
 def test_a_dismissed_incidents_days_stay_in_and_its_flag_counts_as_a_false_alarm(tmp_path):
     incident = {"metric": "cache_ratio", "start": nth_day(12), "end": nth_day(19), "status": "dismissed"}
     _, metrics = calibrated(tmp_path, STEP, [incident])

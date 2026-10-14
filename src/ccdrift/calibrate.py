@@ -10,7 +10,8 @@ that meets a recorded incident left unreported, as the check leaves it (_new_fla
 quiet half: every other flag run on the unplanted history is a false alarm, and one over an
 incident the user dismissed counts too, since dismissing it is the user saying so, though the
 check would stay silent there. The reach half: a regression is planted from up to STARTS days
-whose days meet no incident, and counts as caught only by a flag run the check would report by
+whose days meet no incident and fall within RECENT_DAYS, since the check reports only flags
+begun that recently, and counts as caught only by a flag run the check would report by
 the start's AFTER-th day after it, judged on the history up to that day as the check that day
 would judge it, that the unplanted history up to then doesn't raise. Nothing is saved.
 
@@ -33,7 +34,7 @@ import pandas as pd
 from ccdrift.check import ACTIVE_DAY_RESPONSES, HISTORY_ACTIVE_DAYS, history_start
 from ccdrift.detector import SUBAGENT_METRICS, DetectorConfig, bin_metrics, detect
 from ccdrift.history import HistoryError, load_history
-from ccdrift.incidents import EXCLUDING, OPEN_END, exclusions
+from ccdrift.incidents import EXCLUDING, OPEN_END, RECENT_DAYS, exclusions
 from ccdrift.logs import add_ratios, judged_subagent_loops, judged_turns
 from ccdrift.state import load_state
 from ccdrift.texts import (CALIBRATE_LINES, CALIBRATE_MOVES, CALIBRATE_NAMES, MOVES, floors_text,
@@ -124,12 +125,14 @@ def prefix_reads(planted: pd.DataFrame, opening: pd.Series, chosen: np.ndarray) 
     planted.loc[chosen, "cache_creation"] = planted.loc[chosen, "cache_creation"] + before - read
 
 
-def plant_starts(days: list[str], starts: int = STARTS,
-                 avoid: Sequence[tuple[str, Optional[str]]] = ()) -> list[str]:
+def plant_starts(days: list[str], starts: int = STARTS, avoid: Sequence[tuple[str, Optional[str]]] = (),
+                 within: Optional[int] = None) -> list[str]:
     """Up to `starts` days, evenly spread, with BEFORE judged days before and AFTER after,
-    and none whose AFTER days after it meet a span of `avoid`."""
+    and none whose AFTER days after it meet a span of `avoid` or, given `within`, end that
+    many calendar days or more after it."""
     eligible = [day for i, day in enumerate(days)
-                if BEFORE <= i < len(days) - AFTER and not meets(day, days[i + AFTER], avoid)]
+                if BEFORE <= i < len(days) - AFTER and not meets(day, days[i + AFTER], avoid)
+                and (within is None or (date.fromisoformat(days[i + AFTER]) - date.fromisoformat(day)).days < within)]
     if len(eligible) <= starts:
         return eligible
     return [eligible[int(i)] for i in np.linspace(0, len(eligible) - 1, starts).round()]
@@ -163,7 +166,7 @@ def _judged(frame: pd.DataFrame, metric: str, incidents: Sequence[dict]) -> tupl
     return days, detected[f"{metric}__flag"].to_numpy(dtype=bool)
 
 
-def _runs(days: list[str], flags: np.ndarray) -> list[tuple[int, int]]:
+def _runs(flags: np.ndarray) -> list[tuple[int, int]]:
     """The first and last index of each run of flagged days."""
     runs = []
     for i in range(len(flags)):
@@ -181,7 +184,7 @@ def _reported(days: list[str], flags: np.ndarray, clean: np.ndarray, spans: Sequ
     `spans` (every incident of the metric), with a day from index `at` on that the unplanted
     `clean` doesn't flag."""
     return any(not meets(days[first], days[last], spans) and any(not clean[i] for i in range(max(first, at), last + 1))
-               for first, last in _runs(days, flags))
+               for first, last in _runs(flags))
 
 
 def _until(frame: pd.DataFrame, day: str) -> pd.DataFrame:
@@ -190,12 +193,13 @@ def _until(frame: pd.DataFrame, day: str) -> pd.DataFrame:
 
 
 def reach_main(frame: pd.DataFrame, metric: str, days: list[str], incidents: Sequence[dict]) -> dict[str, Any]:
-    """Plant KINDS[metric] at each of SIZES from each start's first turn to the end, as the
-    harness sweep does: caught counts by size and the floor per start."""
+    """Plant KINDS[metric] at each of SIZES from each start's first turn on, as the harness
+    sweep does, over the history up to the AFTER-th day after the start: caught counts by size
+    and the floor per start."""
     spans = spans_of(incidents, metric, STATUSES)
     base = frame.sort_values("timestamp", kind="stable").reset_index(drop=True)
     first_turn = base.reset_index().groupby(base["day"].astype(str))["index"].min()
-    starts = plant_starts(days, avoid=spans)
+    starts = plant_starts(days, avoid=spans, within=RECENT_DAYS)
     caught = {size: 0 for size in SIZES}
     floors: dict[str, Optional[float]] = {}
     for start in starts:
@@ -218,7 +222,7 @@ def reach_subagent(frame: pd.DataFrame, opening: pd.Series, days: list[str],
     after it, with SEEDS seeds, as G17 does: caught counts by size over every run, and the
     floor per start, the smallest size every seed caught there."""
     spans = spans_of(incidents, "subagent_cache", STATUSES)
-    starts = plant_starts(days, avoid=spans)
+    starts = plant_starts(days, avoid=spans, within=RECENT_DAYS)
     caught = {size: 0 for size in SUBAGENT_SIZES}
     floors: dict[str, Optional[float]] = {start: None for start in starts}
     for start in starts:
@@ -245,7 +249,7 @@ def measure(frame: pd.DataFrame, metric: str, incidents: Sequence[dict],
     failed."""
     days, clean = _judged(frame, metric, incidents)
     followed = spans_of(incidents, metric, FOLLOWED)
-    alarms = [(days[first], days[last]) for first, last in _runs(days, clean)
+    alarms = [(days[first], days[last]) for first, last in _runs(clean)
               if not meets(days[first], days[last], followed)]
     flagged = [first for first, _ in alarms]
     dismissed = [first for first, last in alarms if meets(first, last, spans_of(incidents, metric, ("dismissed",)))]
@@ -284,8 +288,9 @@ def metric_lines(result: dict[str, Any]) -> list[str]:
     name, move = CALIBRATE_NAMES[metric], CALIBRATE_MOVES[MOVES[metric]]
     bar = planted_text(BAR)
     if result["verdict"] == "not_enough_data":
-        lines = [CALIBRATE_LINES["not_enough_data"].format(name=name, days=result["days"], need=BEFORE + AFTER + 1,
-                                                           before=BEFORE, after=AFTER)]
+        need = BEFORE + AFTER + 1
+        lines = [CALIBRATE_LINES["not_enough_data" if result["days"] < need else "no_clear_start"].format(
+            name=name, days=result["days"], need=need, before=BEFORE, after=AFTER, within=RECENT_DAYS)]
     elif result["verdict"] == "pass":
         lines = [CALIBRATE_LINES["pass"].format(name=name)]
     else:
