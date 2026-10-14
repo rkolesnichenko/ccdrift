@@ -1321,6 +1321,7 @@ WARNING_LINES = {"head": "Early warnings, turn by turn:",
                  "none_ships": "{name}: no setting ships, so {watches} get no early warning.",
                  "cache_not_enough_data": "{name}: NOT ENOUGH DATA, no week has {turns:,} new-prompt turns in the "
                                           "{days} days before it",
+                 "cache_few_days": "{name}: NOT ENOUGH DATA, {days:,} days judged, and a rate a week needs {need}",
                  "loop_not_enough_data": "{name}: NOT ENOUGH DATA, no week has {turns:,} tool-loop turns in the "
                                          "{days} days before it",
                  "cache_why_quiet": "it would warn falsely {rate:.2f} times a week at your volume",

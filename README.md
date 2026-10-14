@@ -429,9 +429,11 @@ days of each other clear of incidents, since the check reports only flags begun 
 It judges the two early warnings below the same way, by the bars their gates in lab/ set, on
 the complete days the check reads. For the cache-miss warning it works out how often to
 expect a false warning: the alarms a simulated history at each day's usual miss rate raises
-with nothing planted, per turn, times your new-prompt turns, so the same setting warns more
-often on a busier history. Once in 6 weeks or less passes; the days your own history alarmed
-on are listed beside it and decide nothing. A 5% miss rate planted from up to 10 starts, 5
+with nothing planted, per turn, times your new-prompt turns, over the weeks the warning was on
+(a day with new prompts it doesn't judge, such as a cache incident's, leaves them; a day
+without any stays), so the same setting warns more often on a busier history. Once in 6 weeks
+or less passes, judged on 7 days or more; the days your own history alarmed on are listed
+beside it and decide nothing. A 5% miss rate planted from up to 10 starts, 5
 times each, must then be caught within a median of 150 new-prompt turns. The tool-loop
 warning passes with no alarm on any day judged at the most sensitive usual rate, 0.2%,
 outside the cache incidents ccdrift follows, and a planted 2% caught in 90% of runs within a

@@ -282,6 +282,11 @@ def measure(frame: pd.DataFrame, metric: str, incidents: Sequence[dict],
             "flagged": flagged, "dismissed": dismissed, **reach}
 
 
+# The week the check's cache-miss warning runs over: on fewer judged days a rate a week rests on
+# a fraction of one.
+MIN_WARNING_DAYS = 7
+
+
 def _median(runs: Sequence[Optional[int]]) -> Optional[float]:
     """The median turns to a catch, a run never caught counting as endless; None when the
     median is past every catch."""
@@ -313,10 +318,15 @@ def cache_miss_warning(responses: pd.DataFrame, incidents: Sequence[dict], today
     usual = {day: prompt_base_rate(turns, shift(day, -(early.WINDOW_DAYS - 1)), spans) for day in sorted(counts.index)}
     judged = {day: rate for day, rate in usual.items() if rate is not None}
     starts, runs = prompt_plants(turns, spans, h)
-    if not judged or not runs:
-        return {"warning": "cache_miss", "setting": setting, "verdict": "not_enough_data", "failed": [], "days": 0}
+    if len(judged) < MIN_WARNING_DAYS or not runs:
+        return {"warning": "cache_miss", "setting": setting, "verdict": "not_enough_data", "failed": [],
+                "days": len(judged)}
     per_turn = functools.lru_cache(maxsize=None)(functools.partial(alarms_per_turn, h))
-    weeks = ((date.fromisoformat(max(judged)) - date.fromisoformat(min(judged))).days + 1) / 7
+    # The weeks the warning was on: a day with new prompts it doesn't judge, a cache incident's or
+    # one without a usual rate, is a day it was off, and leaves; a day without any stays, quiet.
+    first, last = min(judged), max(judged)
+    off = {day for day in turns["day"].unique() if first <= day <= last and day not in judged}
+    weeks = ((date.fromisoformat(last) - date.fromisoformat(first)).days + 1 - len(off)) / 7
     false_a_week = sum(per_turn(rate) * counts[day] for day, rate in judged.items()) / weeks
     median = _median(runs)
     return {"warning": "cache_miss", "setting": setting,
@@ -427,6 +437,8 @@ def warning_lines(result: dict[str, Any]) -> list[str]:
     kind = "cache_" if cache else "loop_"
     if result["verdict"] == "none_ships":
         return [WARNING_LINES["none_ships"].format(name=name, watches=WARNING_WATCHES[key])]
+    if result["verdict"] == "not_enough_data" and cache and 0 < result["days"] < MIN_WARNING_DAYS:
+        return [WARNING_LINES["cache_few_days"].format(name=name, days=result["days"], need=MIN_WARNING_DAYS)]
     if result["verdict"] == "not_enough_data":
         return [WARNING_LINES[kind + "not_enough_data"].format(
             name=name, turns=early.MIN_BASE_TURNS if cache else loops.MIN_BASE_TURNS, days=early.BASE_DAYS)]
