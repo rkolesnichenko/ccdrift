@@ -22,94 +22,41 @@ import argparse
 import functools
 import itertools
 import math
-import random
 import statistics
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-import numpy as np
 import pandas as pd
 
-from ccdrift.early import MIN_P0
 from ccdrift.logs import default_source, parse_source
-from ccdrift.loops import (BASE_DAYS, LOOP_SETTINGS, MIN_BASE_TURNS, STREAMS, WINDOW_DAYS, LoopSetting, loop_turns,
-                           qualifying_alarms)
+from ccdrift.loops import LOOP_SETTINGS, STREAMS, LoopSetting, loop_turns
+from ccdrift.warning_gates import (CAUGHT_SHARE, LOOP_MAX_TURNS as MAX_TURNS, loop_alarm_days, loop_base_rate as base_rate,
+                                   loop_plants, turns_to_catch)
 from lab.harness import date_range
 
 P1_GRID = (0.01, 0.02, 0.05)
 H_GRID = (2, 3, 4, 5, 6, 8)
 SESSIONS_GRID = (1, 2)
-PLANT_RATE = 0.02
-STARTS = 10
-SEEDS = 5
-MAX_TURNS = 300
-CAUGHT_SHARE = 0.9
 GATES = {"main": "G8", "subagent": "G9"}
 COLUMNS = ["stream", "p1", "h", "min_sessions", "false_alarms", "incident_alarms", "days_judged",
            "planted_median", "planted_caught", "planted_runs", "passes"]
 
 
-def _shift(day: str, days: int) -> str:
-    return (date.fromisoformat(day) + timedelta(days=days)).isoformat()
-
-
-def base_rate(turns: pd.DataFrame, first_day: str) -> Optional[float]:
-    """The miss rate of the BASE_DAYS days before `first_day`; None with fewer than
-    MIN_BASE_TURNS turns. No days are left out: a new-prompt incident isn't one here."""
-    days = turns["day"]
-    base = (days < first_day) & (days >= _shift(first_day, -BASE_DAYS))
-    if base.sum() < MIN_BASE_TURNS:
-        return None
-    return float(turns.loc[base, "is_loop_miss"].mean())
-
-
 def false_alarms(turns: pd.DataFrame, usual: Callable[[str], Optional[float]], setting: LoopSetting,
                  incident: Optional[tuple[str, str]] = None) -> tuple[int, int, int]:
-    """Qualifying alarms on each day with a usual rate, the day judged as the hourly
-    check would: over the WINDOW_DAYS days ending on it, counting only alarms that fall
-    on it. The usual rate is held at its floor, MIN_P0, the most sensitive rate the
-    check can run at. Returns (alarms outside `incident`, alarms inside it, days judged
-    outside it)."""
-    counted = inside = judged = 0
-    for day in sorted(turns["day"].unique()):
-        first = _shift(day, -(WINDOW_DAYS - 1))
-        if usual(first) is None:
-            continue
-        stretch = turns[turns["day"].between(first, day)].reset_index(drop=True)
-        on_day = stretch["day"].to_numpy() == day
-        alarms = sum(1 for _, alarm in qualifying_alarms(stretch, MIN_P0, setting) if on_day[alarm])
-        if incident is not None and incident[0] <= day <= incident[1]:
-            inside += alarms
-        else:
-            counted += alarms
-            judged += 1
-    return counted, inside, judged
+    """Qualifying alarms on each day with a usual rate, as warning_gates.loop_alarm_days
+    judges them. Returns (alarms outside `incident`, alarms inside it, days judged outside
+    it)."""
+    judged, alarms = loop_alarm_days(turns, usual, setting)
+    inside = (lambda day: incident[0] <= day <= incident[1]) if incident is not None else (lambda day: False)
+    return (sum(1 for day in alarms if not inside(day)), sum(1 for day in alarms if inside(day)),
+            sum(1 for day in judged if not inside(day)))
 
 
 def planted_stretches(turns: pd.DataFrame, usual: Callable[[str], Optional[float]]) -> list[tuple[pd.DataFrame, float]]:
-    """For up to STARTS starting days with a usual rate, spread evenly over them, and
-    SEEDS seeds each, seeded per starting day: the turns of the WINDOW_DAYS days from
-    that day, each missing with probability PLANT_RATE and keeping its session, with
-    that day's usual rate."""
-    candidates = [day for day in sorted(turns["day"].unique()) if usual(day) is not None]
-    if not candidates:
-        return []
-    picks = sorted({candidates[int(round(x))]
-                    for x in np.linspace(0, len(candidates) - 1, min(STARTS, len(candidates)))})
-    stretches = []
-    for start in picks:
-        stretch = turns[turns["day"].between(start, _shift(start, WINDOW_DAYS - 1))].reset_index(drop=True)
-        for seed in range(SEEDS):
-            rng = random.Random(f"{start}/{seed}")
-            planted = stretch.assign(is_loop_miss=[rng.random() < PLANT_RATE for _ in range(len(stretch))])
-            stretches.append((planted, usual(start)))
-    return stretches
-
-
-def turns_to_catch(stretch: pd.DataFrame, p0: float, setting: LoopSetting) -> Optional[int]:
-    alarms = qualifying_alarms(stretch, p0, setting)
-    return alarms[0][1] + 1 if alarms else None
+    """The planted stretches of warning_gates.loop_plants, without their starting days."""
+    return loop_plants(turns, usual)[1]
 
 
 def evaluate(df: pd.DataFrame, incident: Optional[tuple[str, str]] = None,
