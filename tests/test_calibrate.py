@@ -6,11 +6,14 @@ from datetime import date
 import pytest
 
 import ccdrift.calibrate
-from ccdrift.calibrate import (calibrate_lines, calibration, metric_lines, plant, plant_starts, plant_subagent,
-                               run_calibrate, subagent_openings)
+from ccdrift import early
+from ccdrift.calibrate import (cache_miss_warning, calibrate_json, calibrate_lines, calibration, metric_lines, plant,
+                               plant_starts, plant_subagent, run_calibrate, subagent_openings, tool_loop_warning,
+                               warning_lines)
 from ccdrift.cli import main
 from ccdrift.history import History
 from ccdrift.logs import parse_all
+from ccdrift.loops import LOOP_SETTINGS, LoopSetting
 from ccdrift.state import STATE_VERSION
 from ccdrift.texts import floors_text
 from tests.helpers import main_thread_days, nth_day, tool_loop_days
@@ -307,10 +310,17 @@ def test_calibrate_prints_what_it_judged_each_verdict_with_what_it_rests_on_and_
         "  A planted 5% drop is caught in 10 of 10 runs (100%), against a bar of 90%. A planted 2%: 10 of 10.",
         "  Nothing flags.",
         "",
-        "Not judged yet: session start, the cache-miss and tool-loop warnings, failed requests, cut-short "
-        "responses, hooks, thinking and spawn models.",
+        "Early warnings, turn by turn:",
+        "Cache-miss warning: NOT ENOUGH DATA, 4 days judged, and a rate a week needs 7",
+        "Tool-loop warning: NOT ENOUGH DATA, no week has 1,000 tool-loop turns in the 14 days before it",
+        "Subagent tool-loop warning: no setting ships, so subagents get no early warning.",
+        "",
+        "Not judged yet: session start, failed requests, cut-short responses, hooks, thinking and spawn models.",
         "PASS means the shipped setting clears the bar it cleared on the logs it was tuned on: a planted 5% caught "
-        "from every start (90% of runs for subagent read-back), and no flag outside the incidents ccdrift follows."]
+        "from every start (90% of runs for subagent read-back), and no flag outside the incidents ccdrift follows.",
+        "For the warnings, the bars their gates in lab/ set: false cache-miss warnings no more than once in 6 weeks at "
+        "your volume and a planted 5% miss rate caught within a median of 150 new-prompt turns; no tool-loop alarm at "
+        "the most sensitive usual rate and a planted 2% miss rate caught in 90% of runs within a median of 300."]
 
 
 def result_of(metric="cache_ratio", verdict="fail", failed=("quiet", "reach"), **fields):
@@ -374,7 +384,8 @@ def test_the_smallest_sizes_caught_are_told_smallest_first_with_how_many_starts_
 
 
 def test_a_history_with_no_complete_day_yet_says_so():
-    lines = calibrate_lines({"first": None, "last": None, "main_days": 0, "subagent_days": 0, "metrics": []})
+    lines = calibrate_lines({"first": None, "last": None, "main_days": 0, "subagent_days": 0, "metrics": [],
+                             "warnings": []})
     assert lines[0] == "Calibration on your history: no complete UTC day judged yet."
 
 
@@ -382,11 +393,13 @@ def test_the_json_holds_days_counts_and_the_bar_and_names_no_path_session_or_pro
     code, out, _ = run(tmp_path, capsys, [{}] * 12, as_json=True)
     payload = json.loads(out)
     assert code == 0
-    assert set(payload) == {"first", "last", "main_days", "subagent_days", "metrics", "bar", "subagent_share",
-                            "not_judged"}
+    assert set(payload) == {"first", "last", "main_days", "subagent_days", "metrics", "warnings", "bar",
+                            "subagent_share", "not_judged"}
     assert (payload["bar"], payload["subagent_share"]) == (0.05, 0.9)
-    assert payload["not_judged"] == ["context_changes", "early_warnings", "loop_warnings", "failed_requests",
-                                     "cut_short", "hook_changes", "thinking_rises", "model_mismatches"]
+    assert payload["not_judged"] == ["context_changes", "failed_requests", "cut_short", "hook_changes",
+                                     "thinking_rises", "model_mismatches"]
+    assert [(w["warning"], w["verdict"]) for w in payload["warnings"]] == [
+        ("cache_miss", "not_enough_data"), ("tool_loop", "not_enough_data"), ("tool_loop", "none_ships")]
     cache = payload["metrics"][0]
     assert cache["caught"]["0.05"] == 2 and cache["left_out"] == []
     assert "secret-client" not in out and str(tmp_path) not in out
@@ -441,3 +454,223 @@ def test_the_command_line_passes_its_source_state_and_json_through(tmp_path, mon
     assert main(["calibrate", *paths]) == 0
     assert calls == [((tmp_path / "logs", tmp_path / "state.json"), {"as_json": True}),
                      ((tmp_path / "logs", tmp_path / "state.json"), {"as_json": False})]
+
+
+def cache_miss(tmp_path, days, per_day, incidents=()):
+    """The cache-miss warning on main-thread days from Sep 1, judged on the day after the last."""
+    main_thread_days(tmp_path, days, per_day=per_day)
+    return cache_miss_warning(parse_all(tmp_path).responses, list(incidents), date.fromisoformat(nth_day(len(days))))
+
+
+@pytest.mark.parametrize("per_day, misses, verdict, false_a_week, turns_a_week", [
+    (51, 1, "pass", 0.11, 350),
+    (201, 4, "fail", 0.418, 1400),
+])
+def test_the_cache_miss_warning_is_judged_quiet_by_its_false_warnings_at_this_historys_rate_and_volume(
+        tmp_path, per_day, misses, verdict, false_a_week, turns_a_week):
+    # A miss every other day keeps the usual rate at 1% either way; four times the turns a
+    # week are four times the false warnings, past the bar of one in 6 weeks.
+    result = cache_miss(tmp_path, [{"misses": misses * (i % 2)} for i in range(28)], per_day)
+    assert (result["verdict"], result["usual_rate"], result["false_a_week"], result["turns_a_week"]) == (
+        verdict, 0.01, false_a_week, turns_a_week)
+    assert result["failed"] == ([] if verdict == "pass" else ["quiet"])
+
+
+@pytest.mark.parametrize("status, verdict, days, usual_rate, alarms", [
+    ("recovered", "pass", 15, 0.01, []),
+    ("dismissed", "fail", 18, 0.0327, [nth_day(12), nth_day(13), nth_day(14)]),
+])
+def test_a_cache_incidents_days_leave_the_cache_miss_warning_as_the_check_leaves_them_unless_dismissed(
+        tmp_path, status, verdict, days, usual_rate, alarms):
+    incident = {"metric": "cache_ratio", "start": nth_day(12), "end": nth_day(14), "status": status}
+    result = cache_miss(tmp_path, [{"misses": 30 if 12 <= i <= 14 else i % 2} for i in range(28)], 51, [incident])
+    assert (result["verdict"], result["days"], result["usual_rate"], result["alarms"]) == (
+        verdict, days, usual_rate, alarms)
+
+
+@pytest.mark.parametrize("metric, days, false_a_week", [("cache_ratio", 24, 0.22), ("haiku_fraction", 62, 0.221)])
+def test_days_of_new_prompts_the_cache_miss_warning_leaves_out_leave_its_weeks_too(tmp_path, metric, days,
+                                                                                    false_a_week):
+    # A cache incident's thirty days, and the week after it without a usual rate, are days the
+    # warning is off: taking their weeks with none of their turns once halved the rate and
+    # passed a history that fails. Another metric's incident leaves nothing out.
+    incident = {"metric": metric, "start": nth_day(20), "end": nth_day(49), "status": "recovered"}
+    result = cache_miss(tmp_path, [{"misses": 1}] * 70, 101, [incident])
+    assert (result["verdict"], result["days"], result["turns_a_week"], result["false_a_week"]) == (
+        "fail", days, 700, false_a_week)
+
+
+def test_days_without_new_prompts_count_as_weeks_the_cache_miss_warning_was_on(tmp_path):
+    # A day's work every other day: 16 days judged over 31, 200 turns each.
+    for day in range(0, 40, 2):
+        main_thread_days(tmp_path, [{"misses": 2}], per_day=201, first_day=day)
+    result = cache_miss_warning(parse_all(tmp_path).responses, [], date.fromisoformat(nth_day(40)))
+    assert (result["days"], result["weeks"], result["turns_a_week"]) == (16, 4.4, 723)
+
+
+def test_the_cache_miss_warning_needs_a_week_of_judged_days_for_a_rate_a_week(tmp_path):
+    result = cache_miss(tmp_path, [{"misses": i % 2} for i in range(14)], 51)
+    assert (result["verdict"], result["days"]) == ("not_enough_data", 4)
+    assert warning_lines(result) == [
+        "Cache-miss warning: NOT ENOUGH DATA, 4 days judged, and a rate a week needs 7"]
+
+
+def test_the_cache_miss_warning_has_not_enough_data_without_200_new_prompt_turns_in_the_14_days_before_a_day(
+        tmp_path):
+    result = cache_miss(tmp_path, [{}] * 28, 11)
+    assert (result["verdict"], result["days"]) == ("not_enough_data", 0)
+
+
+def test_a_planted_miss_rate_the_cache_miss_warning_cant_catch_within_a_median_of_150_turns_fails_its_reach(
+        tmp_path):
+    # 20 turns a day against a usual rate of 2.5%: a planted 5% gains too slowly for a week.
+    result = cache_miss(tmp_path, [{"misses": int(i % 2 == 0)} for i in range(28)], 21)
+    assert (result["verdict"], result["failed"], result["caught"], result["runs"], result["median_turns"]) == (
+        "fail", ["reach"], 15, 50, None)
+
+
+def test_the_days_the_history_itself_raises_a_cache_miss_warning_are_listed_and_never_decide_the_verdict(tmp_path):
+    result = cache_miss(tmp_path, [{"misses": 3 if i == 20 else i % 2} for i in range(28)], 51)
+    assert (result["verdict"], result["alarms"]) == ("pass", [nth_day(20)])
+
+
+def test_no_cache_miss_warning_shipping_is_said_rather_than_judged(tmp_path, monkeypatch):
+    monkeypatch.setattr(early, "THRESHOLD", None)
+    assert cache_miss(tmp_path, [{}] * 2, 51) == {"warning": "cache_miss", "setting": None, "verdict": "none_ships"}
+
+
+def tool_loop(tmp_path, days, incidents=(), stream="main", **options):
+    """The tool-loop warning of `stream` on tool-loop days from Sep 1, judged on the day after the last."""
+    tool_loop_days(tmp_path, days, subagent=stream == "subagent", **options)
+    return tool_loop_warning(parse_all(tmp_path).responses, stream, list(incidents), date.fromisoformat(nth_day(days)))
+
+
+@pytest.mark.parametrize("status, verdict, days, alarms, dismissed", [
+    (None, "fail", 11, [nth_day(20)], []),
+    ("recovered", "pass", 8, [], []),
+    ("dismissed", "fail", 11, [nth_day(20)], [nth_day(20)]),
+])
+def test_a_tool_loop_alarm_at_the_floor_fails_quiet_unless_a_cache_incident_ccdrift_follows_covers_its_day(
+        tmp_path, status, verdict, days, alarms, dismissed):
+    # Two misses in a row against the 0.2% floor at p1 = 2% add 2 × ln(0.02/0.002) = 4.6, past h = 3.
+    incidents = [{"metric": "cache_ratio", "start": nth_day(19), "end": nth_day(21), "status": status}] if status else []
+    result = tool_loop(tmp_path, 24, incidents, per_day=150, misses=2, miss_days=[20])
+    assert (result["verdict"], result["days"], result["alarms"], result["dismissed"]) == (verdict, days, alarms, dismissed)
+    assert result["failed"] == (["quiet"] if verdict == "fail" else [])
+
+
+def test_an_incident_of_another_metric_leaves_a_tool_loop_alarm_counted(tmp_path):
+    incident = {"metric": "haiku_fraction", "start": nth_day(19), "end": nth_day(21), "status": "recovered"}
+    result = tool_loop(tmp_path, 24, [incident], per_day=150, misses=2, miss_days=[20])
+    assert (result["verdict"], result["days"], result["alarms"]) == ("fail", 11, [nth_day(20)])
+
+
+def test_the_tool_loop_warning_has_not_enough_data_without_1000_turns_in_the_14_days_before_a_window(tmp_path):
+    result = tool_loop(tmp_path, 24, per_day=50)
+    assert (result["verdict"], result["days"]) == ("not_enough_data", 0)
+
+
+def test_a_tool_loop_plant_caught_in_under_90_percent_of_runs_fails_reach_however_fast_the_rest(tmp_path):
+    # The last starts have a day or two of turns left to catch it in.
+    result = tool_loop(tmp_path, 20, per_day=80)
+    assert (result["failed"], result["caught"], result["runs"], result["median_turns"]) == (["reach"], 30, 35, 89)
+
+
+def test_a_tool_loop_plant_caught_every_time_but_in_a_median_past_300_turns_fails_reach(tmp_path):
+    # Days 0 to 3 put the usual rate of most starts at the 1% it is held under, where a
+    # planted 2% gains slowly.
+    result = tool_loop(tmp_path, 24, per_day=300, misses=30, miss_days=range(4))
+    assert (result["failed"], result["caught"], result["runs"], result["median_turns"]) == (["reach"], 50, 50, 413)
+
+
+def test_a_stream_with_no_setting_is_said_to_ship_none_and_is_judged_once_one_ships(tmp_path, monkeypatch):
+    assert tool_loop(tmp_path / "none", 24, stream="subagent", per_day=150) == {
+        "warning": "tool_loop", "stream": "subagent", "setting": None, "verdict": "none_ships"}
+    monkeypatch.setitem(LOOP_SETTINGS, "subagent", LoopSetting(0.02, 3.0, 1))
+    result = tool_loop(tmp_path / "set", 24, stream="subagent", per_day=150)
+    assert (result["setting"], result["verdict"], result["days"]) == (
+        {"p1": 0.02, "h": 3.0, "min_sessions": 1}, "pass", 11)
+
+
+def test_the_calibration_judges_the_cache_miss_warning_and_every_tool_loop_stream(tmp_path):
+    main_thread_days(tmp_path, [{}] * 2)
+    warnings = calibration(parse_all(tmp_path).responses, [], date.fromisoformat(nth_day(2)))["warnings"]
+    assert [(w["warning"], w.get("stream"), w["verdict"]) for w in warnings] == [
+        ("cache_miss", None, "not_enough_data"), ("tool_loop", "main", "not_enough_data"),
+        ("tool_loop", "subagent", "none_ships")]
+
+
+def test_a_median_past_every_catch_is_null_in_the_json(tmp_path):
+    main_thread_days(tmp_path, [{"misses": int(i % 2 == 0)} for i in range(28)], per_day=21)
+    result = calibration(parse_all(tmp_path).responses, [], date.fromisoformat(nth_day(28)))
+    assert json.loads(calibrate_json(result))["warnings"][0]["median_turns"] is None
+
+
+def cache_result(verdict="fail", failed=("quiet", "reach"), **fields):
+    defaults = {"days": 18, "weeks": 2.6, "turns_a_week": 1400, "usual_rate": 0.0043, "false_a_week": 0.418,
+                "alarms": [nth_day(7), nth_day(9)], "starts": [nth_day(3), nth_day(5), nth_day(9)], "runs": 15,
+                "caught": 4, "median_turns": None}
+    return {"warning": "cache_miss", "setting": {"h": 4.0, "p1": 0.05}, "verdict": verdict, "failed": list(failed),
+            **defaults, **fields}
+
+
+def test_a_failed_cache_miss_warning_says_which_half_failed_and_what_its_history_raised():
+    assert warning_lines(cache_result()) == [
+        "Cache-miss warning: FAIL, it would warn falsely 0.42 times a week at your volume, and a planted 5% miss rate "
+        "isn't caught within a median of 150 turns",
+        "  False warnings: 0.42 a week expected at your usual miss rate (0.43% median) and 1,400 new-prompt turns a "
+        "week, over 2.6 weeks judged, against a bar of 1 every 6 weeks (0.17).",
+        "  Your history alarmed on 2026-09-08, 2026-09-10 outside the incidents ccdrift follows.",
+        "  A planted 5% miss rate is not caught in a median: 4 of 15 runs from 3 starts, 2026-09-04 to 2026-09-10, "
+        "against a bar of 150 turns."]
+
+
+def test_a_passing_cache_miss_warning_says_what_it_rests_on():
+    assert warning_lines(cache_result(verdict="pass", failed=[], false_a_week=0.159, turns_a_week=463, alarms=[],
+                                      caught=15, median_turns=26.0)) == [
+        "Cache-miss warning: PASS",
+        "  False warnings: 0.16 a week expected at your usual miss rate (0.43% median) and 463 new-prompt turns a "
+        "week, over 2.6 weeks judged, against a bar of 1 every 6 weeks (0.17).",
+        "  Your history raised none.",
+        "  A planted 5% miss rate is caught in a median 26 turns, 15 of 15 runs from 3 starts, 2026-09-04 to "
+        "2026-09-10, against a bar of 150 turns."]
+
+
+def test_a_cache_miss_warning_with_one_half_failed_names_only_that_half():
+    assert warning_lines(cache_result(failed=["reach"], false_a_week=0.02, alarms=[]))[:3] == [
+        "Cache-miss warning: FAIL, a planted 5% miss rate isn't caught within a median of 150 turns",
+        "  False warnings: 0.02 a week expected at your usual miss rate (0.43% median) and 1,400 new-prompt turns a "
+        "week, over 2.6 weeks judged, against a bar of 1 every 6 weeks (0.17).",
+        "  Your history raised none."]
+
+
+def loop_result(verdict="fail", failed=("quiet",), **fields):
+    defaults = {"days": 11, "alarms": [nth_day(20), nth_day(21)], "dismissed": [nth_day(21)],
+                "starts": [nth_day(13)], "runs": 5, "caught": 5, "median_turns": 91.5}
+    return {"warning": "tool_loop", "stream": "main", "setting": {"p1": 0.02, "h": 3.0, "min_sessions": 1},
+            "verdict": verdict, "failed": list(failed), **defaults, **fields}
+
+
+def test_a_tool_loop_warning_that_alarms_says_on_which_days_and_which_were_dismissed():
+    assert warning_lines(loop_result()) == [
+        "Tool-loop warning: FAIL, it alarms outside the incidents ccdrift follows",
+        "  It alarms on 2026-09-21 with no incident recorded, at the most sensitive usual rate, 0.2%.",
+        "  It alarms on 2026-09-22, which you dismissed as a false alarm; dismissed alarms count against it.",
+        "  A planted 2% miss rate is caught in 5 of 5 runs (100%), in a median 91.5 turns, against 90% within a "
+        "median of 300."]
+
+
+def test_a_quiet_tool_loop_warning_that_misses_its_plant_says_how_often_it_was_caught():
+    assert warning_lines(loop_result(failed=["reach"], alarms=[], dismissed=[], caught=2, median_turns=None)) == [
+        "Tool-loop warning: FAIL, a planted 2% miss rate isn't caught in 90% of runs within a median of 300 turns",
+        "  No alarm on 11 days judged at the most sensitive usual rate, 0.2%.",
+        "  A planted 2% miss rate is caught in 2 of 5 runs (40%), not in a median, against 90% within a median of "
+        "300."]
+
+
+def test_a_warning_without_the_turns_to_judge_or_a_setting_says_so_in_one_line():
+    assert warning_lines({"warning": "cache_miss", "setting": {"h": 4.0, "p1": 0.05}, "verdict": "not_enough_data",
+                          "failed": [], "days": 0}) == [
+        "Cache-miss warning: NOT ENOUGH DATA, no week has 200 new-prompt turns in the 14 days before it"]
+    assert warning_lines({"warning": "cache_miss", "setting": None, "verdict": "none_ships"}) == [
+        "Cache-miss warning: no setting ships, so new prompts get no early warning."]

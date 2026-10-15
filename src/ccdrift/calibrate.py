@@ -17,12 +17,21 @@ would judge it, that the unplanted history up to then doesn't raise. Nothing is 
 
 The plants are the ones the lab gates measured those settings with. lab/harness.py and
 lab/subagent_cache.py import them from here, so a gate and this command can't plant two
-different things under one name."""
+different things under one name.
+
+The early warnings are judged by their gates' own measurement, in warning_gates, on the
+complete days the check reads: the cache-miss warning (G3) by how often it would warn on
+nothing at this history's usual rate and volume and how fast it catches a planted miss rate,
+the tool-loop warning (G8) by whether it alarms at the most sensitive usual rate and how
+often it catches a planted one."""
 
 from __future__ import annotations
 
+import functools
 import json
+import math
 import random
+import statistics
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -31,14 +40,20 @@ from typing import Any, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from ccdrift import early, loops
 from ccdrift.check import ACTIVE_DAY_RESPONSES, HISTORY_ACTIVE_DAYS, history_start
 from ccdrift.detector import SUBAGENT_METRICS, DetectorConfig, bin_metrics, detect
+from ccdrift.early import MIN_P0, prompt_turns
 from ccdrift.history import HistoryError, load_history
 from ccdrift.incidents import EXCLUDING, OPEN_END, RECENT_DAYS, exclusions
 from ccdrift.logs import add_ratios, judged_subagent_loops, judged_turns
+from ccdrift.loops import LOOP_SETTINGS, STREAMS, loop_turns
 from ccdrift.state import load_state
-from ccdrift.texts import (CALIBRATE_LINES, CALIBRATE_MOVES, CALIBRATE_NAMES, MOVES, floors_text,
-                           no_transcripts_message, planted_text, spans_text)
+from ccdrift.texts import (CALIBRATE_LINES, CALIBRATE_MOVES, CALIBRATE_NAMES, MOVES, WARNING_LINES, WARNING_NAMES,
+                           WARNING_WATCHES, floors_text, no_transcripts_message, planted_text, spans_text)
+from ccdrift.warning_gates import (CAUGHT_SHARE, LOOP_MAX_TURNS, LOOP_PLANT, MAX_FALSE_PER_WEEK, PROMPT_MAX_TURNS,
+                                   PROMPT_PLANT, alarms_per_turn, loop_alarm_days, loop_base_rate, loop_plants,
+                                   prompt_alarm_days, prompt_base_rate, prompt_plants, shift, turns_to_catch, within)
 
 # Starting days for a plant, and the judged days each needs around it: the detector needs
 # min_baseline (5) days to judge one, and a flag needs deviant_bins (3) deviant days of
@@ -67,8 +82,7 @@ STATUSES = (*FOLLOWED, "dismissed")
 # The plant behind each main-thread metric.
 KINDS = {"cache_ratio": "cache", "haiku_fraction": "haiku"}
 # The alerts with a measured setting this doesn't judge yet, by their keys in the state.
-NOT_JUDGED = ("context_changes", "early_warnings", "loop_warnings", "failed_requests", "cut_short", "hook_changes",
-              "thinking_rises", "model_mismatches")
+NOT_JUDGED = ("context_changes", "failed_requests", "cut_short", "hook_changes", "thinking_rises", "model_mismatches")
 
 
 def plant(df: pd.DataFrame, kind: str, magnitude: float, seed: int = 0, start: Optional[int] = None) -> pd.DataFrame:
@@ -268,9 +282,98 @@ def measure(frame: pd.DataFrame, metric: str, incidents: Sequence[dict],
             "flagged": flagged, "dismissed": dismissed, **reach}
 
 
+# The week the check's cache-miss warning runs over: on fewer judged days a rate a week rests on
+# a fraction of one.
+MIN_WARNING_DAYS = 7
+
+
+def _median(runs: Sequence[Optional[int]]) -> Optional[float]:
+    """The median turns to a catch, a run never caught counting as endless; None when the
+    median is past every catch."""
+    median = statistics.median(math.inf if run is None else run for run in runs)
+    return None if math.isinf(median) else median
+
+
+def _halves(quiet: bool, reach: bool) -> dict[str, Any]:
+    failed = [half for half, held in (("quiet", quiet), ("reach", reach)) if not held]
+    return {"verdict": "fail" if failed else "pass", "failed": failed}
+
+
+def cache_miss_warning(responses: pd.DataFrame, incidents: Sequence[dict], today: date) -> dict[str, Any]:
+    """The cache-miss warning (G3) judged on the new-prompt turns of the complete days
+    before `today`, the days of every cache incident not dismissed left out as the check
+    leaves them. Quiet: the false warnings a week to expect, each judged day's turns times
+    the simulated alarms per turn at its usual rate, over the calendar weeks judged, at most
+    MAX_FALSE_PER_WEEK; the days the history itself alarms are reported beside it. Reach: a
+    planted miss rate caught within a median of PROMPT_MAX_TURNS turns."""
+    h = early.THRESHOLD
+    if h is None:
+        return {"warning": "cache_miss", "setting": None, "verdict": "none_ships"}
+    setting = {"h": h, "p1": early.P1}
+    turns = prompt_turns(responses)
+    turns = turns[turns["day"] < today.isoformat()].reset_index(drop=True)
+    spans = [(i["start"], i["end"] or today.isoformat()) for i in incidents
+             if i["metric"] == "cache_ratio" and i["status"] != "dismissed"]
+    counts = turns.loc[~within(turns["day"], spans), "day"].value_counts()
+    usual = {day: prompt_base_rate(turns, shift(day, -(early.WINDOW_DAYS - 1)), spans) for day in sorted(counts.index)}
+    judged = {day: rate for day, rate in usual.items() if rate is not None}
+    starts, runs = prompt_plants(turns, spans, h)
+    if len(judged) < MIN_WARNING_DAYS or not runs:
+        return {"warning": "cache_miss", "setting": setting, "verdict": "not_enough_data", "failed": [],
+                "days": len(judged)}
+    per_turn = functools.lru_cache(maxsize=None)(functools.partial(alarms_per_turn, h))
+    # The weeks the warning was on: a day with new prompts it doesn't judge, a cache incident's or
+    # one without a usual rate, is a day it was off, and leaves; a day without any stays, quiet.
+    first, last = min(judged), max(judged)
+    off = {day for day in turns["day"].unique() if first <= day <= last and day not in judged}
+    weeks = ((date.fromisoformat(last) - date.fromisoformat(first)).days + 1 - len(off)) / 7
+    false_a_week = sum(per_turn(rate) * counts[day] for day, rate in judged.items()) / weeks
+    median = _median(runs)
+    return {"warning": "cache_miss", "setting": setting,
+            **_halves(false_a_week <= MAX_FALSE_PER_WEEK, median is not None and median <= PROMPT_MAX_TURNS),
+            "days": len(judged), "weeks": round(weeks, 1), "turns_a_week": int(round(sum(counts[day] for day in judged) / weeks)),
+            "usual_rate": round(statistics.median(judged.values()), 4), "false_a_week": round(float(false_a_week), 3),
+            "bar_false_a_week": round(MAX_FALSE_PER_WEEK, 4), "alarms": sorted(set(prompt_alarm_days(turns, spans, h))),
+            "starts": starts, "runs": len(runs), "caught": sum(run is not None for run in runs), "median_turns": median,
+            "bar_turns": PROMPT_MAX_TURNS}
+
+
+def tool_loop_warning(responses: pd.DataFrame, stream: str, incidents: Sequence[dict], today: date) -> dict[str, Any]:
+    """The tool-loop warning of `stream` (G8 on the main thread) judged on its tool-loop
+    turns of the complete days before `today`. Quiet: no qualifying alarm at the most
+    sensitive usual rate on a judged day outside the cache incidents ccdrift follows, one in a
+    dismissed incident counting. Reach: a planted miss rate caught in CAUGHT_SHARE of runs
+    within a median of LOOP_MAX_TURNS turns. None in LOOP_SETTINGS means no setting ships."""
+    setting = LOOP_SETTINGS[stream]
+    if setting is None:
+        return {"warning": "tool_loop", "stream": stream, "setting": None, "verdict": "none_ships"}
+    named = {"p1": setting.p1, "h": setting.h, "min_sessions": setting.min_sessions}
+    turns = loop_turns(responses, stream)
+    turns = turns[turns["day"] < today.isoformat()].reset_index(drop=True)
+    usual = functools.lru_cache(maxsize=None)(functools.partial(loop_base_rate, turns))
+    followed = spans_of(incidents, "cache_ratio", FOLLOWED)
+    judged, alarms = loop_alarm_days(turns, usual, setting)
+    judged = [day for day in judged if not meets(day, day, followed)]
+    alarms = sorted({day for day in alarms if not meets(day, day, followed)})
+    starts, stretches = loop_plants(turns, usual)
+    if not judged or not stretches:
+        return {"warning": "tool_loop", "stream": stream, "setting": named, "verdict": "not_enough_data",
+                "failed": [], "days": 0}
+    runs = [turns_to_catch(stretch, p0, setting) for stretch, p0 in stretches]
+    caught = sum(run is not None for run in runs)
+    median = _median(runs)
+    dismissed = spans_of(incidents, "cache_ratio", ("dismissed",))
+    return {"warning": "tool_loop", "stream": stream, "setting": named,
+            **_halves(not alarms, caught >= CAUGHT_SHARE * len(runs) and median is not None and median <= LOOP_MAX_TURNS),
+            "days": len(judged), "alarms": alarms, "dismissed": [day for day in alarms if meets(day, day, dismissed)],
+            "starts": starts, "runs": len(runs), "caught": caught, "median_turns": median, "bar_share": CAUGHT_SHARE,
+            "bar_turns": LOOP_MAX_TURNS}
+
+
 def calibration(responses: pd.DataFrame, incidents: Sequence[dict], today: date) -> dict[str, Any]:
-    """Every metric's calibration on `responses` as the check on `today` would judge them,
-    with the span of days judged and how many on the main thread and in subagent loops."""
+    """Every metric's and early warning's calibration on `responses` as the check on `today`
+    would judge them, with the span of days judged and how many on the main thread and in
+    subagent loops."""
     turns = judged_turns(responses, today)
     loops = judged_subagent_loops(responses, today)
     opening = subagent_openings(responses) if not loops.empty else pd.Series(dtype=float)
@@ -279,7 +382,9 @@ def calibration(responses: pd.DataFrame, incidents: Sequence[dict], today: date)
     days = sorted(set(turns["day"].astype(str)) | set(loops["day"].astype(str)))
     return {"first": days[0] if days else None, "last": days[-1] if days else None,
             "main_days": int(turns["day"].nunique()), "subagent_days": int(loops["day"].nunique()),
-            "metrics": results}
+            "metrics": results,
+            "warnings": [cache_miss_warning(responses, incidents, today),
+                         *(tool_loop_warning(responses, stream, incidents, today) for stream in STREAMS)]}
 
 
 def metric_lines(result: dict[str, Any]) -> list[str]:
@@ -319,6 +424,54 @@ def metric_lines(result: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _starts_text(starts: Sequence[str]) -> tuple[str, str]:
+    """How many starts, "10 starts", and over which days, "2026-08-27 to 2026-10-07"."""
+    count = CALIBRATE_LINES["starts_one" if len(starts) == 1 else "starts_many"].format(count=len(starts))
+    return count, starts[0] if len(starts) == 1 else CALIBRATE_LINES["span"].format(start=starts[0], end=starts[-1])
+
+
+def warning_lines(result: dict[str, Any]) -> list[str]:
+    """One early warning's verdict and what it rests on, as the terminal shows them."""
+    key = result.get("stream", result["warning"])
+    name, cache = WARNING_NAMES[key], result["warning"] == "cache_miss"
+    kind = "cache_" if cache else "loop_"
+    if result["verdict"] == "none_ships":
+        return [WARNING_LINES["none_ships"].format(name=name, watches=WARNING_WATCHES[key])]
+    if result["verdict"] == "not_enough_data" and cache and 0 < result["days"] < MIN_WARNING_DAYS:
+        return [WARNING_LINES["cache_few_days"].format(name=name, days=result["days"], need=MIN_WARNING_DAYS)]
+    if result["verdict"] == "not_enough_data":
+        return [WARNING_LINES[kind + "not_enough_data"].format(
+            name=name, turns=early.MIN_BASE_TURNS if cache else loops.MIN_BASE_TURNS, days=early.BASE_DAYS)]
+    plant, bar = planted_text(PROMPT_PLANT if cache else LOOP_PLANT), PROMPT_MAX_TURNS if cache else LOOP_MAX_TURNS
+    why = WARNING_LINES["and"].join(WARNING_LINES[kind + "why_" + half].format(
+        rate=result.get("false_a_week"), plant=plant, turns=bar, share=CAUGHT_SHARE) for half in result["failed"])
+    lines = [WARNING_LINES["fail"].format(name=name, why=why) if result["failed"]
+             else WARNING_LINES["pass"].format(name=name)]
+    starts, span = _starts_text(result["starts"])
+    median = result["median_turns"]
+    if cache:
+        lines.append(WARNING_LINES["cache_quiet"].format(
+            rate=result["false_a_week"], usual=result["usual_rate"], turns=result["turns_a_week"],
+            weeks=result["weeks"], every=round(1 / MAX_FALSE_PER_WEEK), bar=MAX_FALSE_PER_WEEK))
+        lines.append(WARNING_LINES["cache_alarmed"].format(days=", ".join(result["alarms"])) if result["alarms"]
+                     else WARNING_LINES["cache_alarmed_none"])
+        lines.append(WARNING_LINES["cache_reach" if median is not None else "cache_reach_never"].format(
+            plant=plant, median=median, caught=result["caught"], runs=result["runs"], starts=starts, span=span,
+            bar=bar))
+        return lines
+    unlabelled = [day for day in result["alarms"] if day not in result["dismissed"]]
+    if unlabelled:
+        lines.append(WARNING_LINES["loop_alarms"].format(days=", ".join(unlabelled), floor=MIN_P0))
+    if result["dismissed"]:
+        lines.append(WARNING_LINES["loop_dismissed"].format(days=", ".join(result["dismissed"])))
+    if not result["alarms"]:
+        lines.append(WARNING_LINES["loop_quiet"].format(days=result["days"], floor=MIN_P0))
+    lines.append(WARNING_LINES["loop_reach" if median is not None else "loop_reach_never"].format(
+        plant=plant, caught=result["caught"], runs=result["runs"], share=result["caught"] / result["runs"],
+        median=median, bar_share=CAUGHT_SHARE, bar=bar))
+    return lines
+
+
 def calibrate_lines(result: dict[str, Any]) -> list[str]:
     """The calibration as the terminal shows it: what was judged, each metric's verdict, what
     isn't judged yet and what PASS means."""
@@ -328,8 +481,14 @@ def calibrate_lines(result: dict[str, Any]) -> list[str]:
     lines = [head, ""]
     for metric in result["metrics"]:
         lines += metric_lines(metric)
+    lines += ["", WARNING_LINES["head"]]
+    for warning in result["warnings"]:
+        lines += warning_lines(warning)
     return lines + ["", CALIBRATE_LINES["not_judged"],
-                    CALIBRATE_LINES["bar"].format(bar=planted_text(BAR), needed=SUBAGENT_SHARE)]
+                    CALIBRATE_LINES["bar"].format(bar=planted_text(BAR), needed=SUBAGENT_SHARE),
+                    WARNING_LINES["bar"].format(every=round(1 / MAX_FALSE_PER_WEEK), prompt_plant=planted_text(PROMPT_PLANT),
+                                                prompt_turns=PROMPT_MAX_TURNS, loop_plant=planted_text(LOOP_PLANT),
+                                                share=CAUGHT_SHARE, loop_turns=LOOP_MAX_TURNS)]
 
 
 def calibrate_json(result: dict[str, Any]) -> str:
@@ -361,7 +520,7 @@ def run_calibrate(source: Path, state_path: Path, as_json: bool = False, today: 
     if tables.responses.empty:
         print(no_transcripts_message(source), file=sys.stderr)
         return 2
-    # 11.7 s on the owner's store of 51 days (2026-10-14), so it says so first.
+    # 12.7 s on the owner's store of 51 days (2026-10-14), so it says so first.
     print(CALIBRATE_LINES["measuring"], file=sys.stderr, flush=True)
     result = calibration(tables.responses, incidents, today)
     print(calibrate_json(result) if as_json else "\n".join(calibrate_lines(result)) + "\n", end="")

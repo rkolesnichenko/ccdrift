@@ -31,36 +31,23 @@ from __future__ import annotations
 
 import argparse
 import math
-import random
 import statistics
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 
 from ccdrift.early import BASE_DAYS, MIN_BASE_TURNS, THRESHOLD, WINDOW_DAYS, miss_cusum, prompt_turns
 from ccdrift.logs import default_source, parse_source
+from ccdrift.warning_gates import (MAX_FALSE_PER_WEEK, PROMPT_MAX_TURNS as MAX_TURNS, RATE_SEED, RATE_STREAMS,
+                                   alarms_per_turn, prompt_alarm_days, prompt_base_rate, prompt_plants)
 from lab.harness import date_range
 
 H_GRID = (2, 3, 4, 5, 6, 8)
-PLANT_RATE = 0.05
-STARTS = 10
-SEEDS = 5
-MAX_TURNS = 150
 DEADLINE_DAYS = 5
 
-# A judgement, not a measurement, and it was made knowing what h = 4 costs: one spurious early
-# warning every 6 weeks of turns is tolerable for a notice whose advice is "nothing yet, the daily
-# verdict follows". h = 4 measures 0.063 to 0.144 a week depending on the usual rate, so it clears
-# this with margin; h = 3 measures 0.230 to 0.736 and fails it by 1.4x to 4.4x.
-MAX_FALSE_PER_WEEK = 1 / 6
-
 TURNS_A_WEEK = 343         # new-prompt turns in 7 days, the median of the clean days on the owner's logs
-RATE_STREAM = 1000         # turns per simulated stream in false_alarm_rate
-RATE_STREAMS = 200
-RATE_SEED = 20260921
 RATE_P0S = (0.002, 0.0043, 0.010)   # the floor the check clamps to, the observed clean rate, and above it
 
 
@@ -71,48 +58,19 @@ def _shift(day: str, days: int) -> str:
 def base_rate(turns: pd.DataFrame, first_day: str, excluded: Optional[tuple[str, str]] = None) -> Optional[float]:
     """The miss rate of the BASE_DAYS days before `first_day`, leaving out `excluded`
     (START, END); None with fewer than MIN_BASE_TURNS turns."""
-    days = turns["day"]
-    base = (days < first_day) & (days >= _shift(first_day, -BASE_DAYS))
-    if excluded:
-        base &= ~days.between(*excluded)
-    if base.sum() < MIN_BASE_TURNS:
-        return None
-    return float(turns.loc[base, "is_miss"].mean())
+    return prompt_base_rate(turns, first_day, [excluded] if excluded else [])
 
 
 def false_alarms(turns: pd.DataFrame, incident: tuple[str, str], h: float) -> int:
     """Alarms on clean days, each day judged as the hourly check would: over the 7
     days ending that day, counting only alarms that fall on it."""
-    clean = turns[~turns["day"].between(*incident)]
-    count = 0
-    for day in sorted(clean["day"].unique()):
-        first = _shift(day, -(WINDOW_DAYS - 1))
-        p0 = base_rate(turns, first, incident)
-        if p0 is None:
-            continue
-        stretch = clean[clean["day"].between(first, day)]
-        on_day = stretch["day"].to_numpy() == day
-        count += sum(1 for i in miss_cusum(stretch["is_miss"].tolist(), p0, h) if on_day[i])
-    return count
+    return len(prompt_alarm_days(turns, [incident], h))
 
 
 def planted(turns: pd.DataFrame, incident: tuple[str, str], h: float) -> list[Optional[int]]:
-    """Turns to the first alarm after planting PLANT_RATE misses from each starting
-    day, for up to STARTS starts and SEEDS seeds; None when never caught."""
-    clean = turns[~turns["day"].between(*incident)]
-    candidates = [d for d in sorted(clean["day"].unique()) if base_rate(turns, d, incident) is not None]
-    if not candidates:
-        return []
-    picks = sorted({candidates[int(round(x))] for x in np.linspace(0, len(candidates) - 1, min(STARTS, len(candidates)))})
-    results = []
-    for start in picks:
-        stretch = clean[clean["day"].between(start, _shift(start, WINDOW_DAYS - 1))]
-        p0 = base_rate(turns, start, incident)
-        for seed in range(SEEDS):
-            rng = random.Random(seed)
-            alarms = miss_cusum([rng.random() < PLANT_RATE for _ in range(len(stretch))], p0, h)
-            results.append(alarms[0] + 1 if alarms else None)
-    return results
+    """Turns to the first alarm after planting a 5% miss rate from each starting day,
+    for up to 10 starts and 5 seeds; None when never caught."""
+    return prompt_plants(turns, [incident], h)[1]
 
 
 def real_alarm(turns: pd.DataFrame, incident: tuple[str, str], h: float) -> Optional[pd.Timestamp]:
@@ -133,11 +91,9 @@ def judged_weeks(turns: pd.DataFrame, incident: tuple[str, str]) -> float:
 
 
 def false_alarm_rate(h: float, p0: float, streams: int = RATE_STREAMS, seed: int = RATE_SEED) -> float:
-    """False alarms a week of turns, from streams generated at `p0` with nothing planted.
-    Every alarm in them is false by construction, which the real clean days cannot promise."""
-    rng = np.random.default_rng(seed)
-    alarms = sum(len(miss_cusum(list(rng.random(RATE_STREAM) < p0), p0, float(h))) for _ in range(streams))
-    return alarms / (streams * RATE_STREAM) * TURNS_A_WEEK
+    """False alarms a week of TURNS_A_WEEK turns, from streams generated at `p0` with
+    nothing planted (see warning_gates.alarms_per_turn)."""
+    return alarms_per_turn(h, p0, streams, seed) * TURNS_A_WEEK
 
 
 def rate_sweep() -> pd.DataFrame:
