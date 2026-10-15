@@ -445,10 +445,10 @@ the same days. Subagents' tool loops ship no setting, and it says so. On the sam
 ```
 Early warnings, turn by turn:
 Cache-miss warning: PASS
-  False warnings: 0.16 a week expected at your usual miss rate (0.42% median) and 487 new-prompt turns a week, over 4.3 weeks judged, against a bar of 1 every 6 weeks (0.17).
+  False warnings: 0.06 a week expected at your usual miss rate (0.42% median) and 487 new-prompt turns a week, over 4.3 weeks judged, against a bar of 1 every 6 weeks (0.17).
   On 2 judged days the usual miss rate was under 0.2%, the floor the check judges against, and counts at it.
   Your history alarmed on 2026-09-17 outside the cache incidents ccdrift follows.
-  A planted 5% miss rate is caught in a median 26 turns, 50 of 50 runs from 10 starts, 2026-09-09 to 2026-10-14, against a bar of 150 turns.
+  A planted 5% miss rate is caught in a median 41 turns, 50 of 50 runs from 10 starts, 2026-09-09 to 2026-10-14, against a bar of 150 turns.
 Tool-loop warning: PASS
   No alarm on 33 days judged at the most sensitive usual rate, 0.2%.
   A planted 2% miss rate is caught in 50 of 50 runs (100%), in a median 119.5 turns, against 90% within a median of 300.
@@ -497,7 +497,7 @@ catch on yours, and the research harness in
 
 Every run also follows new-prompt turns one by one with a likelihood-ratio CUSUM that
 tests the usual miss rate of the 14 days before the last week against 5%, the August
-regression's rate. It warns when the sum passes h = 4 (measured in
+regression's rate. It warns when the sum passes h = 5 (measured in
 [lab/early_warning.py](https://github.com/rkolesnichenko/ccdrift/blob/main/lab/early_warning.py)) within the last day, at most once a
 week, and not while a cache incident is open. It needs 200 or more new-prompt turns in
 those 14 days, so it stays quiet for the first three weeks or so of history.

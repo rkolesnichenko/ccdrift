@@ -458,12 +458,20 @@ def test_the_command_line_passes_its_source_state_and_json_through(tmp_path, mon
                      ((tmp_path / "logs", tmp_path / "state.json"), {"as_json": False})]
 
 
+@pytest.fixture
+def h4(monkeypatch):
+    """The cache-miss histories built to fall on one side of the bar or the other at h = 4's
+    alarm rate, whatever h ships: they test the judging, the gate tests the setting."""
+    monkeypatch.setattr(early, "THRESHOLD", 4.0)
+
+
 def cache_miss(tmp_path, days, per_day, incidents=()):
     """The cache-miss warning on main-thread days from Sep 1, judged on the day after the last."""
     main_thread_days(tmp_path, days, per_day=per_day)
     return cache_miss_warning(parse_all(tmp_path).responses, list(incidents), date.fromisoformat(nth_day(len(days))))
 
 
+@pytest.mark.usefixtures("h4")
 @pytest.mark.parametrize("per_day, misses, verdict, false_a_week, turns_a_week, at_floor", [
     (51, 1, "pass", 0.11, 350, 0),
     (201, 4, "fail", 0.43, 1400, 1),
@@ -493,6 +501,7 @@ def test_a_cache_incidents_days_leave_the_cache_miss_warning_as_the_check_leaves
         verdict, days, usual_rate, alarms)
 
 
+@pytest.mark.usefixtures("h4")
 @pytest.mark.parametrize("metric, days, false_a_week", [("cache_ratio", 24, 0.22), ("haiku_fraction", 62, 0.221)])
 def test_days_of_new_prompts_the_cache_miss_warning_leaves_out_leave_its_weeks_too(tmp_path, metric, days,
                                                                                     false_a_week):
@@ -553,6 +562,7 @@ def test_the_cache_miss_warning_has_not_enough_data_without_200_new_prompt_turns
     assert (result["verdict"], result["days"]) == ("not_enough_data", 0)
 
 
+@pytest.mark.usefixtures("h4")
 def test_a_planted_miss_rate_the_cache_miss_warning_cant_catch_within_a_median_of_150_turns_fails_its_reach(
         tmp_path):
     # 20 turns a day against a usual rate of 2.5%: a planted 5% gains too slowly for a week.
@@ -561,6 +571,7 @@ def test_a_planted_miss_rate_the_cache_miss_warning_cant_catch_within_a_median_o
         "fail", ["reach"], 15, 50, None)
 
 
+@pytest.mark.usefixtures("h4")
 def test_the_days_the_history_itself_raises_a_cache_miss_warning_are_listed_and_never_decide_the_verdict(tmp_path):
     result = cache_miss(tmp_path, [{"misses": 3 if i == 20 else i % 2} for i in range(28)], 51)
     assert (result["verdict"], result["alarms"]) == ("pass", [nth_day(20)])

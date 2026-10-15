@@ -818,7 +818,7 @@ def test_a_state_from_an_older_ccdrift_is_rejudged_once_and_keeps_a_real_change(
 
 
 def test_check_warns_within_a_day_when_new_prompts_start_missing_the_cache(tmp_path, sent, capsys):
-    # Ten misses in a row on Sep 21 from 10:50 UTC pass h = THRESHOLD = 4.0 at 10:59;
+    # Ten misses in a row on Sep 21 from 10:50 UTC pass h = THRESHOLD = 5.0 by 10:59;
     # the second run, an hour later, stays quiet.
     main_thread_days(tmp_path / "logs", [{}] * 20 + [{"misses": 10}])
     check_logs(tmp_path, today=date(2026, 9, 22))
