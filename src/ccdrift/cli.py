@@ -123,8 +123,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_source(rate)
     _add_state(rate)
 
-    calibrate = commands.add_parser("calibrate", help="whether the daily verdict's settings catch on your history what "
-                                    "they caught on the logs they were tuned on")
+    calibrate = commands.add_parser("calibrate", help="whether the daily verdict's and early warnings' settings catch "
+                                    "on your history what they caught on the logs they were tuned on")
     calibrate.add_argument("--json", action="store_true", help="print the calibration as JSON")
     _add_source(calibrate)
     _add_state(calibrate)

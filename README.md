@@ -396,26 +396,27 @@ holding only some of this machine's projects lowers the rate, and `quota` says s
 source isn't the default. `quota --json` holds the same aggregates, an empty rise as its day
 and points only.
 
-`ccdrift calibrate` says whether the daily verdict works on your history as it did on the
-logs it was tuned on. For the cache ratio, Haiku share and subagent read-back it runs the
-shipped detector over the days the check reads, as the check runs it: the days of open and
-recovered incidents stay out of the baselines, and a flag that meets an incident ccdrift
-follows isn't held against the metric. A flag over an incident you dismissed is, as the
-false alarm you marked it; so is any other. Then it plants a regression from up to 10
-starting days that meet no incident, each with 7 judged days before it and 3 after: on the
-main thread a cache drop or a Haiku rise of 5% to 70% from the start on, in subagents an
-extra 2% or 5% of loop turns reading only what their transcript opened with, over the start
-and the 3 days after, 5 times each. A plant is caught when the check would have reported it
-by the third day after its start, judging the history up to then; one whose flag meets an
-incident isn't, since the check reports no such flag. A metric passes when nothing flags and
-a planted 5% is caught from every start (in 90% of runs for subagent read-back), the bar the
-shipped settings cleared on the logs they were tuned on:
+`ccdrift calibrate` says whether the daily verdict and the early warnings work on your
+history as they did on the logs they were tuned on. For the cache ratio, Haiku share and
+subagent read-back it runs the shipped detector over the days the check reads, as the check
+runs it: the days of open and recovered incidents stay out of the baselines, and a flag
+that meets an incident ccdrift follows isn't held against the metric. A flag over an
+incident you dismissed is, as the false alarm you marked it; so is any other. Then it
+plants a regression from up to 10 starting days that meet no incident, each with 7 judged
+days before it and 3 after: on the main thread a cache drop or a Haiku rise of 5% to 70%
+from the start on, in subagents an extra 2% or 5% of loop turns reading only what their
+transcript opened with, over the start and the 3 days after, 5 times each. A plant is
+caught when the check would have reported it by the third day after its start, judging the
+history up to then; one whose flag meets an incident isn't, since the check reports no such
+flag. A metric passes when nothing flags and a planted 5% is caught from every start (in
+90% of runs for subagent read-back), the bar the shipped settings cleared on the logs they
+were tuned on:
 
 ```
-Calibration on your history, 2026-08-06 to 2026-10-13: 51 days judged on the main thread, 47 with subagent loops.
+Calibration on your history, 2026-08-06 to 2026-10-14: 52 days judged on the main thread, 48 with subagent loops.
 
 Cache ratio: PASS
-  A planted 5% drop is caught from 10 of 10 starts, 2026-09-04 to 2026-10-06.
+  A planted 5% drop is caught from 10 of 10 starts, 2026-09-04 to 2026-10-07.
   Smallest drop caught: 5% from every start.
   Nothing flags.
   Left out as incidents ccdrift follows: 2026-08-18 to 2026-09-03.
@@ -426,32 +427,35 @@ has not enough data with fewer than 11 judged days, or when no start's days fall
 days of each other clear of incidents, since the check reports only flags begun in the last
 14 days.
 
-It judges the two early warnings below the same way, by the bars their gates in lab/ set, on
-the complete days the check reads. For the cache-miss warning it works out how often to
+It judges the two early warnings below the same way, by the bars their gates in lab/ set,
+on the complete days the check reads. For the cache-miss warning it works out how often to
 expect a false warning: the alarms a simulated history at each day's usual miss rate raises
-with nothing planted, per turn, times your new-prompt turns, over the weeks the warning was on
-(a day with new prompts it doesn't judge, such as a cache incident's, leaves them; a day
-without any stays), so the same setting warns more often on a busier history. Once in 6 weeks
-or less passes, judged on 7 days or more; the days your own history alarmed on are listed
-beside it and decide nothing. A 5% miss rate planted from up to 10 starts, 5
-times each, must then be caught within a median of 150 new-prompt turns. The tool-loop
-warning passes with no alarm on any day judged at the most sensitive usual rate, 0.2%,
-outside the cache incidents ccdrift follows, and a planted 2% caught in 90% of runs within a
-median of 300 turns. Subagents' tool loops ship no setting, and it says so. On the same logs:
+with nothing planted, per turn (a rate under 0.2%, the floor the check judges against,
+counts at the floor, since a few hundred turns can't tell a lower one from it), times your new-prompt turns, over the weeks the warning was on (a day with new
+prompts it doesn't judge, such as a cache incident's, leaves them; a day without any
+stays), so the same setting warns more often on a busier history. Once in 6 weeks or less
+passes, judged on 7 days or more; the days your own history alarmed on are listed beside it
+and decide nothing. A 5% miss rate planted from up to 10 starts, 5 times each, must then be
+caught within a median of 150 new-prompt turns. The tool-loop warning passes with no alarm
+on any day judged at the most sensitive usual rate, 0.2%, outside the cache incidents
+ccdrift follows, and a planted 2% caught in 90% of runs within a median of 300 turns. It
+also says on which days the check, at your own usual rate, would alarm, which needn't be
+the same days. Subagents' tool loops ship no setting, and it says so. On the same logs:
 
 ```
 Early warnings, turn by turn:
 Cache-miss warning: PASS
-  False warnings: 0.16 a week expected at your usual miss rate (0.43% median) and 463 new-prompt turns a week, over 4.1 weeks judged, against a bar of 1 every 6 weeks (0.17).
-  Your history alarmed on 2026-09-17 outside the incidents ccdrift follows.
-  A planted 5% miss rate is caught in a median 26 turns, 50 of 50 runs from 10 starts, 2026-09-09 to 2026-10-13, against a bar of 150 turns.
+  False warnings: 0.16 a week expected at your usual miss rate (0.42% median) and 487 new-prompt turns a week, over 4.3 weeks judged, against a bar of 1 every 6 weeks (0.17).
+  On 2 judged days the usual miss rate was under 0.2%, the floor the check judges against, and counts at it.
+  Your history alarmed on 2026-09-17 outside the cache incidents ccdrift follows.
+  A planted 5% miss rate is caught in a median 26 turns, 50 of 50 runs from 10 starts, 2026-09-09 to 2026-10-14, against a bar of 150 turns.
 Tool-loop warning: PASS
-  No alarm on 32 days judged at the most sensitive usual rate, 0.2%.
-  A planted 2% miss rate is caught in 50 of 50 runs (100%), in a median 118.5 turns, against 90% within a median of 300.
+  No alarm on 33 days judged at the most sensitive usual rate, 0.2%.
+  A planted 2% miss rate is caught in 50 of 50 runs (100%), in a median 119.5 turns, against 90% within a median of 300.
 Subagent tool-loop warning: no setting ships, so subagents get no early warning.
 ```
 
-It replays the detector a few hundred times, 13 seconds on those 51 days, changes no state and
+It replays the detector a few hundred times, 13 seconds on those 52 days, changes no state and
 sends no alert. Session start and the other alerts aren't judged yet. `calibrate --json`
 holds days, counts, rates and sizes, with no paths, session ids or project names.
 

@@ -1,8 +1,8 @@
-"""`ccdrift calibrate`: whether the daily verdict works on this history as it did on the logs
-it was tuned on. Every cutoff ccdrift ships was measured on one person's logs; this runs the
-measurement behind three of them on anyone's: the daily detector's cache ratio, main-thread
-Haiku share and subagent read-back, judged on the turns the check judges with the shipped
-DetectorConfig.
+"""`ccdrift calibrate`: whether the daily verdict and the early warnings work on this history
+as they did on the logs they were tuned on. Every cutoff ccdrift ships was measured on one
+person's logs; this runs the measurement behind five of them on anyone's: the daily detector's
+cache ratio, main-thread Haiku share and subagent read-back, judged on the turns the check
+judges with the shipped DetectorConfig, and the cache-miss and tool-loop warnings.
 
 Each metric is judged as the check judges it: over the days the check reads, with the days of
 open and recovered incidents left out of the baselines (incidents.exclusions), and a flag run
@@ -21,7 +21,8 @@ different things under one name.
 
 The early warnings are judged by their gates' own measurement, in warning_gates, on the
 complete days the check reads: the cache-miss warning (G3) by how often it would warn on
-nothing at this history's usual rate and volume and how fast it catches a planted miss rate,
+nothing at this history's usual rate, held at the floor the check judges at, and volume and
+how fast it catches a planted miss rate,
 the tool-loop warning (G8) by whether it alarms at the most sensitive usual rate and how
 often it catches a planted one."""
 
@@ -303,9 +304,10 @@ def cache_miss_warning(responses: pd.DataFrame, incidents: Sequence[dict], today
     """The cache-miss warning (G3) judged on the new-prompt turns of the complete days
     before `today`, the days of every cache incident not dismissed left out as the check
     leaves them. Quiet: the false warnings a week to expect, each judged day's turns times
-    the simulated alarms per turn at its usual rate, over the calendar weeks judged, at most
-    MAX_FALSE_PER_WEEK; the days the history itself alarms are reported beside it. Reach: a
-    planted miss rate caught within a median of PROMPT_MAX_TURNS turns."""
+    the simulated alarms per turn at its usual rate, or MIN_P0 if higher, the floor the check
+    judges against and the gate measured from, over the calendar weeks judged, at most MAX_FALSE_PER_WEEK;
+    the days the history itself alarms are reported beside it. Reach: a planted miss rate
+    caught within a median of PROMPT_MAX_TURNS turns."""
     h = early.THRESHOLD
     if h is None:
         return {"warning": "cache_miss", "setting": None, "verdict": "none_ships"}
@@ -327,13 +329,16 @@ def cache_miss_warning(responses: pd.DataFrame, incidents: Sequence[dict], today
     first, last = min(judged), max(judged)
     off = {day for day in turns["day"].unique() if first <= day <= last and day not in judged}
     weeks = ((date.fromisoformat(last) - date.fromisoformat(first)).days + 1 - len(off)) / 7
-    false_a_week = sum(per_turn(rate) * counts[day] for day, rate in judged.items()) / weeks
+    # A rate under the floor simulated as it is warns less the lower it goes, and never at none,
+    # though a few hundred turns without a miss can't tell 0 from the floor.
+    false_a_week = sum(per_turn(max(rate, MIN_P0)) * counts[day] for day, rate in judged.items()) / weeks
     median = _median(runs)
     return {"warning": "cache_miss", "setting": setting,
             **_halves(false_a_week <= MAX_FALSE_PER_WEEK, median is not None and median <= PROMPT_MAX_TURNS),
             "days": len(judged), "weeks": round(weeks, 1), "turns_a_week": int(round(sum(counts[day] for day in judged) / weeks)),
-            "usual_rate": round(statistics.median(judged.values()), 4), "false_a_week": round(float(false_a_week), 3),
-            "bar_false_a_week": round(MAX_FALSE_PER_WEEK, 4), "alarms": sorted(set(prompt_alarm_days(turns, spans, h))),
+            "usual_rate": round(statistics.median(judged.values()), 4),
+            "days_at_floor": sum(rate < MIN_P0 for rate in judged.values()), "false_a_week": float(false_a_week),
+            "bar_false_a_week": MAX_FALSE_PER_WEEK, "alarms": sorted(set(prompt_alarm_days(turns, spans, h))),
             "starts": starts, "runs": len(runs), "caught": sum(run is not None for run in runs), "median_turns": median,
             "bar_turns": PROMPT_MAX_TURNS}
 
@@ -342,7 +347,8 @@ def tool_loop_warning(responses: pd.DataFrame, stream: str, incidents: Sequence[
     """The tool-loop warning of `stream` (G8 on the main thread) judged on its tool-loop
     turns of the complete days before `today`. Quiet: no qualifying alarm at the most
     sensitive usual rate on a judged day outside the cache incidents ccdrift follows, one in a
-    dismissed incident counting. Reach: a planted miss rate caught in CAUGHT_SHARE of runs
+    dismissed incident counting; the days it alarms on at the history's own rate, as the check
+    runs, are reported beside them. Reach: a planted miss rate caught in CAUGHT_SHARE of runs
     within a median of LOOP_MAX_TURNS turns. None in LOOP_SETTINGS means no setting ships."""
     setting = LOOP_SETTINGS[stream]
     if setting is None:
@@ -355,6 +361,9 @@ def tool_loop_warning(responses: pd.DataFrame, stream: str, incidents: Sequence[
     judged, alarms = loop_alarm_days(turns, usual, setting)
     judged = [day for day in judged if not meets(day, day, followed)]
     alarms = sorted({day for day in alarms if not meets(day, day, followed)})
+    # Not only on the days it alarms at the floor: a miss counts for less at a higher rate, so a
+    # rise can cross h a day later, after the floor's CUSUM has alarmed and started again.
+    own = sorted({day for day in loop_alarm_days(turns, usual, setting, own=True)[1] if not meets(day, day, followed)})
     starts, stretches = loop_plants(turns, usual)
     if not judged or not stretches:
         return {"warning": "tool_loop", "stream": stream, "setting": named, "verdict": "not_enough_data",
@@ -366,6 +375,7 @@ def tool_loop_warning(responses: pd.DataFrame, stream: str, incidents: Sequence[
     return {"warning": "tool_loop", "stream": stream, "setting": named,
             **_halves(not alarms, caught >= CAUGHT_SHARE * len(runs) and median is not None and median <= LOOP_MAX_TURNS),
             "days": len(judged), "alarms": alarms, "dismissed": [day for day in alarms if meets(day, day, dismissed)],
+            "own_alarms": own,
             "starts": starts, "runs": len(runs), "caught": caught, "median_turns": median, "bar_share": CAUGHT_SHARE,
             "bar_turns": LOOP_MAX_TURNS}
 
@@ -424,6 +434,15 @@ def metric_lines(result: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _digits(rate: float, bar: float) -> int:
+    """The decimals, two at least, that print `rate` apart from `bar` when they differ, so a
+    rate just past the bar never prints as the bar."""
+    digits = 2
+    while rate != bar and f"{rate:.{digits}f}" == f"{bar:.{digits}f}":
+        digits += 1
+    return digits
+
+
 def _starts_text(starts: Sequence[str]) -> tuple[str, str]:
     """How many starts, "10 starts", and over which days, "2026-08-27 to 2026-10-07"."""
     count = CALIBRATE_LINES["starts_one" if len(starts) == 1 else "starts_many"].format(count=len(starts))
@@ -441,10 +460,13 @@ def warning_lines(result: dict[str, Any]) -> list[str]:
         return [WARNING_LINES["cache_few_days"].format(name=name, days=result["days"], need=MIN_WARNING_DAYS)]
     if result["verdict"] == "not_enough_data":
         return [WARNING_LINES[kind + "not_enough_data"].format(
-            name=name, turns=early.MIN_BASE_TURNS if cache else loops.MIN_BASE_TURNS, days=early.BASE_DAYS)]
+            name=name, turns=early.MIN_BASE_TURNS if cache else loops.MIN_BASE_TURNS,
+            days=early.BASE_DAYS if cache else loops.BASE_DAYS)]
     plant, bar = planted_text(PROMPT_PLANT if cache else LOOP_PLANT), PROMPT_MAX_TURNS if cache else LOOP_MAX_TURNS
+    digits = _digits(result["false_a_week"], MAX_FALSE_PER_WEEK) if cache else 2
     why = WARNING_LINES["and"].join(WARNING_LINES[kind + "why_" + half].format(
-        rate=result.get("false_a_week"), plant=plant, turns=bar, share=CAUGHT_SHARE) for half in result["failed"])
+        rate=result.get("false_a_week"), digits=digits, plant=plant, turns=bar, share=CAUGHT_SHARE)
+        for half in result["failed"])
     lines = [WARNING_LINES["fail"].format(name=name, why=why) if result["failed"]
              else WARNING_LINES["pass"].format(name=name)]
     starts, span = _starts_text(result["starts"])
@@ -452,7 +474,10 @@ def warning_lines(result: dict[str, Any]) -> list[str]:
     if cache:
         lines.append(WARNING_LINES["cache_quiet"].format(
             rate=result["false_a_week"], usual=result["usual_rate"], turns=result["turns_a_week"],
-            weeks=result["weeks"], every=round(1 / MAX_FALSE_PER_WEEK), bar=MAX_FALSE_PER_WEEK))
+            weeks=result["weeks"], every=round(1 / MAX_FALSE_PER_WEEK), bar=MAX_FALSE_PER_WEEK, digits=digits))
+        if result["days_at_floor"]:
+            lines.append(WARNING_LINES["cache_floor_one" if result["days_at_floor"] == 1 else "cache_floor"].format(
+                days=result["days_at_floor"], floor=MIN_P0))
         lines.append(WARNING_LINES["cache_alarmed"].format(days=", ".join(result["alarms"])) if result["alarms"]
                      else WARNING_LINES["cache_alarmed_none"])
         lines.append(WARNING_LINES["cache_reach" if median is not None else "cache_reach_never"].format(
@@ -466,6 +491,10 @@ def warning_lines(result: dict[str, Any]) -> list[str]:
         lines.append(WARNING_LINES["loop_dismissed"].format(days=", ".join(result["dismissed"])))
     if not result["alarms"]:
         lines.append(WARNING_LINES["loop_quiet"].format(days=result["days"], floor=MIN_P0))
+    if result["own_alarms"]:
+        lines.append(WARNING_LINES["loop_own"].format(days=", ".join(result["own_alarms"])))
+    elif result["alarms"]:
+        lines.append(WARNING_LINES["loop_own_none"])
     lines.append(WARNING_LINES["loop_reach" if median is not None else "loop_reach_never"].format(
         plant=plant, caught=result["caught"], runs=result["runs"], share=result["caught"] / result["runs"],
         median=median, bar_share=CAUGHT_SHARE, bar=bar))
@@ -502,9 +531,10 @@ def calibrate_json(result: dict[str, Any]) -> str:
 
 
 def run_calibrate(source: Path, state_path: Path, as_json: bool = False, today: Optional[date] = None) -> int:
-    """Print whether the daily detector's shipped settings work on the history under `source`
-    that the check reads, with the incidents in the state at `state_path` left out. Changes no state and sends no
-    alert; like `cost`, it brings a store a check has claimed up to date first."""
+    """Print whether the daily detector's and the early warnings' shipped settings work on the
+    history under `source` that the check reads, with the incidents in the state at
+    `state_path` left out. Changes no state and sends no alert; like `cost`, it brings a store
+    a check has claimed up to date first."""
     today = today or datetime.now(timezone.utc).date()
     try:
         incidents = load_state(state_path)["incidents"]

@@ -120,20 +120,22 @@ def loop_base_rate(turns: pd.DataFrame, first_day: str) -> Optional[float]:
 
 
 def loop_alarm_days(turns: pd.DataFrame, usual: Callable[[str], Optional[float]],
-                    setting: LoopSetting) -> tuple[list[str], list[str]]:
+                    setting: LoopSetting, own: bool = False) -> tuple[list[str], list[str]]:
     """The days judged, those with a usual rate, and the day of each qualifying alarm on
     them, each day judged as the hourly check would: over the WINDOW_DAYS days ending on
     it, counting only alarms that fall on it. The usual rate is held at its floor, MIN_P0,
-    the most sensitive rate the check can run at."""
+    the most sensitive rate the check can run at, or with `own` is the history's own, as
+    the check runs it."""
     judged, found = [], []
     for day in sorted(turns["day"].unique()):
         first = shift(day, -(loops.WINDOW_DAYS - 1))
-        if usual(first) is None:
+        rate = usual(first)
+        if rate is None:
             continue
         judged.append(day)
         stretch = turns[turns["day"].between(first, day)].reset_index(drop=True)
         on_day = stretch["day"].to_numpy() == day
-        found += [day for _, alarm in qualifying_alarms(stretch, MIN_P0, setting) if on_day[alarm]]
+        found += [day for _, alarm in qualifying_alarms(stretch, rate if own else MIN_P0, setting) if on_day[alarm]]
     return judged, found
 
 
