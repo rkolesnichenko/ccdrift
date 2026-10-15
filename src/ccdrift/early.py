@@ -23,8 +23,8 @@ MIN_P0 = 0.002
 MAX_P0 = 0.025
 # G3 (lab/early_warning.py), 2026-10-15: h = 4 warned falsely up to 0.00042 times a new-prompt
 # turn (usual rate 0.43%), past the bar of one in 6 weeks above 397 turns a week, and the owner's
-# logs have run 532 a week since mid-September; h = 5 at most 0.00013 over the rates the gate
-# simulates, 0.069 a week at 532 (0.00016 at 0.65% on a finer grid, 0.085), and still catches a
+# logs have run 532 a week since mid-September; h = 5 at most 0.00016 over the rates the gate
+# simulates (at 0.65%), 0.085 a week at 532, and still catches a
 # planted 5% in a median 41 turns and the August regression at 2026-08-19 13:25 UTC, inside the
 # gate's deadline.
 THRESHOLD: Optional[float] = 5.0

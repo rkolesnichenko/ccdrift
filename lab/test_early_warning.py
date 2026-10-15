@@ -69,8 +69,9 @@ def test_the_bar_separates_the_shipped_threshold_from_the_noisy_ones():
 
 def test_the_usual_rates_the_gate_simulates_hold_the_worst_one_for_the_shipped_threshold():
     # Two misses add 2 x ln(0.05/p0), past h = 5 only below about 0.41%, so the worst rate falls
-    # between the ones the gate first simulated: on this grid, 0.65%.
-    grid = [round(0.002 + 0.0005 * i, 4) for i in range(47)]
+    # between the ones the gate first simulated: on this grid over the rates the check clamps to, 0.65%.
+    steps = round((early.MAX_P0 - early.MIN_P0) / 0.0005)
+    grid = [round(early.MIN_P0 + 0.0005 * i, 4) for i in range(steps + 1)]
     worst = max(false_alarm_rate(early.THRESHOLD, p0) for p0 in grid)
     assert max(false_alarm_rate(early.THRESHOLD, p0) for p0 in early_warning.RATE_P0S) >= worst
 
