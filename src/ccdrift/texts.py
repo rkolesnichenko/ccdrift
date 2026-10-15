@@ -1279,8 +1279,9 @@ CALIBRATE_LINES = {"measuring": "Planting changes in your history and replaying 
                    "not_enough_data": "{name}: NOT ENOUGH DATA, {days:,} days judged where a planted change needs "
                                       "{need}: {before} before its start and {after} after it",
                    "no_clear_start": "{name}: NOT ENOUGH DATA, {days:,} days judged, but none can start a planted "
-                                     "change: it needs {before} judged days before it and {after} after it, all "
-                                     "within {within} days and meeting no incident ccdrift follows",
+                                     "change: it needs {before} days before it with a value that no incident leaves "
+                                     "out of the baseline, and {after} after it, all within {within} days and meeting no "
+                                     "incident ccdrift follows",
                    "why_quiet": "it flags days outside the incidents ccdrift follows",
                    "why_reach": "a planted {bar} {move} is missed",
                    "why_both": "it flags days outside the incidents ccdrift follows, and a planted {bar} {move} is "

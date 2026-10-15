@@ -36,7 +36,7 @@ import statistics
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Collection, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -58,7 +58,8 @@ from ccdrift.warning_gates import (CAUGHT_SHARE, LOOP_MAX_TURNS, LOOP_PLANT, MAX
 
 # Starting days for a plant, and the judged days each needs around it: the detector needs
 # min_baseline (5) days to judge one, and a flag needs deviant_bins (3) deviant days of
-# flag_window (4), so a start has 7 judged days before it and 3 after.
+# flag_window (4), so a start has 7 days before it that the baseline counts, with a value
+# for the metric and outside the incidents it leaves out, and 3 after.
 STARTS = 10
 BEFORE = 7
 AFTER = 3
@@ -67,7 +68,9 @@ SEEDS = 5
 # The bar the shipped settings cleared on the owner's logs, judged on the check's own turns
 # with the recorded incident (cache, 2026-08-18..09-03) left out: a planted 5% caught from 10
 # of 10 starts for the cache ratio and for Haiku share (2026-10-14, 51 days), and for subagent
-# read-back in 50 of 50 runs against G17's bar of 90% (2026-09-29).
+# read-back in 50 of 50 runs against G17's bar of 90% (2026-09-29). With the incident moved to
+# 2026-08-16..09-04 and starts counting only the days a baseline counts, 10 of 10 again for
+# both, the cache ratio's first start 2026-09-09 (0.29.1, 2026-10-15, 52 days).
 BAR = 0.05
 SUBAGENT_SHARE = 0.9
 # The plant sizes: the harness's sweep grid for the main thread, G17's for subagents. Each
@@ -141,12 +144,15 @@ def prefix_reads(planted: pd.DataFrame, opening: pd.Series, chosen: np.ndarray) 
 
 
 def plant_starts(days: list[str], starts: int = STARTS, avoid: Sequence[tuple[str, Optional[str]]] = (),
-                 within: Optional[int] = None) -> list[str]:
-    """Up to `starts` days, evenly spread, with BEFORE judged days before and AFTER after,
-    and none whose AFTER days after it meet a span of `avoid` or, given `within`, end that
-    many calendar days or more after it."""
+                 within: Optional[int] = None, left_out: Sequence[tuple[str, Optional[str]]] = (),
+                 empty: Collection[str] = ()) -> list[str]:
+    """Up to `starts` days, evenly spread, with BEFORE days before that the baseline counts,
+    outside the spans of `left_out` and not `empty` (no value for the metric), and AFTER
+    after, and none whose AFTER days after it meet a span of `avoid` or, given `within`, end
+    that many calendar days or more after it."""
+    kept = np.cumsum([0] + [not meets(day, day, left_out) and day not in empty for day in days])
     eligible = [day for i, day in enumerate(days)
-                if BEFORE <= i < len(days) - AFTER and not meets(day, days[i + AFTER], avoid)
+                if kept[i] >= BEFORE and i < len(days) - AFTER and not meets(day, days[i + AFTER], avoid)
                 and (within is None or (date.fromisoformat(days[i + AFTER]) - date.fromisoformat(day)).days < within)]
     if len(eligible) <= starts:
         return eligible
@@ -170,10 +176,20 @@ def meets(first: str, last: str, spans: Sequence[tuple[str, Optional[str]]]) -> 
     return any(start <= last and first <= (end or OPEN_END) for start, end in spans)
 
 
+def _binned(frame: pd.DataFrame, metric: str) -> pd.DataFrame:
+    return bin_metrics(frame, metrics=SUBAGENT_METRICS) if metric in SUBAGENT_METRICS else bin_metrics(frame)
+
+
+def _empty(frame: pd.DataFrame, metric: str) -> set[str]:
+    """The days of `frame` with no value for `metric`, which no baseline counts."""
+    binned = _binned(frame, metric)
+    return set() if binned.empty else set(binned.loc[binned[metric].isna(), "bin"].astype(str))
+
+
 def _judged(frame: pd.DataFrame, metric: str, incidents: Sequence[dict]) -> tuple[list[str], np.ndarray]:
     """The days the shipped detector judges `metric` on in `frame`, with the days of open and
     recovered incidents out of the baselines as the check leaves them, and which it flags."""
-    binned = bin_metrics(frame, metrics=SUBAGENT_METRICS) if metric in SUBAGENT_METRICS else bin_metrics(frame)
+    binned = _binned(frame, metric)
     if binned.empty:
         return [], np.zeros(0, dtype=bool)
     days = binned["bin"].astype(str).tolist()
@@ -214,7 +230,8 @@ def reach_main(frame: pd.DataFrame, metric: str, days: list[str], incidents: Seq
     spans = spans_of(incidents, metric, STATUSES)
     base = frame.sort_values("timestamp", kind="stable").reset_index(drop=True)
     first_turn = base.reset_index().groupby(base["day"].astype(str))["index"].min()
-    starts = plant_starts(days, avoid=spans, within=RECENT_DAYS)
+    starts = plant_starts(days, avoid=spans, within=RECENT_DAYS, left_out=left_out(incidents, metric),
+                          empty=_empty(frame, metric))
     caught = {size: 0 for size in SIZES}
     floors: dict[str, Optional[float]] = {}
     for start in starts:
@@ -237,7 +254,8 @@ def reach_subagent(frame: pd.DataFrame, opening: pd.Series, days: list[str],
     after it, with SEEDS seeds, as G17 does: caught counts by size over every run, and the
     floor per start, the smallest size every seed caught there."""
     spans = spans_of(incidents, "subagent_cache", STATUSES)
-    starts = plant_starts(days, avoid=spans, within=RECENT_DAYS)
+    starts = plant_starts(days, avoid=spans, within=RECENT_DAYS, left_out=left_out(incidents, "subagent_cache"),
+                          empty=_empty(frame, "subagent_cache"))
     caught = {size: 0 for size in SUBAGENT_SIZES}
     floors: dict[str, Optional[float]] = {start: None for start in starts}
     for start in starts:

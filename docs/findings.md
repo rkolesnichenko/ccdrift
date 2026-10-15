@@ -247,6 +247,10 @@ The gate turned its simulated false alarms per turn into a rate a week at 343 ne
 - **2026-09-17 depends on the incident's span.** The gate counts no false alarm at h = 5. `calibrate` on the owner's store still lists 2026-09-17, because it leaves out the incident recorded in the state, 2026-08-18..09-03, which keeps 2026-09-04 in that day's 14 days and puts the usual rate at 0.37%; with the gate's documented span, 2026-08-16..09-04, it is 0.43% and h = 5 stays quiet. A fresh parse and the store give the same turns either way.
 - **`calibrate` at h = 5:** 0.061 false warnings a week at 487 new-prompt turns a week over 4.3 weeks (2 days at the floor), a planted 5% caught in 50 of 50 runs in a median 41 turns.
 
+## Plants start where the baseline can judge, 2026-10-15
+
+On 2026-10-15 the owner moved the recorded cache incident to 2026-08-16..09-04, the span the G3 gate and the August notes use. `calibrate` then failed the cache ratio: 9 of 10 starts caught a planted 5%, and 2026-09-05 caught nothing up to 70%. A start needed 7 judged days before it, counted whether or not an incident left them out of the baseline, and with 2026-08-16..09-04 out only 3 days were left before 2026-09-05 (08-06, 08-07, 08-15), under the detector's min_baseline of 5, so no plant there could be judged by the third day after it. At 2026-08-18..09-03 it had passed only because two of the regression's own days stood in the baseline. 0.29.1 counts the 7 days before a start among the days a baseline counts: outside open and recovered incidents, and, as its review found, with a value for the metric, since a day with no new-prompt turn has no cache ratio and the detector skips it too (on a synthetic history with 4 such days, a start right after them was missed for the same reason). On the owner's store the first start is now 2026-09-09 and the cache ratio passes from 10 of 10 starts. The check itself never judged a day on fewer than 5 baseline days with a value, so it is unchanged.
+
 [what-ccdrift-caught.html](what-ccdrift-caught.html) charts the regression and the detection results.
 
 Reproduce them with the harness in `lab/`; see [lab/README.md](../lab/README.md).
