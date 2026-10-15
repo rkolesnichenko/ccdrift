@@ -67,6 +67,14 @@ def test_the_bar_separates_the_shipped_threshold_from_the_noisy_ones():
     assert (sweep.loc[3] > MAX_FALSE_PER_WEEK).all()
 
 
+def test_the_usual_rates_the_gate_simulates_hold_the_worst_one_for_the_shipped_threshold():
+    # Two misses add 2 x ln(0.05/p0), past h = 5 only below about 0.41%, so the worst rate falls
+    # between the ones the gate first simulated: on this grid, 0.65%.
+    grid = [round(0.002 + 0.0005 * i, 4) for i in range(47)]
+    worst = max(false_alarm_rate(early.THRESHOLD, p0) for p0 in grid)
+    assert max(false_alarm_rate(early.THRESHOLD, p0) for p0 in early_warning.RATE_P0S) >= worst
+
+
 def test_the_gate_measures_the_usual_rate_over_the_days_and_turns_the_check_uses():
     # A copy of MIN_BASE_TURNS at 100 against the shipped 200 once had the gate judge a
     # looser check than the one that runs.

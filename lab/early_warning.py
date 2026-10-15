@@ -51,7 +51,10 @@ DEADLINE_DAYS = 5
 # (24 days, 76 a day, 2026-10-15). Over every clean day since 2026-08-06 it is 371 (35 days, 53 a
 # day); it was 343 when the gate was written, and h = 4's false alarms pass the bar above 397.
 TURNS_A_WEEK = 532
-RATE_P0S = (0.002, 0.0043, 0.010)   # the floor the check clamps to, the observed clean rate, and above it
+# The floor the check clamps to, the observed clean rate, the rate h = 5 does worst at, and above it.
+# On a grid from 0.2% to 2.5% at RATE_SEED, h = 5 peaks at 0.00016 alarms a turn at 0.65%, with 0.6% and
+# 0.7% at 0.000135 and 0.000125, so the peak is partly the seed's; the gate takes it anyway (2026-10-15).
+RATE_P0S = (0.002, 0.0043, 0.0065, 0.010)
 
 
 def _shift(day: str, days: int) -> str:
