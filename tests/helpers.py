@@ -432,13 +432,14 @@ def failure_days(path, days, per_day=60):
 
 
 def tool_loop_days(path, days, per_day=100, misses=0, subagent=False, versions=None, miss_day=None, miss_days=None,
-                   models=None):
+                   models=None, miss_turns=None):
     """One CLI session a day from Sep 1, on the main thread or in a subagent of it: a
     prompt, then `per_day` turns a minute apart, each after a tool result and reading back
     what the one before had cached, with a second prompt halfway. The last `misses` turns
     of day `miss_day` (default the last day), or of each of `miss_days`, miss the cache,
-    reading nothing. `versions` gives each day's Claude Code version (default 2.1.226 every
-    day), `models` each day's model (default claude-opus-5)."""
+    reading nothing, as do the turns `miss_turns` gives by day. `versions` gives each day's
+    Claude Code version (default 2.1.226 every day), `models` each day's model (default
+    claude-opus-5)."""
     miss_days = set(miss_days) if miss_days is not None else {days - 1 if miss_day is None else miss_day}
     for d in range(days):
         version = versions[d] if versions else "2.1.226"
@@ -448,7 +449,7 @@ def tool_loop_days(path, days, per_day=100, misses=0, subagent=False, versions=N
             opens = k in (0, per_day // 2)
             records.append(prompt(ts, sid=f"s{d}", sidechain=subagent) if opens
                            else tool_result(ts, sid=f"s{d}", sidechain=subagent))
-            missed = d in miss_days and k > per_day - misses
+            missed = (d in miss_days and k > per_day - misses) or k in (miss_turns or {}).get(d, ())
             read = 0 if k == 0 or missed else cached
             written = 1000 if k == 0 else 100 + (cached if missed else 0)
             records.append(line(f"{'a' if subagent else 'm'}{d}-{k}", text(40), ts=ts, sid=f"s{d}",

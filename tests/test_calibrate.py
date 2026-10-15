@@ -6,16 +6,18 @@ from datetime import date
 import pytest
 
 import ccdrift.calibrate
-from ccdrift import early
+from ccdrift import early, loops
 from ccdrift.calibrate import (cache_miss_warning, calibrate_json, calibrate_lines, calibration, metric_lines, plant,
                                plant_starts, plant_subagent, run_calibrate, subagent_openings, tool_loop_warning,
                                warning_lines)
 from ccdrift.cli import main
+from ccdrift.early import MIN_P0
 from ccdrift.history import History
 from ccdrift.logs import parse_all
 from ccdrift.loops import LOOP_SETTINGS, LoopSetting
 from ccdrift.state import STATE_VERSION
 from ccdrift.texts import floors_text
+from ccdrift.warning_gates import alarms_per_turn
 from tests.helpers import main_thread_days, nth_day, tool_loop_days
 
 
@@ -462,18 +464,21 @@ def cache_miss(tmp_path, days, per_day, incidents=()):
     return cache_miss_warning(parse_all(tmp_path).responses, list(incidents), date.fromisoformat(nth_day(len(days))))
 
 
-@pytest.mark.parametrize("per_day, misses, verdict, false_a_week, turns_a_week", [
-    (51, 1, "pass", 0.11, 350),
-    (201, 4, "fail", 0.418, 1400),
+@pytest.mark.parametrize("per_day, misses, verdict, false_a_week, turns_a_week, at_floor", [
+    (51, 1, "pass", 0.11, 350, 0),
+    (201, 4, "fail", 0.43, 1400, 1),
 ])
 def test_the_cache_miss_warning_is_judged_quiet_by_its_false_warnings_at_this_historys_rate_and_volume(
-        tmp_path, per_day, misses, verdict, false_a_week, turns_a_week):
+        tmp_path, per_day, misses, verdict, false_a_week, turns_a_week, at_floor):
     # A miss every other day keeps the usual rate at 1% either way; four times the turns a
-    # week are four times the false warnings, past the bar of one in 6 weeks.
+    # week are four times the false warnings, past the bar of one in 6 weeks. At 200 turns a
+    # day the first day judged rests on one day without a miss, and counts at the floor.
     result = cache_miss(tmp_path, [{"misses": misses * (i % 2)} for i in range(28)], per_day)
-    assert (result["verdict"], result["usual_rate"], result["false_a_week"], result["turns_a_week"]) == (
-        verdict, 0.01, false_a_week, turns_a_week)
+    assert (result["verdict"], result["usual_rate"], result["false_a_week"], result["turns_a_week"],
+            result["days_at_floor"]) == (verdict, 0.01, pytest.approx(false_a_week, abs=5e-4), turns_a_week, at_floor)
     assert result["failed"] == ([] if verdict == "pass" else ["quiet"])
+    # Unrounded, as the verdict compares it: rounded, a rate just past the bar could equal it.
+    assert (round(result["false_a_week"], 3) != result["false_a_week"], result["bar_false_a_week"]) == (True, 1 / 6)
 
 
 @pytest.mark.parametrize("status, verdict, days, usual_rate, alarms", [
@@ -497,7 +502,7 @@ def test_days_of_new_prompts_the_cache_miss_warning_leaves_out_leave_its_weeks_t
     incident = {"metric": metric, "start": nth_day(20), "end": nth_day(49), "status": "recovered"}
     result = cache_miss(tmp_path, [{"misses": 1}] * 70, 101, [incident])
     assert (result["verdict"], result["days"], result["turns_a_week"], result["false_a_week"]) == (
-        "fail", days, 700, false_a_week)
+        "fail", days, 700, pytest.approx(false_a_week, abs=5e-4))
 
 
 def test_days_without_new_prompts_count_as_weeks_the_cache_miss_warning_was_on(tmp_path):
@@ -513,6 +518,33 @@ def test_the_cache_miss_warning_needs_a_week_of_judged_days_for_a_rate_a_week(tm
     assert (result["verdict"], result["days"]) == ("not_enough_data", 4)
     assert warning_lines(result) == [
         "Cache-miss warning: NOT ENOUGH DATA, 4 days judged, and a rate a week needs 7"]
+
+
+def test_a_usual_miss_rate_under_the_floor_the_check_judges_at_counts_at_the_floor(tmp_path):
+    # No misses at all once simulated none, and passed any volume.
+    result = cache_miss(tmp_path, [{}] * 28, 51)
+    assert (result["usual_rate"], result["days"], result["days_at_floor"], result["false_a_week"]) == (
+        0, 18, 18, pytest.approx(alarms_per_turn(early.THRESHOLD, MIN_P0) * 350))
+
+
+@pytest.mark.parametrize("rate, at_floor", [(0.001, 28), (MIN_P0, 0)], ids=["under", "at"])
+def test_a_usual_miss_rate_between_none_and_the_floor_counts_at_the_floor_and_one_at_it_as_itself(
+        tmp_path, monkeypatch, rate, at_floor):
+    monkeypatch.setattr(ccdrift.calibrate, "prompt_base_rate", lambda *args: rate)
+    result = cache_miss(tmp_path, [{}] * 28, 51)
+    assert (result["days"], result["days_at_floor"], result["false_a_week"]) == (
+        28, at_floor, pytest.approx(alarms_per_turn(early.THRESHOLD, MIN_P0) * 350))
+
+
+def test_neither_warning_judges_todays_turns_until_the_day_is_complete(tmp_path):
+    main_thread_days(tmp_path / "cache", [{"misses": i % 2} for i in range(27)] + [{"misses": 30}], per_day=51)
+    responses = parse_all(tmp_path / "cache").responses
+    assert [cache_miss_warning(responses, [], date.fromisoformat(nth_day(day)))["alarms"] for day in (27, 28)] == [
+        [], [nth_day(27)]]
+    tool_loop_days(tmp_path / "loop", 25, per_day=150, misses=2, miss_days=[24])
+    responses = parse_all(tmp_path / "loop").responses
+    assert [tool_loop_warning(responses, "main", [], date.fromisoformat(nth_day(day)))["alarms"] for day in (24, 25)] == [
+        [], [nth_day(24)]]
 
 
 def test_the_cache_miss_warning_has_not_enough_data_without_200_new_prompt_turns_in_the_14_days_before_a_day(
@@ -557,6 +589,23 @@ def test_a_tool_loop_alarm_at_the_floor_fails_quiet_unless_a_cache_incident_ccdr
     result = tool_loop(tmp_path, 24, incidents, per_day=150, misses=2, miss_days=[20])
     assert (result["verdict"], result["days"], result["alarms"], result["dismissed"]) == (verdict, days, alarms, dismissed)
     assert result["failed"] == (["quiet"] if verdict == "fail" else [])
+    # A usual rate of none is under the floor, so the check runs at the floor too.
+    assert result["own_alarms"] == alarms
+
+
+def test_tool_loop_alarms_at_the_floor_are_told_beside_those_the_check_raises_at_the_users_own_rate(tmp_path):
+    # Two misses in a row every other day keep the usual rate at 0.5%: past h = 3 at the floor,
+    # 2 × ln(0.02/0.005) = 2.8 at the user's own rate.
+    result = tool_loop(tmp_path, 24, per_day=200, misses=2, miss_days=range(0, 24, 2))
+    assert (result["verdict"], result["alarms"], result["own_alarms"]) == (
+        "fail", [nth_day(day) for day in range(12, 24, 2)], [])
+
+
+def test_the_check_at_the_users_own_rate_can_alarm_on_a_day_the_floor_doesnt(tmp_path):
+    # Two misses at day 25's end and one at day 26's start: the floor alarms on the second and
+    # starts again, while at the usual 0.5% each counts for less and only the third crosses h.
+    result = tool_loop(tmp_path, 28, per_day=200, misses=1, miss_days=range(28), miss_turns={25: [199], 26: [1]})
+    assert (result["alarms"], result["own_alarms"]) == ([nth_day(25)], [nth_day(26)])
 
 
 def test_an_incident_of_another_metric_leaves_a_tool_loop_alarm_counted(tmp_path):
@@ -607,9 +656,9 @@ def test_a_median_past_every_catch_is_null_in_the_json(tmp_path):
 
 
 def cache_result(verdict="fail", failed=("quiet", "reach"), **fields):
-    defaults = {"days": 18, "weeks": 2.6, "turns_a_week": 1400, "usual_rate": 0.0043, "false_a_week": 0.418,
-                "alarms": [nth_day(7), nth_day(9)], "starts": [nth_day(3), nth_day(5), nth_day(9)], "runs": 15,
-                "caught": 4, "median_turns": None}
+    defaults = {"days": 18, "weeks": 2.6, "turns_a_week": 1400, "usual_rate": 0.0043, "days_at_floor": 0,
+                "false_a_week": 0.418, "alarms": [nth_day(7), nth_day(9)], "starts": [nth_day(3), nth_day(5), nth_day(9)],
+                "runs": 15, "caught": 4, "median_turns": None}
     return {"warning": "cache_miss", "setting": {"h": 4.0, "p1": 0.05}, "verdict": verdict, "failed": list(failed),
             **defaults, **fields}
 
@@ -620,7 +669,7 @@ def test_a_failed_cache_miss_warning_says_which_half_failed_and_what_its_history
         "isn't caught within a median of 150 turns",
         "  False warnings: 0.42 a week expected at your usual miss rate (0.43% median) and 1,400 new-prompt turns a "
         "week, over 2.6 weeks judged, against a bar of 1 every 6 weeks (0.17).",
-        "  Your history alarmed on 2026-09-08, 2026-09-10 outside the incidents ccdrift follows.",
+        "  Your history alarmed on 2026-09-08, 2026-09-10 outside the cache incidents ccdrift follows.",
         "  A planted 5% miss rate is not caught in a median: 4 of 15 runs from 3 starts, 2026-09-04 to 2026-09-10, "
         "against a bar of 150 turns."]
 
@@ -636,6 +685,33 @@ def test_a_passing_cache_miss_warning_says_what_it_rests_on():
         "2026-09-10, against a bar of 150 turns."]
 
 
+@pytest.mark.parametrize("verdict, failed, rate, head", [
+    ("fail", ["quiet"], 0.1668, "Cache-miss warning: FAIL, it would warn falsely 0.1668 times a week at your volume"),
+    ("pass", [], 0.1666, "Cache-miss warning: PASS"),
+], ids=["just-past", "just-under"])
+def test_a_rate_that_rounds_to_the_bar_is_told_to_the_digit_that_sets_them_apart(verdict, failed, rate, head):
+    assert warning_lines(cache_result(verdict=verdict, failed=failed, false_a_week=rate, alarms=[]))[:2] == [
+        head,
+        f"  False warnings: {rate} a week expected at your usual miss rate (0.43% median) and 1,400 new-prompt turns "
+        "a week, over 2.6 weeks judged, against a bar of 1 every 6 weeks (0.1667)."]
+
+
+def test_a_rate_at_the_bar_passes_and_prints_as_the_bar():
+    assert warning_lines(cache_result(verdict="pass", failed=[], false_a_week=1 / 6, alarms=[]))[:2] == [
+        "Cache-miss warning: PASS",
+        "  False warnings: 0.17 a week expected at your usual miss rate (0.43% median) and 1,400 new-prompt turns a "
+        "week, over 2.6 weeks judged, against a bar of 1 every 6 weeks (0.17)."]
+
+
+def test_days_whose_usual_miss_rate_counts_at_the_floor_are_counted_under_the_rate():
+    assert warning_lines(cache_result(verdict="pass", failed=[], false_a_week=0.159, days_at_floor=2))[1:3] == [
+        "  False warnings: 0.16 a week expected at your usual miss rate (0.43% median) and 1,400 new-prompt turns a "
+        "week, over 2.6 weeks judged, against a bar of 1 every 6 weeks (0.17).",
+        "  On 2 judged days the usual miss rate was under 0.2%, the floor the check judges against, and counts at it."]
+    assert warning_lines(cache_result(verdict="pass", failed=[], false_a_week=0.159, days_at_floor=1))[2] == (
+        "  On 1 judged day the usual miss rate was under 0.2%, the floor the check judges against, and counts at it.")
+
+
 def test_a_cache_miss_warning_with_one_half_failed_names_only_that_half():
     assert warning_lines(cache_result(failed=["reach"], false_a_week=0.02, alarms=[]))[:3] == [
         "Cache-miss warning: FAIL, a planted 5% miss rate isn't caught within a median of 150 turns",
@@ -646,22 +722,36 @@ def test_a_cache_miss_warning_with_one_half_failed_names_only_that_half():
 
 def loop_result(verdict="fail", failed=("quiet",), **fields):
     defaults = {"days": 11, "alarms": [nth_day(20), nth_day(21)], "dismissed": [nth_day(21)],
-                "starts": [nth_day(13)], "runs": 5, "caught": 5, "median_turns": 91.5}
+                "own_alarms": [nth_day(21)], "starts": [nth_day(13)], "runs": 5, "caught": 5, "median_turns": 91.5}
     return {"warning": "tool_loop", "stream": "main", "setting": {"p1": 0.02, "h": 3.0, "min_sessions": 1},
             "verdict": verdict, "failed": list(failed), **defaults, **fields}
 
 
-def test_a_tool_loop_warning_that_alarms_says_on_which_days_and_which_were_dismissed():
+def test_a_tool_loop_warning_that_alarms_says_on_which_days_which_were_dismissed_and_which_the_check_would_raise():
     assert warning_lines(loop_result()) == [
-        "Tool-loop warning: FAIL, it alarms outside the incidents ccdrift follows",
-        "  It alarms on 2026-09-21 with no incident recorded, at the most sensitive usual rate, 0.2%.",
+        "Tool-loop warning: FAIL, it alarms outside the cache incidents ccdrift follows",
+        "  It alarms on 2026-09-21 with no cache incident recorded, at the most sensitive usual rate, 0.2%.",
         "  It alarms on 2026-09-22, which you dismissed as a false alarm; dismissed alarms count against it.",
+        "  At your own usual rate, as the check runs, it alarms on 2026-09-22.",
         "  A planted 2% miss rate is caught in 5 of 5 runs (100%), in a median 91.5 turns, against 90% within a "
         "median of 300."]
 
 
+def test_tool_loop_alarms_the_check_wouldnt_raise_at_the_users_own_rate_are_said_to_be_none_of_its():
+    assert warning_lines(loop_result(dismissed=[], own_alarms=[]))[1:3] == [
+        "  It alarms on 2026-09-21, 2026-09-22 with no cache incident recorded, at the most sensitive usual rate, 0.2%.",
+        "  At your own usual rate, as the check runs, it raises none."]
+
+
+def test_an_alarm_only_the_users_own_rate_raises_is_told_beside_a_quiet_floor():
+    assert warning_lines(loop_result(verdict="pass", failed=[], alarms=[], dismissed=[], own_alarms=[nth_day(26)]))[1:3] == [
+        "  No alarm on 11 days judged at the most sensitive usual rate, 0.2%.",
+        "  At your own usual rate, as the check runs, it alarms on 2026-09-27."]
+
+
 def test_a_quiet_tool_loop_warning_that_misses_its_plant_says_how_often_it_was_caught():
-    assert warning_lines(loop_result(failed=["reach"], alarms=[], dismissed=[], caught=2, median_turns=None)) == [
+    assert warning_lines(loop_result(failed=["reach"], alarms=[], dismissed=[], own_alarms=[], caught=2,
+                                     median_turns=None)) == [
         "Tool-loop warning: FAIL, a planted 2% miss rate isn't caught in 90% of runs within a median of 300 turns",
         "  No alarm on 11 days judged at the most sensitive usual rate, 0.2%.",
         "  A planted 2% miss rate is caught in 2 of 5 runs (40%), not in a median, against 90% within a median of "
@@ -674,3 +764,10 @@ def test_a_warning_without_the_turns_to_judge_or_a_setting_says_so_in_one_line()
         "Cache-miss warning: NOT ENOUGH DATA, no week has 200 new-prompt turns in the 14 days before it"]
     assert warning_lines({"warning": "cache_miss", "setting": None, "verdict": "none_ships"}) == [
         "Cache-miss warning: no setting ships, so new prompts get no early warning."]
+
+
+def test_the_tool_loop_warnings_not_enough_data_line_counts_the_tool_loops_own_base_days(monkeypatch):
+    monkeypatch.setattr(loops, "BASE_DAYS", 21)
+    assert warning_lines({"warning": "tool_loop", "stream": "main", "setting": {"p1": 0.02, "h": 3.0, "min_sessions": 1},
+                          "verdict": "not_enough_data", "failed": [], "days": 0}) == [
+        "Tool-loop warning: NOT ENOUGH DATA, no week has 1,000 tool-loop turns in the 21 days before it"]
