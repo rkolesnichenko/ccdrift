@@ -136,6 +136,6 @@ def early_warning(responses: pd.DataFrame, incidents: Sequence[dict], state: dic
                "since": run["timestamp"].iloc[0].to_pydatetime().isoformat(timespec="seconds"),
                "misses": int(run["is_miss"].sum()), "turns": len(run), "base_rate": round(base_rate, 4),
                "versions": versions_text(main, sorted(run["day"].unique())),
-               "reported_on": now.date().isoformat()}
+               "reported_on": today.isoformat()}
     state["early_warnings"].append(warning)
     return warning

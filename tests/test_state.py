@@ -110,9 +110,10 @@ def test_each_run_is_recorded_with_its_start_and_outcome():
     assert state["last_ok"] == "2026-09-16T09:00:02+03:00"
 
 
-def test_successful_runs_keep_their_local_dates_the_newest_14():
+def test_successful_runs_keep_their_utc_dates_the_newest_14():
+    # 01:30 at UTC+3 is still the day before in UTC, the kind of day the weekly summary counts.
     state = new_state()
-    started = datetime(2026, 9, 1, 23, 30, tzinfo=timezone(timedelta(hours=3)))
+    started = datetime(2026, 9, 2, 1, 30, tzinfo=timezone(timedelta(hours=3)))
     for day in range(16):
         record_run(state, started + timedelta(days=day), None)
         record_run(state, started + timedelta(days=day, minutes=10), None)

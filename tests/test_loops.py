@@ -104,6 +104,12 @@ def test_a_rise_that_mixes_hits_and_misses_counts_its_turns_but_only_the_misses_
                        "versions": ["2.1.280 (since 09-21)"], "reported_on": "2026-09-21"}
 
 
+def test_a_tool_loop_warning_is_reported_on_its_utc_day_when_it_is_already_the_next_day_locally():
+    # 00:30 on Sep 22 at UTC+3 is 21:30 on Sep 21 in UTC, the day every other record is dated by.
+    late = datetime(2026, 9, 22, 0, 30, tzinfo=timezone(timedelta(hours=3)))
+    assert loop_warning(loop_frame(RISING), "main", new_state(), late, SETTING)["reported_on"] == "2026-09-21"
+
+
 def test_a_main_thread_warning_doesnt_silence_subagents():
     state = new_state()
     loop_warning(loop_frame(RISING), "main", state, NOW, SETTING)

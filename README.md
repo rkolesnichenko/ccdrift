@@ -469,6 +469,9 @@ the schedule again after moving or reinstalling ccdrift.
 
 ## How it decides
 
+A day is a UTC day everywhere in ccdrift, in what the check judges and in every day it
+reports; a time, and the date shown with it, is in this machine's time zone.
+
 For each complete UTC day, ccdrift looks at main-thread responses from the Claude Code
 CLI (Agent SDK sessions are your own scripts and are left out) and computes:
 

@@ -1,7 +1,7 @@
 """What a point of the usage limit costs: the walk over the quota samples, and its prices."""
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -75,6 +75,8 @@ def test_a_reset_day_steps_through_each_window_on_its_own():
 
 
 TODAY = date(2026, 9, 10)
+# Half an hour into Sep 10 at UTC+3, while it is still Sep 9 in UTC: a time shown in UTC is off by three hours.
+NOW = datetime(2026, 9, 10, 0, 30, tzinfo=timezone(timedelta(hours=3)))
 OPUS = {"claude-opus-5": Price(input_rate=5e-6, cache_read_rate=5e-7, output_rate=25e-6, web_search_rate=0.0,
                                residual=0.0, rows=9)}
 # One response at OPUS: 10 input and a million output tokens.
@@ -214,8 +216,8 @@ day           points      list $    $ per point
 2026-09-01         4          75          18.75
 2026-09-02         3          25           8.33
 
-Points rose while this machine spent nothing (UTC):
-  09-02 11:30, 2 points, nothing on this machine in the 60 minutes before
+Points rose while this machine spent nothing:
+  09-02 14:30, 2 points, nothing on this machine in the 60 minutes before
 Counted: every response on this machine, both threads, Agent SDK sessions included (25% of these dollars).
 This machine only: use on claude.ai or another device raises points with no dollars here.
 Per-model limits aren't in the status line, so the rate is for all models together.
@@ -228,7 +230,7 @@ def test_the_command_prints_the_windows_rate_a_row_a_day_the_empty_rises_and_wha
     samples_beside(state, two_days(tmp_path / "logs"))
     monkeypatch.setattr(exchange, "fitted_prices", lambda tables: OPUS)
     monkeypatch.setattr(exchange, "default_source", lambda: tmp_path / "logs")
-    assert run_quota(tmp_path / "logs", state, today=TODAY) == 0
+    assert run_quota(tmp_path / "logs", state, today=TODAY, now=NOW) == 0
     assert capsys.readouterr().out == EXPECTED
 
 
@@ -322,7 +324,13 @@ def test_the_command_line_passes_its_days_and_json_through(tmp_path, monkeypatch
 
 def test_a_rise_of_one_point_after_one_minute_is_said_in_the_singular():
     assert empty_rise_line({"when": "2026-09-02T11:30:00+00:00", "day": "2026-09-02", "points": 1.0,
-                            "minutes": 1}) == "  09-02 11:30, 1 point, nothing on this machine in the 1 minute before"
+                            "minutes": 1}, NOW) == "  09-02 14:30, 1 point, nothing on this machine in the 1 minute before"
+
+
+def test_an_empty_rise_shows_its_local_date_where_that_differs_from_its_utc_day():
+    # 22:10 UTC on Sep 8 is 01:10 on Sep 9 at UTC+3; the quota table above it still counts it on Sep 8.
+    assert empty_rise_line({"when": "2026-09-08T22:10:00+00:00", "day": "2026-09-08", "points": 2.0,
+                            "minutes": 45}, NOW) == "  09-09 01:10, 2 points, nothing on this machine in the 45 minutes before"
 
 
 def test_a_quiet_days_dollars_count_in_the_windows_rate_though_its_share_rose_on_a_later_day(tmp_path, monkeypatch):

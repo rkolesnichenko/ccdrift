@@ -333,15 +333,15 @@ def new_field_line(record: dict[str, Any]) -> str:
             f"{', '.join(paths)}")
 
 
-def loop_warning_line(warning: dict[str, Any]) -> str:
+def loop_warning_line(warning: dict[str, Any], now: datetime) -> str:
     sessions = f"{warning['sessions']} session{'' if warning['sessions'] == 1 else 's'}"
-    return (f"{LOOP_NAMES[warning['stream']]} at {warning['at'][:16].replace('T', ' ')} UTC: {warning['misses']} of "
+    return (f"{LOOP_NAMES[warning['stream']]} at {clock_text(warning['at'], now)}: {warning['misses']} of "
             f"{warning['turns']} turns in {sessions} (usually {warning['base_rate']:.2%}), "
             f"~{approx(warning['tokens'])} tokens rewritten")
 
 
-def early_warning_line(warning: dict[str, Any]) -> str:
-    return (f"cache misses rising at {warning['at'][:16].replace('T', ' ')} UTC: {warning['misses']} of "
+def early_warning_line(warning: dict[str, Any], now: datetime) -> str:
+    return (f"cache misses rising at {clock_text(warning['at'], now)}: {warning['misses']} of "
             f"{warning['turns']} new-prompt turns (usually {warning['base_rate']:.1%})")
 
 
@@ -427,11 +427,6 @@ def no_responses_message(episode: dict[str, Any], lines: int) -> str:
     return (f"{_transcripts(n)} of {lines} lines or more {'holds' if n == 1 else 'hold'} no response ccdrift "
             "recognises, so their days read as unused. Claude Code's log format may have changed; "
             "run `ccdrift peek`.")
-
-
-def sample_time(stamp: str) -> str:
-    """A quota sample's time, "2026-09-28T13:55:00+00:00", as "2026-09-28 13:55 UTC"."""
-    return f"{stamp[:16].replace('T', ' ')} UTC"
 
 
 def blank_cache_line(first: str) -> str:
@@ -1116,7 +1111,7 @@ QUOTA_LINES = {"head": "Quota points of the 7-day limit, priced at list from thi
                                 "and their {points}.",
                "nothing_here": "No response on this machine fell in the hours the status line sampled.",
                "no_empty": "No point rose while this machine spent nothing.",
-               "empty": "Points rose while this machine spent nothing (UTC):",
+               "empty": "Points rose while this machine spent nothing:",
                "counted": "Counted: every response on this machine, both threads, Agent SDK sessions included "
                           "({share:.0%} of these dollars).",
                "counted_plain": "Counted: every response on this machine, both threads, Agent SDK sessions included.",
@@ -1144,9 +1139,10 @@ def left_out_line(days: int, points: float) -> str:
     return QUOTA_LINES["left_out_one" if days == 1 else "left_out_many"].format(days=days, points=counted)
 
 
-def empty_rise_line(rise: dict[str, Any]) -> str:
-    """"  10-03 14:05, 3 points, nothing on this machine in the 40 minutes before"."""
-    when = datetime.fromisoformat(rise["when"])
+def empty_rise_line(rise: dict[str, Any], now: datetime) -> str:
+    """"  10-03 14:05, 3 points, nothing on this machine in the 40 minutes before", the time
+    in `now`'s time zone."""
+    when = datetime.fromisoformat(rise["when"]).astimezone(now.tzinfo)
     points = f"{rise['points']:g} point{'' if rise['points'] == 1 else 's'}"
     return (f"  {when.strftime('%m-%d %H:%M')}, {points}, nothing on this machine in the {rise['minutes']:,} "
             f"minute{'' if rise['minutes'] == 1 else 's'} before")

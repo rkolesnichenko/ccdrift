@@ -5,7 +5,7 @@ call it often."""
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -14,7 +14,7 @@ from ccdrift.state import load_state
 from ccdrift.texts import (COMMAND_LINES, LIVE_NAMES, LOOP_NAMES, STATUS_LINES, blank_cache_line, blind_status,
                            change_line, clock_text, context_change_line, cut_short_line, early_warning_line,
                            failure_line, field_gap_line, hook_change_line, hook_failure_line, incident_line,
-                           loop_warning_line, new_attachment_line, new_field_line, sample_time, spawn_model_line,
+                           loop_warning_line, new_attachment_line, new_field_line, spawn_model_line,
                            thinking_line, unread_episode_line, withheld_line)
 
 STALE_DAYS = 3
@@ -33,6 +33,16 @@ MALFORMED = (OSError, ValueError, KeyError, TypeError, AttributeError, IndexErro
 
 def _when(stamp: str) -> datetime:
     return datetime.fromisoformat(stamp)
+
+
+def _local(stamp: str, now: datetime) -> datetime:
+    """A stored time as the user reads it: in `now`'s time zone."""
+    return _when(stamp).astimezone(now.tzinfo)
+
+
+def _days_before(now: datetime, days: int) -> str:
+    """The UTC day `days` before `now`'s, the kind of day the check records."""
+    return (now.astimezone(timezone.utc).date() - timedelta(days=days)).isoformat()
 
 
 def _blind(state: dict[str, Any], recent: str) -> Optional[str]:
@@ -62,18 +72,18 @@ def short_status(state_path: Path, now: datetime) -> str:
         if last is None:
             return STATUS_LINES["no_check"]
         if not last["ok"]:
-            return STATUS_LINES["failed"].format(at=_when(last["started"]))
+            return STATUS_LINES["failed"].format(at=_local(last["started"], now))
         since_ok = now - _when(state["last_ok"])
         if since_ok > timedelta(days=STALE_DAYS):
             return STATUS_LINES["stale"].format(days=since_ok.days)
-        blind = _blind(state, (now.date() - timedelta(days=BLIND_DAYS)).isoformat())
+        blind = _blind(state, _days_before(now, BLIND_DAYS))
         if blind:
             return blind
         live = [STATUS_LINES["live"].format(name=LIVE_NAMES[i["metric"]], since=i["start"][5:])
                 for i in state["incidents"] if i["status"] == "open"]
         if live:
             return STATUS_LINES["incidents"].format(incidents="; ".join(live))
-        recent = (now.date() - timedelta(days=HOOK_DAYS)).isoformat()
+        recent = _days_before(now, HOOK_DAYS)
         failing = [f for f in state.get("hook_failures", []) if f["reported_on"] >= recent]
         if failing:
             return STATUS_LINES["hooks"].format(since=failing[-1]["since"][5:])
@@ -117,10 +127,10 @@ def status_report(state: dict[str, Any], now: datetime, samples: Optional[dict[s
     if last is None:
         return STATUS_LINES["not_run"]
     outcome = STATUS_LINES["ok"] if last["ok"] else STATUS_LINES["outcome_failed"].format(error=last["error"])
-    lines = [STATUS_LINES["last"].format(at=_when(last["started"]), outcome=outcome)]
+    lines = [STATUS_LINES["last"].format(at=_local(last["started"], now), outcome=outcome)]
     if not last["ok"] and state.get("last_ok"):
-        lines.append(STATUS_LINES["last_ok"].format(at=_when(state["last_ok"])))
-    since = (now.date() - timedelta(days=RECENT_DAYS)).isoformat()
+        lines.append(STATUS_LINES["last_ok"].format(at=_local(state["last_ok"], now)))
+    since = _days_before(now, RECENT_DAYS)
     incidents = state["incidents"]
     lines += _section(STATUS_LINES["open"], [incident_line(i) for i in incidents if i["status"] == "open"])
     lines += _section(STATUS_LINES["closed"].format(days=RECENT_DAYS),
@@ -136,8 +146,8 @@ def status_report(state: dict[str, Any], now: datetime, samples: Optional[dict[s
              + [field_gap_line(g) for g in state.get("field_gaps", []) if g["reported_on"] >= since]
              + [new_field_line(r) for r in state.get("new_fields", []) if r["reported_on"] >= since]
              + [new_attachment_line(r) for r in state.get("new_attachments", []) if r["reported_on"] >= since]
-             + [early_warning_line(w) for w in state.get("early_warnings", []) if w["reported_on"] >= since]
-             + [loop_warning_line(w) for w in state.get("loop_warnings", []) if w["reported_on"] >= since]
+             + [early_warning_line(w, now) for w in state.get("early_warnings", []) if w["reported_on"] >= since]
+             + [loop_warning_line(w, now) for w in state.get("loop_warnings", []) if w["reported_on"] >= since]
              + [failure_line(f) for f in state.get("failed_requests", []) if f["reported_on"] >= since]
              + [cut_short_line(c) for c in state.get("cut_short", []) if c["reported_on"] >= since]
              + [thinking_line(r) for r in state.get("thinking_rises", []) if r["reported_on"] >= since]
@@ -145,8 +155,8 @@ def status_report(state: dict[str, Any], now: datetime, samples: Optional[dict[s
              + ([withheld_line(state["withheld"])] if state.get("withheld") else []))
     lines += _section(STATUS_LINES["other"].format(days=RECENT_DAYS), other)
     if samples:
-        lines.append(STATUS_LINES["samples"].format(count=samples["count"], first=sample_time(samples["first"]),
-                                                    last=sample_time(samples["last"])))
+        lines.append(STATUS_LINES["samples"].format(count=samples["count"], first=clock_text(samples["first"], now),
+                                                    last=clock_text(samples["last"], now)))
     return "\n".join(lines) + "\n"
 
 

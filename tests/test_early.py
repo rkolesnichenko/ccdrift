@@ -69,6 +69,12 @@ def test_misses_rising_today_warn_once_saying_how_many_missed():
     assert early_warning(prompt_frame(RISING), [], state, NOW, h=6) is None
 
 
+def test_a_warning_is_reported_on_its_utc_day_when_it_is_already_the_next_day_locally():
+    # 00:30 on Sep 22 at UTC+3 is 21:30 on Sep 21 in UTC, the day every other record is dated by.
+    late = datetime(2026, 9, 22, 0, 30, tzinfo=timezone(timedelta(hours=3)))
+    assert early_warning(prompt_frame(RISING), [], new_state(), late, h=6)["reported_on"] == "2026-09-21"
+
+
 def test_a_sustained_rise_across_several_alarms_reports_the_whole_rise():
     # Nine misses in a row cross h=6 three times, about every third miss (each miss
     # adds about 2.35): the CUSUM's reset after each alarm is bookkeeping, not the sum
