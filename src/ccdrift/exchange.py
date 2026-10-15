@@ -192,9 +192,10 @@ def quota_summary(tables: Tables, samples: Sequence[Any], days: int, today: date
             "responses": len(counted), "samples": len(samples)}
 
 
-def quota_lines(summary: dict[str, Any]) -> list[str]:
+def quota_lines(summary: dict[str, Any], now: datetime) -> list[str]:
     """The rates as the terminal shows them: the window's rate and spread, a row a day, the
-    empty rises, then what was counted and what the rate can't see."""
+    empty rises at their time in `now`'s time zone, then what was counted and what the rate
+    can't see."""
     lines = [QUOTA_LINES["head"]]
     if summary["rate"] is None:
         lines.append(QUOTA_LINES["window_unpriced"].format(first=summary["first"], last=summary["last"]))
@@ -208,7 +209,7 @@ def quota_lines(summary: dict[str, Any]) -> list[str]:
         lines.append(left_out_line(summary["left_out"]["days"], summary["left_out"]["points"]))
     lines += ["", table_header(QUOTA_TABLE), *[quota_row(row) for row in summary["days"]], ""]
     if summary["empty"]:
-        lines += [QUOTA_LINES["empty"], *[empty_rise_line(rise) for rise in summary["empty"]]]
+        lines += [QUOTA_LINES["empty"], *[empty_rise_line(rise, now) for rise in summary["empty"]]]
     else:
         lines.append(QUOTA_LINES["no_empty"])
     if not summary["responses"]:
@@ -233,11 +234,12 @@ def quota_json(summary: dict[str, Any]) -> str:
 
 
 def run_quota(source: Path, state_path: Path, days: Optional[int] = None, as_json: bool = False,
-              today: Optional[date] = None) -> int:
+              today: Optional[date] = None, now: Optional[datetime] = None) -> int:
     """Print what a point of the 7-day limit cost on each sampled day. Reads the samples beside
     the state file first, so a machine with none is told how to start before the history is
     read, then the history like `cost`. Saves nothing and judges nothing."""
-    today = today or datetime.now(timezone.utc).date()
+    now = now or datetime.now().astimezone()
+    today = today or now.astimezone(timezone.utc).date()
     samples = read_samples(quota_path(state_path))
     found = readings(samples)
     if not found:
@@ -256,5 +258,5 @@ def run_quota(source: Path, state_path: Path, days: Optional[int] = None, as_jso
         return 2
     summary = quota_summary(tables, samples, days or DEFAULT_DAYS, today)
     summary["default_source"] = source.expanduser().resolve() == default_source().expanduser().resolve()
-    print(quota_json(summary) if as_json else "\n".join(quota_lines(summary)) + "\n", end="")
+    print(quota_json(summary) if as_json else "\n".join(quota_lines(summary, now)) + "\n", end="")
     return 0

@@ -155,8 +155,8 @@ def test_status_lists_other_changes_of_the_last_30_days(tmp_path, capsys):
         "  stop hooks failing from 2026-09-16: 12 of 15 runs on 2026-09-16, 14 of 14 on 2026-09-17",
         "  effort not logged on 2.1.280: 0% of 312 responses, 100% before",
         "  version not logged: 0% of 60 responses, 100% before",
-        "  cache misses rising at 2026-09-20 08:40 UTC: 3 of 7 new-prompt turns (usually 0.5%)",
-        "  subagent cache misses rising at 2026-09-20 08:40 UTC: 1 of 180 turns in 1 session (usually 0.18%), "
+        "  cache misses rising at 11:40: 3 of 7 new-prompt turns (usually 0.5%)",
+        "  subagent cache misses rising at 11:40: 1 of 180 turns in 1 session (usually 0.18%), "
         "~3.2M tokens rewritten",
     ]
 
@@ -216,6 +216,38 @@ def test_status_shows_a_failing_check_and_when_it_last_worked(tmp_path, capsys):
         "Last check: 2026-09-20 09:00, failed: RuntimeError: boom",
         "Last successful check: 2026-09-19 09:00",
     ]
+
+
+def test_status_shows_the_check_times_in_the_readers_time_zone_whatever_offset_they_were_stored_with(
+        tmp_path, capsys):
+    # Stored at UTC, read half an hour into Sep 20 at UTC+3, while it is still Sep 19 in UTC.
+    now = datetime(2026, 9, 20, 0, 30, tzinfo=EEST)
+    path = state_file(tmp_path, **ran(ok=False, error="RuntimeError: boom", when="2026-09-19T21:10:00+00:00"),
+                      last_ok="2026-09-18T22:00:00+00:00")
+    assert short_status(path, now) == "ccdrift: check failed 09-20 00:10"
+    run_status(path, now=now)
+    assert capsys.readouterr().out.splitlines()[:2] == [
+        "Last check: 2026-09-20 00:10, failed: RuntimeError: boom",
+        "Last successful check: 2026-09-19 01:00",
+    ]
+
+
+def test_status_shows_warnings_and_quota_samples_at_their_local_time_and_date(tmp_path, capsys):
+    # Half an hour into Sep 20 at UTC+3: the warning, raised at 21:40 UTC on Sep 19, was raised
+    # today, and the first sample, at 20:00 UTC on Sep 18, on the local Sep 18 at 23:00.
+    now = datetime(2026, 9, 20, 0, 30, tzinfo=EEST)
+    warning = {"at": "2026-09-19T21:40:00+00:00", "since": "2026-09-19T21:00:00+00:00", "misses": 3,
+               "turns": 7, "base_rate": 0.005, "versions": [], "reported_on": "2026-09-19"}
+    path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00", early_warnings=[warning],
+                      loop_warnings=[loop_warning("main", at="2026-09-18T21:40:00+00:00")])
+    (tmp_path / "quota.jsonl").write_text(
+        '{"at": "2026-09-18T20:00:00+00:00", "five_hour": {"used_percentage": 1, "resets_at": 1}}\n'
+        '{"at": "2026-09-19T21:41:00+00:00", "five_hour": {"used_percentage": 9, "resets_at": 1}}\n')
+    run_status(path, now=now)
+    out = capsys.readouterr().out
+    assert "  cache misses rising at 00:40: 3 of 7 new-prompt turns (usually 0.5%)" in out
+    assert "  tool-loop cache misses rising at 09-19 00:40: 7 of 180 turns in 2 sessions" in out
+    assert out.splitlines()[-1] == "Quota samples: 2 since 09-18 23:00, the last at 00:41"
 
 
 def test_status_command_reads_the_state_option(tmp_path, capsys):
@@ -435,7 +467,7 @@ def test_the_long_status_counts_the_quota_samples_and_says_when_they_were_taken(
         '{"at": "2026-09-20T08:41:00+00:00", "five_hour": {"used_percentage": 9, "resets_at": 1}}\n')
     run_status(path, now=NOW)
     assert capsys.readouterr().out.splitlines()[-1] == \
-        "Quota samples: 2 since 2026-09-18 06:00 UTC, the last at 2026-09-20 08:41 UTC"
+        "Quota samples: 2 since 09-18 09:00, the last at 11:41"
 
 
 def test_the_long_status_says_while_ccdrift_cost_withholds_its_total(tmp_path):
