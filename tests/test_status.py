@@ -250,6 +250,32 @@ def test_status_shows_warnings_and_quota_samples_at_their_local_time_and_date(tm
     assert out.splitlines()[-1] == "Quota samples: 2 since 09-18 23:00, the last at 00:41"
 
 
+# Half an hour into Sep 20 at UTC+3 it is still Sep 19 in UTC, so a window of days counted
+# back from the local date starts a day late and drops a record dated on its first UTC day.
+LATE = datetime(2026, 9, 20, 0, 30, tzinfo=EEST)
+
+
+@pytest.mark.parametrize("state, expected", [
+    ({"hook_failures": [{"kind": "stop", "since": "2026-09-16", "days": ["2026-09-16"], "runs": [12], "failed": [12],
+                         "reported_on": "2026-09-16"}]},
+     "ccdrift: hooks failing since 09-16"),
+    ({"blank_cache": ["2026-09-16"], "blank_cache_seen": "2026-09-16"},
+     "ccdrift: no cache values since 09-16"),
+])
+def test_the_status_line_counts_its_days_back_from_the_utc_date(tmp_path, state, expected):
+    path = state_file(tmp_path, **ran(when="2026-09-19T21:20:00+00:00"), last_ok="2026-09-19T21:20:00+00:00",
+                      **state)
+    assert short_status(path, LATE) == expected
+
+
+def test_the_long_status_counts_its_30_days_back_from_the_utc_date(tmp_path, capsys):
+    path = state_file(tmp_path, **ran(when="2026-09-19T21:20:00+00:00"), last_ok="2026-09-19T21:20:00+00:00",
+                      settings=[{"setting": "cache_tier", "model": "claude-opus-5", "from": "1h", "to": "5m",
+                                 "since": "2026-08-18", "days": ["2026-08-18"], "reported_on": "2026-08-20"}])
+    run_status(path, now=LATE)
+    assert "  cache tier for claude-opus-5: 1h -> 5m from 2026-08-18" in capsys.readouterr().out.splitlines()
+
+
 def test_status_command_reads_the_state_option(tmp_path, capsys):
     path = state_file(tmp_path)
     assert main(["status", "--short", "--state", str(path)]) == 0

@@ -136,6 +136,6 @@ def loop_warning(responses: pd.DataFrame, stream: str, state: dict[str, Any], no
                "misses": len(missed), "turns": len(rise), "sessions": int(missed["session_id"].nunique()),
                "base_rate": round(base_rate, 4), "tokens": int(missed["cache_creation"].sum()),
                "versions": versions_text(in_stream, sorted(rise["day"].unique())),
-               "reported_on": now.date().isoformat()}
+               "reported_on": today.isoformat()}
     state["loop_warnings"].append(warning)
     return warning

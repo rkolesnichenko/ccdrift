@@ -5,7 +5,7 @@ call it often."""
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -40,6 +40,11 @@ def _local(stamp: str, now: datetime) -> datetime:
     return _when(stamp).astimezone(now.tzinfo)
 
 
+def _days_before(now: datetime, days: int) -> str:
+    """The UTC day `days` before `now`'s, the kind of day the check records."""
+    return (now.astimezone(timezone.utc).date() - timedelta(days=days)).isoformat()
+
+
 def _blind(state: dict[str, Any], recent: str) -> Optional[str]:
     """The status line for a check that can't see what it judges, found on or after
     `recent`: no cache values, transcripts it couldn't read, transcripts without
@@ -71,14 +76,14 @@ def short_status(state_path: Path, now: datetime) -> str:
         since_ok = now - _when(state["last_ok"])
         if since_ok > timedelta(days=STALE_DAYS):
             return STATUS_LINES["stale"].format(days=since_ok.days)
-        blind = _blind(state, (now.date() - timedelta(days=BLIND_DAYS)).isoformat())
+        blind = _blind(state, _days_before(now, BLIND_DAYS))
         if blind:
             return blind
         live = [STATUS_LINES["live"].format(name=LIVE_NAMES[i["metric"]], since=i["start"][5:])
                 for i in state["incidents"] if i["status"] == "open"]
         if live:
             return STATUS_LINES["incidents"].format(incidents="; ".join(live))
-        recent = (now.date() - timedelta(days=HOOK_DAYS)).isoformat()
+        recent = _days_before(now, HOOK_DAYS)
         failing = [f for f in state.get("hook_failures", []) if f["reported_on"] >= recent]
         if failing:
             return STATUS_LINES["hooks"].format(since=failing[-1]["since"][5:])
@@ -125,7 +130,7 @@ def status_report(state: dict[str, Any], now: datetime, samples: Optional[dict[s
     lines = [STATUS_LINES["last"].format(at=_local(last["started"], now), outcome=outcome)]
     if not last["ok"] and state.get("last_ok"):
         lines.append(STATUS_LINES["last_ok"].format(at=_local(state["last_ok"], now)))
-    since = (now.date() - timedelta(days=RECENT_DAYS)).isoformat()
+    since = _days_before(now, RECENT_DAYS)
     incidents = state["incidents"]
     lines += _section(STATUS_LINES["open"], [incident_line(i) for i in incidents if i["status"] == "open"])
     lines += _section(STATUS_LINES["closed"].format(days=RECENT_DAYS),

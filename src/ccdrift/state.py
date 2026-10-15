@@ -9,7 +9,7 @@ import stat
 import sys
 import tempfile
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Optional, TextIO
 
@@ -164,13 +164,14 @@ RUN_DAYS = 14
 
 def record_run(state: dict[str, Any], started: datetime, error: Optional[str]) -> None:
     """Note when a run started and whether it worked; `error` is None when it did.
-    Successful runs also keep their local date in state["runs"], the newest RUN_DAYS."""
+    Successful runs also keep their UTC date in state["runs"], the newest RUN_DAYS, the
+    kind of day the weekly summary counts them against."""
     stamp = started.isoformat(timespec="seconds")
     state["last_run"] = {"started": stamp, "ok": error is None, "error": error}
     if error is None:
         state["last_ok"] = stamp
         runs = state.setdefault("runs", [])
-        day = started.date().isoformat()
+        day = started.astimezone(timezone.utc).date().isoformat()
         if day not in runs:
             runs.append(day)
         del runs[:-RUN_DAYS]
