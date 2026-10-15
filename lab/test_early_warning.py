@@ -57,10 +57,13 @@ def test_the_false_alarm_rate_falls_as_the_threshold_rises():
 
 
 def test_the_bar_separates_the_shipped_threshold_from_the_noisy_ones():
-    # What the gate now decides on: h = 4 clears the bar on every usual rate the check
-    # runs at, h = 3 clears none of them. A single alarm on a short corpus decides nothing.
+    # What the gate now decides on: at the owner's volume h = 5 clears the bar on every usual
+    # rate it simulates, h = 4 not at 0.43% and h = 3 at none of them. A single alarm on a short
+    # corpus decides nothing. h = 4 at 1% sits on the bar (0.1676 against 0.1667), where the
+    # seed decides it, so it isn't pinned.
     sweep = rate_sweep().set_index("h")
-    assert (sweep.loc[4] <= MAX_FALSE_PER_WEEK).all()
+    assert (sweep.loc[early.THRESHOLD] <= MAX_FALSE_PER_WEEK).all()
+    assert sweep.loc[4, "p0=0.0043"] > MAX_FALSE_PER_WEEK
     assert (sweep.loc[3] > MAX_FALSE_PER_WEEK).all()
 
 

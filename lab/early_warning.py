@@ -14,9 +14,9 @@ No threshold has a zero rate, so that asked whether the corpus happened to be sh
 enough to hold none, and it flipped on 2026-09-21 when one day carrying two missed
 turns put a single alarm on h = 4.
 
-The clean days hold about 2.5 weeks of turns. At h = 4's measured 0.063 to 0.144 a week
-that is 0.16 to 0.36 expected, so a single alarm turns up in roughly 30% of corpora this
-size. Any bar phrased as a count, including an allowance of rate times weeks, rejects
+On 2026-09-21 the clean days held about 2.5 weeks of turns. At h = 4's measured 0.063 to
+0.144 a week that is 0.16 to 0.36 expected, so a single alarm turns up in roughly 30% of
+corpora this size. Any bar phrased as a count, including an allowance of rate times weeks, rejects
 that one alarm and so fails 30% of the time on nothing. The rate is what can be judged,
 and it is judged where there is power to measure it: `false_alarm_rate` runs 200,000
 simulated turns per setting with nothing planted, where every alarm is false by
@@ -47,7 +47,10 @@ from lab.harness import date_range
 H_GRID = (2, 3, 4, 5, 6, 8)
 DEADLINE_DAYS = 5
 
-TURNS_A_WEEK = 343         # new-prompt turns in 7 days, the median of the clean days on the owner's logs
+# New-prompt turns in 7 days: the median clean day on the owner's logs since 2026-09-15, times 7
+# (24 days, 76 a day, 2026-10-15). Over every clean day since 2026-08-06 it is 371 (35 days, 53 a
+# day); it was 343 when the gate was written, and h = 4's false alarms pass the bar above 397.
+TURNS_A_WEEK = 532
 RATE_P0S = (0.002, 0.0043, 0.010)   # the floor the check clamps to, the observed clean rate, and above it
 
 

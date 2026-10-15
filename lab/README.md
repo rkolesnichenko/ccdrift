@@ -80,7 +80,7 @@ uv run --group lab python -m lab.spawn_models
 uv run --group lab python -m lab.attachments
 ```
 
-Each gate's last line is its verdict on the setting ccdrift ships (`G3: PASS h=4`, or
+Each gate's last line is its verdict on the setting ccdrift ships (`G3: PASS h=5`, or
 `FAIL` with the settings that did pass beside it), so a sweep whose best setting passes
 while the shipped one fails reads as the failure it is.
 

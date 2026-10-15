@@ -28,8 +28,10 @@ PROMPT_MAX_TURNS = 150
 
 # A judgement, not a measurement, and it was made knowing what h = 4 costs: one spurious early
 # warning every 6 weeks of turns is tolerable for a notice whose advice is "nothing yet, the daily
-# verdict follows". h = 4 measures 0.063 to 0.144 a week depending on the usual rate, so it clears
-# this with margin; h = 3 measures 0.230 to 0.736 and fails it by 1.4x to 4.4x.
+# verdict follows". Over the usual rates the G3 gate simulates (0.2%, 0.43% and 1%), at 343
+# new-prompt turns a week h = 4 measured 0.063 to 0.144 a week and h = 3 0.230 to 0.736; at the
+# 532 the owner's logs ran from mid-September h = 4 measures 0.098 to 0.223 and fails it, h = 5
+# 0.056 to 0.069, and 0.085 at worst on a finer grid from 0.2% to 2.5% (0.65%, 2026-10-15).
 MAX_FALSE_PER_WEEK = 1 / 6
 
 RATE_STREAM = 1000         # turns per simulated stream in alarms_per_turn
