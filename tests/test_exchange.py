@@ -11,7 +11,7 @@ from ccdrift.exchange import Step, day_rows, quota_summary, readings, run_quota,
 from ccdrift.texts import empty_rise_line
 from ccdrift.logs import parse_all
 from ccdrift.prices import Price
-from tests.helpers import line, text, write
+from tests.helpers import KYIV, line, text, write
 
 
 def sample(stamp, used, resets=1_790_000_000):
@@ -325,6 +325,14 @@ def test_the_command_line_passes_its_days_and_json_through(tmp_path, monkeypatch
 def test_a_rise_of_one_point_after_one_minute_is_said_in_the_singular():
     assert empty_rise_line({"when": "2026-09-02T11:30:00+00:00", "day": "2026-09-02", "points": 1.0,
                             "minutes": 1}, NOW) == "  09-02 14:30, 1 point, nothing on this machine in the 1 minute before"
+
+
+def test_an_empty_rise_from_before_a_daylight_saving_change_keeps_the_offset_it_had(machine_zone):
+    # Kyiv went from UTC+3 to UTC+2 on 2026-10-25: at 17:40 UTC on Oct 20 it was 20:40 there.
+    machine_zone(KYIV)
+    now = datetime(2026, 10, 27, 12, 0).astimezone()
+    assert empty_rise_line({"when": "2026-10-20T17:40:00+00:00", "day": "2026-10-20", "points": 2.0,
+                            "minutes": 45}, now) == "  10-20 20:40, 2 points, nothing on this machine in the 45 minutes before"
 
 
 def test_an_empty_rise_shows_its_local_date_where_that_differs_from_its_utc_day():

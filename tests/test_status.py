@@ -13,6 +13,7 @@ import pytest
 from ccdrift.cli import main
 from ccdrift.state import new_state
 from ccdrift.status import run_status, short_status, status_report
+from tests.helpers import KYIV
 
 EEST = timezone(timedelta(hours=3))
 NOW = datetime(2026, 9, 20, 12, 0, tzinfo=EEST)
@@ -274,6 +275,36 @@ def test_the_long_status_counts_its_30_days_back_from_the_utc_date(tmp_path, cap
                                  "since": "2026-08-18", "days": ["2026-08-18"], "reported_on": "2026-08-20"}])
     run_status(path, now=LATE)
     assert "  cache tier for claude-opus-5: 1h -> 5m from 2026-08-18" in capsys.readouterr().out.splitlines()
+
+
+def test_times_from_before_a_daylight_saving_change_keep_the_offset_they_had(tmp_path, capsys, machine_zone):
+    # Kyiv went from UTC+3 to UTC+2 on 2026-10-25. Read on Oct 27, a warning raised at
+    # 17:40 UTC on Oct 20 was raised at 20:40 there, not at the 19:40 that today's offset gives.
+    machine_zone(KYIV)
+    now = datetime(2026, 10, 27, 12, 0).astimezone()
+    warning = {"at": "2026-10-20T17:40:00+00:00", "since": "2026-10-20T17:00:00+00:00", "misses": 3,
+               "turns": 7, "base_rate": 0.005, "versions": [], "reported_on": "2026-10-20"}
+    path = state_file(tmp_path, **ran(ok=False, error="RuntimeError: boom", when="2026-10-27T09:00:00+02:00"),
+                      last_ok="2026-10-20T06:00:00+00:00", early_warnings=[warning])
+    run_status(path, now=now)
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[:2] == ["Last check: 2026-10-27 09:00, failed: RuntimeError: boom",
+                         "Last successful check: 2026-10-20 09:00"]
+    assert "  cache misses rising at 10-20 20:40: 3 of 7 new-prompt turns (usually 0.5%)" in lines
+
+
+def test_a_reader_outside_the_machines_time_zone_gets_times_in_their_own(tmp_path, capsys, machine_zone):
+    # The machine keeps UTC, the reader's clock says UTC+3: the times follow the reader.
+    machine_zone("UTC0")
+    now = datetime(2026, 9, 20, 0, 30, tzinfo=EEST)
+    warning = {"at": "2026-09-19T21:40:00+00:00", "since": "2026-09-19T21:00:00+00:00", "misses": 3,
+               "turns": 7, "base_rate": 0.005, "versions": [], "reported_on": "2026-09-19"}
+    path = state_file(tmp_path, **ran(when="2026-09-19T21:10:00+00:00"), last_ok="2026-09-19T21:10:00+00:00",
+                      early_warnings=[warning])
+    run_status(path, now=now)
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "Last check: 2026-09-20 00:10, ok"
+    assert "  cache misses rising at 00:40: 3 of 7 new-prompt turns (usually 0.5%)" in lines
 
 
 def test_status_command_reads_the_state_option(tmp_path, capsys):

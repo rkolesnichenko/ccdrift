@@ -14,7 +14,7 @@ from ccdrift.state import load_state
 from ccdrift.texts import (COMMAND_LINES, LIVE_NAMES, LOOP_NAMES, STATUS_LINES, blank_cache_line, blind_status,
                            change_line, clock_text, context_change_line, cut_short_line, early_warning_line,
                            failure_line, field_gap_line, hook_change_line, hook_failure_line, incident_line,
-                           loop_warning_line, new_attachment_line, new_field_line, spawn_model_line,
+                           local_time, loop_warning_line, new_attachment_line, new_field_line, spawn_model_line,
                            thinking_line, unread_episode_line, withheld_line)
 
 STALE_DAYS = 3
@@ -36,8 +36,8 @@ def _when(stamp: str) -> datetime:
 
 
 def _local(stamp: str, now: datetime) -> datetime:
-    """A stored time as the user reads it: in `now`'s time zone."""
-    return _when(stamp).astimezone(now.tzinfo)
+    """A stored time as the user reads it, on their clock (texts.local_time)."""
+    return local_time(stamp, now)
 
 
 def _days_before(now: datetime, days: int) -> str:
