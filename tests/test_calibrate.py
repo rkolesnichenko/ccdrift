@@ -74,6 +74,13 @@ def test_a_start_leaves_seven_judged_days_before_it_and_three_after(count, start
     assert plant_starts(days) == [days[i] for i in starts]
 
 
+def test_the_seven_days_before_a_start_are_days_the_baseline_counts_not_days_an_incident_leaves_out_or_empty_ones():
+    days = [nth_day(i) for i in range(20)]
+    assert plant_starts(days, left_out=[(days[3], days[5])]) == days[10:17]
+    assert plant_starts(days, left_out=[(days[3], None)]) == []
+    assert plant_starts(days, empty={days[1], days[2]}) == days[9:17]
+
+
 def test_starts_are_ten_at_most_spread_evenly_from_the_first_that_fits_to_the_last():
     days = [nth_day(i) for i in range(40)]
     chosen = plant_starts(days)
@@ -205,6 +212,28 @@ def test_the_days_after_an_incident_are_judged_against_the_days_before_it_as_the
     assert [cache["floors"][day] for day in cache["starts"]] == [None, None] + [0.05] * 7
 
 
+def test_no_plant_starts_right_after_a_long_incident_before_the_baseline_holds_seven_days_again(tmp_path):
+    # Days 3 to 17 stay out of the baselines, so day 18 is judged against 3 days, too few for the
+    # detector to judge it, and a drop planted there could never be caught: the first start
+    # comes once 7 kept days precede it. On 2026-10-15 the owner's 2026-09-05 was such a start.
+    incident = {"metric": "cache_ratio", "start": nth_day(3), "end": nth_day(17), "status": "recovered"}
+    _, metrics = calibrated(tmp_path, [{"misses": 30 if 3 <= i <= 17 else 0} for i in range(30)], [incident])
+    cache = metrics["cache_ratio"]
+    assert (cache["verdict"], cache["starts"], cache["caught"][0.05], cache["runs"]) == (
+        "pass", [nth_day(d) for d in range(22, 27)], 5, 5)
+
+
+def test_days_without_a_value_for_the_metric_dont_count_among_the_seven_before_a_start(tmp_path):
+    # One turn a day opens no new prompt within the cache's TTL, so days 3 to 6 have no cache
+    # ratio and the detector judges nothing until 5 days with one precede it: a start on day 7
+    # could never be caught by day 10.
+    for day, per_day in enumerate([150] * 3 + [1] * 4 + [150] * 14):
+        main_thread_days(tmp_path, [{}], per_day=per_day, first_day=day)
+    cache = calibration(parse_all(tmp_path).responses, [], date.fromisoformat(nth_day(21)))["metrics"][0]
+    assert (cache["verdict"], cache["starts"], cache["caught"][0.05]) == (
+        "pass", [nth_day(d) for d in range(11, 18)], 7)
+
+
 def test_a_subagent_plant_starts_off_incidents_and_is_judged_on_the_history_up_to_its_fourth_day(tmp_path):
     # Judged on the whole history, a plant just before the incident would join its flag run.
     main_thread_days(tmp_path, [{}] * 24, per_day=150)
@@ -229,8 +258,9 @@ def test_incidents_that_leave_no_start_clear_of_them_are_not_enough_data_on_a_lo
     cache = metrics["cache_ratio"]
     assert (cache["verdict"], cache["days"], cache["starts"]) == ("not_enough_data", 20, [])
     assert metric_lines(cache)[0] == (
-        "Cache ratio: NOT ENOUGH DATA, 20 days judged, but none can start a planted change: it needs 7 judged "
-        "days before it and 3 after it, all within 14 days and meeting no incident ccdrift follows")
+        "Cache ratio: NOT ENOUGH DATA, 20 days judged, but none can start a planted change: it needs 7 days before "
+        "it with a value that no incident leaves out of the baseline, and 3 after it, all within 14 days and meeting "
+        "no incident ccdrift follows")
 
 
 def test_no_plant_starts_across_a_break_longer_than_the_days_the_check_reports_a_flag_from(tmp_path):
@@ -250,10 +280,15 @@ def test_every_metric_starts_its_plants_off_every_incident_and_within_the_days_t
                         lambda days, **options: asked.append(options) or real(days, **options))
     incidents = [{"metric": metric, "start": nth_day(3), "end": nth_day(4), "status": "dismissed"}
                  for metric in ("cache_ratio", "haiku_fraction", "subagent_cache")]
+    incidents += [{"metric": metric, "start": nth_day(day), "end": nth_day(day), "status": status}
+                  for metric in ("cache_ratio", "haiku_fraction", "subagent_cache")
+                  for day, status in ((6, "recovered"), (8, "persistent"))]
     main_thread_days(tmp_path, [{}] * 12, per_day=150)
     tool_loop_days(tmp_path, 12, per_day=301, subagent=True)
     calibration(parse_all(tmp_path).responses, incidents, date.fromisoformat(nth_day(12)))
-    assert asked == [{"avoid": [(nth_day(3), nth_day(4))], "within": 14}] * 3
+    # A persistent incident's days stay in the baseline, so they count before a start.
+    assert asked == [{"avoid": [(nth_day(3), nth_day(4)), (nth_day(6), nth_day(6)), (nth_day(8), nth_day(8))],
+                      "within": 14, "left_out": [(nth_day(6), nth_day(6))], "empty": set()}] * 3
 
 
 def test_a_dismissed_incidents_days_stay_in_and_its_flag_counts_as_a_false_alarm(tmp_path):

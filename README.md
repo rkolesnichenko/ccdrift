@@ -402,24 +402,25 @@ subagent read-back it runs the shipped detector over the days the check reads, a
 runs it: the days of open and recovered incidents stay out of the baselines, and a flag
 that meets an incident ccdrift follows isn't held against the metric. A flag over an
 incident you dismissed is, as the false alarm you marked it; so is any other. Then it
-plants a regression from up to 10 starting days that meet no incident, each with 7 judged
-days before it and 3 after: on the main thread a cache drop or a Haiku rise of 5% to 70%
-from the start on, in subagents an extra 2% or 5% of loop turns reading only what their
-transcript opened with, over the start and the 3 days after, 5 times each. A plant is
-caught when the check would have reported it by the third day after its start, judging the
-history up to then; one whose flag meets an incident isn't, since the check reports no such
-flag. A metric passes when nothing flags and a planted 5% is caught from every start (in
-90% of runs for subagent read-back), the bar the shipped settings cleared on the logs they
-were tuned on:
+plants a regression from up to 10 starting days that meet no incident, each with 7 days
+before it that a baseline counts (with a value, outside the incidents it leaves out) and 3
+after, since the detector can't judge a day until its baseline holds 5: on the main thread
+a cache drop or a Haiku rise of 5% to 70% from the start on, in subagents an extra 2% or 5%
+of loop turns reading only what their transcript opened with, over the start and the 3 days
+after, 5 times each. A plant is caught when the check would have reported it by the third
+day after its start, judging the history up to then; one whose flag meets an incident
+isn't, since the check reports no such flag. A metric passes when nothing flags and a
+planted 5% is caught from every start (in 90% of runs for subagent read-back), the bar the
+shipped settings cleared on the logs they were tuned on:
 
 ```
 Calibration on your history, 2026-08-06 to 2026-10-14: 52 days judged on the main thread, 48 with subagent loops.
 
 Cache ratio: PASS
-  A planted 5% drop is caught from 10 of 10 starts, 2026-09-04 to 2026-10-07.
+  A planted 5% drop is caught from 10 of 10 starts, 2026-09-09 to 2026-10-07.
   Smallest drop caught: 5% from every start.
   Nothing flags.
-  Left out as incidents ccdrift follows: 2026-08-18 to 2026-09-03.
+  Left out as incidents ccdrift follows: 2026-08-16 to 2026-09-04.
 ```
 
 A failure says which half failed and the smallest change caught from each start. A metric
@@ -445,12 +446,12 @@ the same days. Subagents' tool loops ship no setting, and it says so. On the sam
 ```
 Early warnings, turn by turn:
 Cache-miss warning: PASS
-  False warnings: 0.06 a week expected at your usual miss rate (0.42% median) and 487 new-prompt turns a week, over 4.3 weeks judged, against a bar of 1 every 6 weeks (0.17).
+  False warnings: 0.06 a week expected at your usual miss rate (0.43% median) and 483 new-prompt turns a week, over 4.1 weeks judged, against a bar of 1 every 6 weeks (0.17).
   On 2 judged days the usual miss rate was under 0.2%, the floor the check judges against, and counts at it.
-  Your history alarmed on 2026-09-17 outside the cache incidents ccdrift follows.
-  A planted 5% miss rate is caught in a median 41 turns, 50 of 50 runs from 10 starts, 2026-09-09 to 2026-10-14, against a bar of 150 turns.
+  Your history raised none.
+  A planted 5% miss rate is caught in a median 41 turns, 50 of 50 runs from 10 starts, 2026-09-10 to 2026-10-14, against a bar of 150 turns.
 Tool-loop warning: PASS
-  No alarm on 33 days judged at the most sensitive usual rate, 0.2%.
+  No alarm on 32 days judged at the most sensitive usual rate, 0.2%.
   A planted 2% miss rate is caught in 50 of 50 runs (100%), in a median 119.5 turns, against 90% within a median of 300.
 Subagent tool-loop warning: no setting ships, so subagents get no early warning.
 ```

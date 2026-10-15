@@ -1,6 +1,6 @@
 {
   "name": "ccdrift",
-  "version": "0.29.0",
+  "version": "0.29.1",
   "description": "Shows ccdrift's verdict at each session start and runs its check in the background once an hour. Needs ccdrift itself: uv tool install ccdrift",
   "author": {
     "name": "Roman Kolesnichenko"
