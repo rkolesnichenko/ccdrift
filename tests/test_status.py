@@ -496,6 +496,19 @@ def test_the_long_status_counts_the_quota_samples_and_says_when_they_were_taken(
         "Quota samples: 2 since 09-18 09:00, the last at 11:41"
 
 
+def test_a_quota_sample_whose_time_doesnt_read_is_left_out_rather_than_failing_the_status(tmp_path, capsys):
+    # Found in the 0.30.0 review: showing a sample's time in the reader's zone parses it, and
+    # one bad line in quota.jsonl failed the whole status, blaming the state file.
+    path = state_file(tmp_path, **ran(), last_ok="2026-09-20T09:00:02+03:00")
+    (tmp_path / "quota.jsonl").write_text(
+        '{"at": "2026-09-18T06:00:00+00:00", "five_hour": {"used_percentage": 1, "resets_at": 1}}\n'
+        '{"at": "2026-09-19T06:00:00", "five_hour": {"used_percentage": 6, "resets_at": 1}}\n'
+        '{"at": "2026-09-20T08:41:00+00:00", "five_hour": {"used_percentage": 9, "resets_at": 1}}\n'
+        '{"at": "yesterday", "five_hour": {"used_percentage": 5, "resets_at": 1}}\n')
+    assert run_status(path, now=NOW) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "Quota samples: 2 since 09-18 09:00, the last at 11:41"
+
+
 def test_the_long_status_says_while_ccdrift_cost_withholds_its_total(tmp_path):
     state = {**new_state(), **ran(), "last_ok": "2026-09-20T09:00:02+03:00",
              "withheld": {"since": "2026-09-18", "models": [["claude-opus-5-5", 0.1436], ["claude-x-1", 0.0214]]}}

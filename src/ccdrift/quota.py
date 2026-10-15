@@ -141,8 +141,18 @@ def read_samples(path: Path) -> list[dict[str, Any]]:
     return samples
 
 
+def _zoned(stamp: str) -> bool:
+    """Whether `stamp` reads as a time with its zone included, as record_sample writes one."""
+    try:
+        return datetime.fromisoformat(stamp).utcoffset() is not None
+    except ValueError:
+        return False
+
+
 def samples_summary(path: Path) -> Optional[dict[str, Any]]:
-    """How many samples `path` holds, with the first and last one's time; None when the
-    file is missing or holds none."""
-    samples = read_samples(path)
+    """How many samples `path` holds whose time reads with its zone, with the first and last
+    one's time; None when the file is missing or holds none. A sample written by hand or by
+    another tool with a time that doesn't read is left out, so the status can still show the
+    rest in the reader's time zone."""
+    samples = [sample for sample in read_samples(path) if _zoned(sample["at"])]
     return {"count": len(samples), "first": samples[0]["at"], "last": samples[-1]["at"]} if samples else None
