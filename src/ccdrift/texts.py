@@ -167,9 +167,20 @@ def change_line(change: dict[str, Any]) -> str:
             f"from {change['since']}")
 
 
+def local_time(stamp: str, now: datetime) -> datetime:
+    """`stamp` as the reader's clock showed it. When `now` is in the machine's own time zone,
+    by the machine's rules for that instant, so a time from before a daylight-saving change
+    keeps the offset it had then; otherwise in `now`'s own offset."""
+    when = datetime.fromisoformat(stamp)
+    if now.utcoffset() == now.astimezone().utcoffset():
+        return when.astimezone()
+    return when.astimezone(now.tzinfo)
+
+
 def clock_text(stamp: str, now: datetime) -> str:
-    """`stamp` as a time in `now`'s time zone: "14:20" on now's day, "09-19 23:40" before it."""
-    when = datetime.fromisoformat(stamp).astimezone(now.tzinfo)
+    """`stamp` as a time on the reader's clock (local_time): "14:20" on now's day, "09-19 23:40"
+    before it."""
+    when = local_time(stamp, now)
     return when.strftime("%H:%M") if when.date() == now.date() else when.strftime("%m-%d %H:%M")
 
 
@@ -1141,8 +1152,8 @@ def left_out_line(days: int, points: float) -> str:
 
 def empty_rise_line(rise: dict[str, Any], now: datetime) -> str:
     """"  10-03 14:05, 3 points, nothing on this machine in the 40 minutes before", the time
-    in `now`'s time zone."""
-    when = datetime.fromisoformat(rise["when"]).astimezone(now.tzinfo)
+    on the reader's clock (local_time)."""
+    when = local_time(rise["when"], now)
     points = f"{rise['points']:g} point{'' if rise['points'] == 1 else 's'}"
     return (f"  {when.strftime('%m-%d %H:%M')}, {points}, nothing on this machine in the {rise['minutes']:,} "
             f"minute{'' if rise['minutes'] == 1 else 's'} before")

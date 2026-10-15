@@ -7,6 +7,9 @@ from datetime import date, datetime, timedelta, timezone
 import pandas as pd
 
 T0 = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+# Kyiv's rules as a POSIX TZ string for the machine_zone fixture, so a test needs no tz database:
+# UTC+2, and UTC+3 from the last Sunday of March 03:00 to the last Sunday of October 04:00.
+KYIV = "EET-2EEST,M3.5.0/3,M10.5.0/4"
 DAY = 86400
 
 
