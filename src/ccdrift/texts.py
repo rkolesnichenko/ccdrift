@@ -168,9 +168,10 @@ def change_line(change: dict[str, Any]) -> str:
 
 
 def local_time(stamp: str, now: datetime) -> datetime:
-    """`stamp` as the reader's clock showed it. When `now` is in the machine's own time zone,
-    by the machine's rules for that instant, so a time from before a daylight-saving change
-    keeps the offset it had then; otherwise in `now`'s own offset."""
+    """`stamp` as the reader's clock showed it. When `now`'s offset is the machine's at that
+    instant, as it is for every `now` ccdrift takes itself, by the machine's rules for the
+    stamp's instant, so a time from before a daylight-saving change keeps the offset it had
+    then; otherwise in `now`'s own offset."""
     when = datetime.fromisoformat(stamp)
     if now.utcoffset() == now.astimezone().utcoffset():
         return when.astimezone()
